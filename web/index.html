@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="favicon.ico" type="image/x-icon">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1117">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Repeater</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px; max-width: 960px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+.badge { font-size: 12px; padding: 2px 10px; border-radius: 12px; font-weight: 600; }
+.badge-idle { background: var(--green); color: #000; }
+.badge-rx { background: var(--accent); color: #000; animation: pulse 1s infinite; }
+.badge-tx { background: var(--yellow); color: #000; }
+.badge-off { background: var(--border); color: var(--dim); }
+@keyframes pulse { 50% { opacity: 0.7; } }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px;
+           margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table td { padding: 3px 0; }
+table td:last-child { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.alert { padding: 6px 10px; border-left: 3px solid var(--red); margin-bottom: 6px;
+         font-size: 12px; background: rgba(248,81,73,0.08); border-radius: 0 3px 3px 0; }
+.alert.moderate { border-color: var(--yellow); background: rgba(210,153,34,0.08); }
+.btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
+       -webkit-tap-highlight-color: transparent; text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:active { background: rgba(88,166,255,0.12); border-color: var(--accent); color: var(--accent); }
+
+/* iOS / mobile touch fixes */
+@media (max-width: 600px) {
+  body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  header { gap: 8px; margin-bottom: 10px; }
+  header h1 { font-size: 16px; }
+  header nav { margin-left: 0; width: 100%; justify-content: stretch; }
+  header nav .btn { flex: 1; text-align: center; min-height: 44px; display: flex;
+                    align-items: center; justify-content: center; padding: 8px 6px; }
+  .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+}
+
+/* iOS range slider styling */
+input[type="range"] { -webkit-appearance: none; appearance: none; height: 36px;
+                       background: transparent; }
+input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: var(--border);
+                                                      border-radius: 3px; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px;
+                                             background: var(--accent); border-radius: 50%;
+                                             margin-top: -9px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="callsign">Repeater</h1>
+  <span id="state-badge" class="badge badge-idle">IDLE</span>
+  <nav style="margin-left:auto;display:flex;gap:8px">
+    <a href="register.html" class="btn">Register</a>
+    <a href="ptt.html" class="btn">PTT</a>
+    <a href="coverage.html" class="btn">Coverage</a>
+    <a href="admin.html" class="btn">Admin</a>
+  </nav>
+</header>
+
+<div class="grid">
+  <!-- Repeater Info -->
+  <div class="card">
+    <h2>Repeater Info</h2>
+    <table id="station-table">
+      <tr><td>Loading...</td></tr>
+    </table>
+  </div>
+
+  <!-- Live Audio -->
+  <div class="card">
+    <h2>Live Audio</h2>
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="btn" id="audio-btn" onclick="toggleAudio()">Listen</button>
+      <span id="audio-status" style="font-size:12px;color:var(--dim)">Stopped</span>
+      <span id="audio-dir" class="badge badge-off" style="display:none">--</span>
+    </div>
+    <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+      <label style="font-size:11px;color:var(--dim)">Volume</label>
+      <input type="range" id="audio-vol" min="0" max="100" value="80"
+             style="flex:1" oninput="setAudioVolume(this.value)">
+    </div>
+  </div>
+
+  <!-- Weather -->
+  <div class="card">
+    <h2>Current Weather</h2>
+    <table id="wx-table"><tr><td colspan="2" style="color:var(--dim)">No data</td></tr></table>
+    <h2 style="margin-top:10px">Forecast</h2>
+    <table id="fc-table"><tr><td colspan="2" style="color:var(--dim)">No data</td></tr></table>
+  </div>
+
+  <!-- NWS Alerts -->
+  <div class="card">
+    <h2>NWS Alerts</h2>
+    <div id="alerts" style="font-size:12px">None</div>
+  </div>
+
+  <!-- Coverage Map (shown if coverage.png exists) -->
+  <div class="card" id="coverage-card" style="display:none">
+    <h2>Coverage Map</h2>
+    <img id="coverage-img" src="coverage.png" alt="Coverage Map"
+         style="width:100%;border-radius:4px;cursor:pointer"
+         onclick="openCoverageOverlay()"
+         onerror="this.parentElement.style.display='none'"
+         onload="this.parentElement.style.display=''">
+  </div>
+</div>
+
+<!-- Coverage fullscreen overlay -->
+<div id="coverage-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;cursor:pointer;justify-content:center;align-items:center"
+     onclick="closeCoverageOverlay()">
+  <img id="coverage-overlay-img" style="max-width:95vw;max-height:95vh;border-radius:6px;box-shadow:0 0 40px rgba(0,0,0,0.5)">
+  <div style="position:fixed;top:16px;right:24px;font-size:28px;color:#fff;cursor:pointer;font-weight:300">&times;</div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+function tr(k,v) { return '<tr><td>'+k+'</td><td>'+v+'</td></tr>'; }
+
+/* ── State badge ── */
+function updateState(state) {
+  const b = document.getElementById('state-badge');
+  b.textContent = state;
+  b.className = 'badge ' + (state==='IDLE' ? 'badge-idle' : state==='RECEIVING' ? 'badge-rx' : 'badge-tx');
+}
+
+/* ── Station info ── */
+async function refreshStation() {
+  try {
+    const d = await (await fetch('/api/status')).json();
+    const cs = d.callsign || 'Repeater';
+    document.getElementById('callsign').textContent = cs;
+    document.title = cs + ' Repeater';
+    let h = '';
+    if (d.callsign) h += tr('Callsign', d.callsign);
+    if (d.frequency) h += tr('Frequency', d.frequency + ' MHz');
+    if (d.offset) h += tr('Offset', d.offset + ' MHz');
+    if (d.address) h += tr('Address', d.address);
+    if (d.latitude && d.longitude) h += tr('Coordinates', d.latitude + ', ' + d.longitude);
+    if (d.elevation) h += tr('Elevation', d.elevation + ' ft ASL');
+    document.getElementById('station-table').innerHTML = h || '<tr><td>No data</td></tr>';
+  } catch(e) {}
+}
+
+/* ── Status polling (state updates) ── */
+async function refreshStatus() {
+  try {
+    const d = await (await fetch('/api/status')).json();
+    if (d.rx_state) updateState(d.rx_state);
+  } catch(e) {}
+}
+
+/* ── Weather ── */
+async function refreshWeather() {
+  try {
+    const d = await (await fetch('/api/weather')).json();
+    const wt = document.getElementById('wx-table');
+    const ft = document.getElementById('fc-table');
+    if (d.valid) {
+      let h = '';
+      h += tr('Condition', d.condition || '\u2014');
+      h += tr('Temperature', Math.round(d.temp_f) + '\u00b0F');
+      h += tr('Wind', d.wind_dir + ' ' + Math.round(d.wind_mph) + ' mph');
+      h += tr('Humidity', d.humidity + '%');
+      wt.innerHTML = h;
+    }
+    if (d.forecast_high_f !== undefined) {
+      let h = '';
+      h += tr('High / Low', Math.round(d.forecast_high_f) + '\u00b0 / ' + Math.round(d.forecast_low_f) + '\u00b0F');
+      if (d.forecast_rain_pct > 0) h += tr('Rain', d.forecast_rain_pct + '%');
+      if (d.forecast_snow_pct > 0) h += tr('Snow', d.forecast_snow_pct + '%');
+      h += tr('Humidity', d.forecast_humidity + '%');
+      ft.innerHTML = h;
+    }
+  } catch(e) {}
+}
+
+/* ── NWS Alerts ── */
+async function refreshAlerts() {
+  try {
+    const d = await (await fetch('/api/nws')).json();
+    const el = document.getElementById('alerts');
+    if (!d.alerts || d.alerts.length === 0) { el.textContent = 'None'; return; }
+    el.innerHTML = d.alerts.map(function(a) {
+      return '<div class="alert' + (a.severity === 'MODERATE' ? ' moderate' : '') + '">' +
+             '<strong>' + a.event + '</strong> [' + a.severity + ']</div>';
+    }).join('');
+  } catch(e) {}
+}
+
+/* ── Live Audio ── */
+let audioCtx = null, audioGain = null, audioNode = null;
+let audioWs = null, audioLastDir = -1;
+
+window.toggleAudio = function() {
+  if (audioWs) { stopAudio(); return; }
+  startAudio();
+};
+
+async function startAudio() {
+  try {
+    audioCtx = new AudioContext();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    audioGain = audioCtx.createGain();
+    audioGain.gain.value = document.getElementById('audio-vol').value / 100;
+    audioGain.connect(audioCtx.destination);
+
+    await audioCtx.audioWorklet.addModule('stream-processor.js');
+
+    audioNode = new AudioWorkletNode(audioCtx, 'stream-processor');
+    audioNode.connect(audioGain);
+    audioNode.port.onmessage = function(e) {
+      if (e.data && e.data.type === 'stats') {
+        var s = e.data;
+        var pct = ((s.avail / s.ringSize) * 100).toFixed(1);
+        document.getElementById('audio-status').textContent =
+          (s.primed ? 'Playing' : 'Buffering') +
+          ' | ring=' + s.avail + '/' + s.ringSize + ' (' + pct + '%)' +
+          ' | in=' + s.framesIn + '/s' +
+          ' | underruns=' + s.underruns +
+          ' | rate=' + s.step.toFixed(4);
+      }
+    };
+
+    audioLastDir = -1;
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var url = proto + '//' + location.host + '/api/audio';
+    audioWs = new WebSocket(url);
+    audioWs.binaryType = 'arraybuffer';
+    audioWs.onopen = function() {
+      document.getElementById('audio-btn').textContent = 'Stop';
+      document.getElementById('audio-status').textContent = 'Listening...';
+    };
+    audioWs.onclose = function() { stopAudio(); };
+    audioWs.onerror = function() { stopAudio(); };
+    audioWs.onmessage = function(ev) {
+      var ab = ev.data;
+      if (ab.byteLength < 4) return;
+      var hdr = new Uint8Array(ab, 0, 2);
+      if (hdr[0] !== 0x01) return;
+      if (hdr[1] !== audioLastDir) {
+        audioLastDir = hdr[1];
+        var badge = document.getElementById('audio-dir');
+        badge.style.display = '';
+        badge.textContent = audioLastDir === 0 ? 'RX' : 'TX';
+        badge.className = 'badge ' + (audioLastDir === 0 ? 'badge-rx' : 'badge-tx');
+      }
+      var pcm = new Int16Array(ab, 4);
+      var f = new Float32Array(pcm.length);
+      for (var i = 0; i < pcm.length; i++) f[i] = pcm[i] / 32768.0;
+      audioNode.port.postMessage(f, [f.buffer]);
+    };
+  } catch(err) {
+    document.getElementById('audio-status').textContent = 'Error: ' + err.message;
+  }
+}
+
+function stopAudio() {
+  if (audioWs) { audioWs.close(); audioWs = null; }
+  if (audioNode) { audioNode.disconnect(); audioNode = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  audioGain = null; audioLastDir = -1;
+  document.getElementById('audio-btn').textContent = 'Listen';
+  document.getElementById('audio-status').textContent = 'Stopped';
+  document.getElementById('audio-dir').style.display = 'none';
+}
+
+window.setAudioVolume = function(v) {
+  if (audioGain) audioGain.gain.value = v / 100;
+};
+
+/* ── Init ── */
+refreshStation();
+refreshStatus();
+refreshWeather();
+refreshAlerts();
+setInterval(refreshStatus, 5000);
+setInterval(refreshWeather, 60000);
+setInterval(refreshAlerts, 60000);
+
+window.openCoverageOverlay = function() {
+  document.getElementById('coverage-overlay-img').src=document.getElementById('coverage-img').src;
+  document.getElementById('coverage-overlay').style.display='flex';
+};
+window.closeCoverageOverlay = function() {
+  document.getElementById('coverage-overlay').style.display='none';
+};
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape') window.closeCoverageOverlay();
+});
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+})();
+</script>
+</body>
+</html>

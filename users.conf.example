@@ -1,0 +1,61 @@
+; ============================================================================
+; users.conf — User and group database for kerchunkd
+;
+; Copy to users.conf and edit for your installation.
+; Enable by adding users_file = users.conf to [general] in kerchunk.conf.
+;
+; This file is managed by the web UI — manual edits will be preserved
+; but comments may be lost when saving via the web interface.
+; ============================================================================
+
+; ----------------------------------------------------------------------------
+; Groups
+;
+; Groups provide TX tone settings for their members.
+; TX tone resolution: group -> repeater default.
+; Each group should have a unique TX CTCSS or DCS code.
+; ----------------------------------------------------------------------------
+
+[group.1]
+name = Family
+tx_ctcss = 1000                  ; TX CTCSS for this group (freq * 10)
+; tx_dcs = 23                    ; TX DCS code (alternative to CTCSS)
+
+[group.2]
+name = Friends
+tx_ctcss = 1318
+
+; ----------------------------------------------------------------------------
+; Users
+;
+; Users are identified by DTMF ANI or DTMF login.
+; Access levels: 0 = none, 1 = basic, 2 = admin
+;
+; username: lowercase, no spaces — used for web PTT login. Auto-derived
+;           from name (lowercase, spaces → underscores) if not set.
+; email:    optional contact/notification field.
+;
+; TOTP: add totp_secret with a Base32 key for OTP authentication (*68#).
+;       Compatible with Google Authenticator, Authy, etc.
+; ----------------------------------------------------------------------------
+
+[user.1]
+username = bwest                 ; Lowercase, no spaces — used for PTT login
+name = Brian West                ; Display name
+email = brian@example.com        ; Contact email
+ani = 5551                       ; DTMF ANI sequence (auto-sent by radio)
+dtmf_login = 101                 ; DTMF login code (*101#)
+access = 2                       ; 2 = admin
+voicemail = 1                    ; 1 = voicemail enabled
+group = 1                        ; Group membership (TX tone from group)
+; totp_secret = JBSWY3DPEHPK3PXP ; Base32 TOTP secret (Google Authenticator)
+
+[user.2]
+username = alice
+name = Alice
+ani = 5552
+dtmf_login = 102
+access = 1
+voicemail = 1
+group = 2
+; totp_secret = HXDMVJECJJWSRB3H ; Base32 TOTP secret

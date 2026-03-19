@@ -1,0 +1,3 @@
+# C-Media USB PnP Sound Device (RIM-Lite radio interface)
+# Grant audio group access to HID interface (COR/PTT GPIO)
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="013a", GROUP="audio", MODE="0660"

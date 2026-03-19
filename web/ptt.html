@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="favicon.ico" type="image/x-icon">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1117">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Kerchunk PTT</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px; max-width: 600px;
+       margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+header .sub { color: var(--dim); font-size: 14px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+        margin-bottom: 12px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px;
+           margin-bottom: 10px; }
+.btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
+       -webkit-tap-highlight-color: transparent; text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Auth form */
+.auth-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.auth-input { flex: 1; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border);
+              color: var(--text); border-radius: 5px; font-size: 14px; }
+.auth-btn { padding: 8px 20px; background: var(--accent); color: #000; border: none;
+            border-radius: 5px; cursor: pointer; font-size: 14px; font-weight: 600; }
+.auth-btn:disabled { opacity: 0.5; cursor: default; }
+.error { color: var(--red); font-size: 12px; margin-top: 6px; }
+
+/* PTT button */
+#ptt-section { display: none; flex: 1; flex-direction: column; }
+#ptt-btn { width: 100%; flex: 1; min-height: 200px; border: 3px solid var(--border);
+           border-radius: 16px; background: var(--card); color: var(--dim); font-size: 24px;
+           font-weight: 700; cursor: pointer; user-select: none; -webkit-user-select: none;
+           touch-action: none; transition: all 0.15s; display: flex; align-items: center;
+           justify-content: center; flex-direction: column; gap: 8px; }
+#ptt-btn:active, #ptt-btn.active { background: var(--red); color: #fff; border-color: var(--red); }
+#ptt-btn .sub { font-size: 12px; font-weight: 400; opacity: 0.7; }
+#ptt-btn:disabled { opacity: 0.3; cursor: default; }
+
+/* Status */
+.status-row { display: flex; justify-content: space-between; align-items: center;
+              font-size: 13px; padding: 6px 0; }
+.status-label { color: var(--dim); }
+.status-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.status-val.recording { color: var(--red); }
+.status-val.idle { color: var(--green); }
+.status-val.queued { color: var(--yellow); }
+
+/* Volume meter */
+.meter-wrap { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.meter-bar { height: 100%; background: var(--green); border-radius: 3px; width: 0;
+             transition: width 0.05s; }
+
+/* Log */
+#log { max-height: 120px; overflow-y: auto; font-family: 'SF Mono', Monaco, monospace;
+       font-size: 11px; line-height: 1.5; color: var(--dim); margin-top: 8px; }
+#log div { padding: 1px 0; }
+
+/* Mobile */
+@media (max-width: 600px) {
+  body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  header h1 { font-size: 16px; }
+  .auth-input { min-height: 44px; font-size: 16px; }
+  .auth-btn { min-height: 44px; }
+  #ptt-btn { min-height: 50vh; font-size: 28px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Kerchunk PTT</h1>
+  <span class="sub" id="conn-status">Disconnected</span>
+  <nav style="margin-left:auto;display:flex;gap:8px">
+    <a href="index.html" class="btn">Public</a>
+    <a href="register.html" class="btn">Register</a>
+    <a href="coverage.html" class="btn">Coverage</a>
+    <a href="admin.html" class="btn">Admin</a>
+  </nav>
+</header>
+
+<!-- Auth Section -->
+<div class="card" id="auth-section">
+  <h2>Authenticate</h2>
+  <div class="auth-row">
+    <input type="text" id="auth-user" class="auth-input" placeholder="Username" autocomplete="off" data-1p-ignore data-lpignore="true" data-form-type="other">
+    <input type="text" id="auth-pin" class="auth-input" placeholder="PIN" autocomplete="off"
+           inputmode="numeric" style="max-width:120px;-webkit-text-security:disc" data-1p-ignore data-lpignore="true" data-form-type="other">
+  </div>
+  <button id="auth-btn" class="auth-btn">Login</button>
+  <div id="auth-error" class="error"></div>
+</div>
+
+<!-- PTT Section -->
+<div id="ptt-section">
+  <div class="card">
+    <h2>Status</h2>
+    <div class="status-row">
+      <span class="status-label">User</span>
+      <span class="status-val" id="st-user">-</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">State</span>
+      <span class="status-val idle" id="st-state">Idle</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Duration</span>
+      <span class="status-val" id="st-duration">0.0s</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Mic Level</span>
+      <span class="status-val" style="flex:1;margin-left:12px">
+        <div class="meter-wrap"><div class="meter-bar" id="mic-meter"></div></div>
+      </span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">RX Audio</span>
+      <button class="btn" id="mute-btn" style="font-size:11px;padding:2px 8px">Mute</button>
+    </div>
+    <div class="status-row" style="margin-top:8px">
+      <span></span>
+      <button class="btn" id="disconnect-btn" style="font-size:11px;padding:2px 8px;border-color:var(--red);color:var(--red)">Disconnect</button>
+    </div>
+  </div>
+
+  <button id="ptt-btn" disabled>
+    PTT
+    <span class="sub">Hold to transmit</span>
+  </button>
+
+  <div class="card" style="margin-top:12px">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+const TOKEN = localStorage.getItem('kerchunk_token') || '';
+const WS_PROTO = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = WS_PROTO + '//' + location.host + '/api/audio' +
+               (TOKEN ? '?token=' + encodeURIComponent(TOKEN) : '');
+
+let ws = null, audioCtx = null, workletNode = null, captureNode = null;
+let micStream = null, pttHeld = false, pttStart = 0, durationTimer = null;
+let muted = false, authenticated = false, rxMuted = false, rxMuteTimer = null;
+const RX_MUTE_TAIL_MS = 1500; /* keep RX muted after PTT release for tx_tail + propagation */
+
+const $ = (id) => document.getElementById(id);
+const log = (msg) => {
+  const d = $('log');
+  const el = document.createElement('div');
+  const ts = new Date().toLocaleTimeString();
+  el.textContent = ts + ' ' + msg;
+  d.appendChild(el);
+  d.scrollTop = d.scrollHeight;
+  while (d.children.length > 100) d.removeChild(d.firstChild);
+};
+
+/* ── WebSocket ── */
+function connect() {
+  if (ws) {
+    try { ws.close(); } catch(_) {}
+    ws = null;
+  }
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+  $('conn-status').textContent = 'Connecting...';
+
+  ws.onopen = () => {
+    $('conn-status').textContent = 'Connected';
+    log('WebSocket connected');
+    /* Auto-login if credentials are stored */
+    const savedUser = localStorage.getItem('kerchunk_ptt_user');
+    const savedPin = localStorage.getItem('kerchunk_ptt_pin');
+    if (savedUser && savedPin && !authenticated) {
+      sendCmd({cmd: 'auth', user: savedUser, pin: savedPin});
+    }
+  };
+
+  ws.onclose = () => {
+    $('conn-status').textContent = 'Disconnected';
+    log('WebSocket closed');
+    if (pttHeld) endPtt();
+    ws = null;
+    setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => {
+    log('WebSocket error');
+  };
+
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') {
+      handleJsonMsg(JSON.parse(e.data));
+    } else {
+      handleAudioFrame(e.data);
+    }
+  };
+}
+
+function sendCmd(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify(obj));
+}
+
+/* ── JSON responses ── */
+function handleJsonMsg(msg) {
+  if (msg.ok === false) {
+    log('Error: ' + (msg.error || 'unknown'));
+    if (!authenticated) {
+      /* Clear stale stored credentials on auth failure */
+      localStorage.removeItem('kerchunk_ptt_user');
+      localStorage.removeItem('kerchunk_ptt_pin');
+      $('auth-section').style.display = '';
+      $('auth-error').textContent = msg.error || 'Login failed';
+    }
+    return;
+  }
+  /* Auth response */
+  if (msg.user && msg.ptt_enabled !== undefined) {
+    authenticated = true;
+    /* Save credentials for auto-login */
+    const su = $('auth-user').value.trim() || localStorage.getItem('kerchunk_ptt_user');
+    const sp = $('auth-pin').value.trim() || localStorage.getItem('kerchunk_ptt_pin');
+    if (su) localStorage.setItem('kerchunk_ptt_user', su);
+    if (sp) localStorage.setItem('kerchunk_ptt_pin', sp);
+    $('auth-section').style.display = 'none';
+    $('ptt-section').style.display = 'flex';
+    $('st-user').textContent = msg.user;
+    if (msg.ptt_enabled) {
+      $('ptt-btn').disabled = false;
+    } else {
+      $('ptt-btn').disabled = true;
+      $('ptt-btn').querySelector('.sub').textContent = 'PTT disabled by admin';
+    }
+    log('Authenticated as ' + msg.user);
+    initAudio();
+    return;
+  }
+  /* PTT responses */
+  if (msg.state === 'transmitting') {
+    log('Transmitting (max ' + msg.max_duration + 's)');
+  } else if (msg.state === 'idle') {
+    $('st-state').textContent = 'Idle';
+    $('st-state').className = 'status-val idle';
+    if (msg.duration !== undefined)
+      log('TX complete: ' + msg.duration.toFixed(1) + 's');
+  }
+}
+
+/* ── RX Audio playback ── */
+function handleAudioFrame(buf) {
+  if (muted || pttHeld || rxMuted || !workletNode) return;
+  const view = new DataView(buf);
+  if (view.getUint8(0) !== 0x01) return;
+  const pcm = new Float32Array(160);
+  for (let i = 0; i < 160; i++) {
+    pcm[i] = view.getInt16(4 + i * 2, true) / 32768.0;
+  }
+  workletNode.port.postMessage(pcm, [pcm.buffer]);
+}
+
+/* ── Audio init ── */
+async function initAudio() {
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    /* RX playback worklet */
+    await audioCtx.audioWorklet.addModule('stream-processor.js');
+    workletNode = new AudioWorkletNode(audioCtx, 'stream-processor');
+    workletNode.connect(audioCtx.destination);
+
+    /* Mic capture worklet */
+    await audioCtx.audioWorklet.addModule('capture-processor.js');
+
+    /* Request mic access */
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+
+    const source = audioCtx.createMediaStreamSource(micStream);
+    captureNode = new AudioWorkletNode(audioCtx, 'capture-processor');
+
+    /* Mic level meter via analyser */
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+
+    const levelBuf = new Uint8Array(analyser.frequencyBinCount);
+    function updateMeter() {
+      analyser.getByteFrequencyData(levelBuf);
+      let sum = 0;
+      for (let i = 0; i < levelBuf.length; i++) sum += levelBuf[i];
+      const avg = sum / levelBuf.length;
+      $('mic-meter').style.width = Math.min(100, avg / 128 * 100) + '%';
+      requestAnimationFrame(updateMeter);
+    }
+    updateMeter();
+
+    /* Capture frames → WebSocket */
+    captureNode.port.onmessage = (e) => {
+      if (!pttHeld || !ws || ws.readyState !== WebSocket.OPEN) return;
+      const frame = e.data;  /* Int16Array(160) */
+      const msg = new Uint8Array(1 + frame.length * 2);
+      msg[0] = 0x02;
+      new Uint8Array(msg.buffer, 1).set(new Uint8Array(frame.buffer));
+      ws.send(msg.buffer);
+    };
+
+    source.connect(captureNode);
+    /* Don't connect captureNode to destination — no sidetone */
+
+    log('Audio initialized (sample rate: ' + audioCtx.sampleRate + ')');
+  } catch (err) {
+    log('Audio error: ' + err.message);
+  }
+}
+
+/* ── PTT ── */
+function startPtt() {
+  if (pttHeld || !authenticated) return;
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  pttHeld = true;
+  rxMuted = true;
+  clearTimeout(rxMuteTimer);
+  pttStart = Date.now();
+  $('ptt-btn').classList.add('active');
+  $('st-state').textContent = 'Recording';
+  $('st-state').className = 'status-val recording';
+  $('st-duration').textContent = '0.0s';
+  durationTimer = setInterval(() => {
+    const d = ((Date.now() - pttStart) / 1000).toFixed(1);
+    $('st-duration').textContent = d + 's';
+  }, 100);
+  sendCmd({cmd: 'ptt_on'});
+}
+
+function endPtt() {
+  if (!pttHeld) return;
+  pttHeld = false;
+  /* Keep RX muted through tx_tail so we don't hear our own audio echoed back */
+  rxMuteTimer = setTimeout(() => { rxMuted = false; }, RX_MUTE_TAIL_MS);
+  $('ptt-btn').classList.remove('active');
+  clearInterval(durationTimer);
+  const d = ((Date.now() - pttStart) / 1000).toFixed(1);
+  $('st-duration').textContent = d + 's';
+  sendCmd({cmd: 'ptt_off'});
+}
+
+/* ── Event bindings ── */
+const pttBtn = $('ptt-btn');
+pttBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startPtt(); });
+pttBtn.addEventListener('pointerup', (e) => { e.preventDefault(); endPtt(); });
+pttBtn.addEventListener('pointerleave', (e) => { e.preventDefault(); endPtt(); });
+pttBtn.addEventListener('pointercancel', (e) => { e.preventDefault(); endPtt(); });
+pttBtn.oncontextmenu = () => false;
+
+/* Auth */
+$('auth-btn').addEventListener('click', () => {
+  const user = $('auth-user').value.trim();
+  const pin = $('auth-pin').value.trim();
+  if (!user || !pin) { $('auth-error').textContent = 'Enter username and PIN'; return; }
+  $('auth-error').textContent = '';
+  sendCmd({cmd: 'auth', user: user, pin: pin});
+});
+$('auth-pin').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('auth-btn').click();
+});
+
+/* Mute toggle */
+$('mute-btn').addEventListener('click', () => {
+  muted = !muted;
+  $('mute-btn').textContent = muted ? 'Unmute' : 'Mute';
+});
+
+/* Disconnect — clear saved credentials and reload */
+$('disconnect-btn').addEventListener('click', () => {
+  localStorage.removeItem('kerchunk_ptt_user');
+  localStorage.removeItem('kerchunk_ptt_pin');
+  if (ws) { try { ws.onclose = null; ws.close(); } catch(_) {} ws = null; }
+  location.reload();
+});
+
+/* Keyboard PTT (spacebar) */
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.repeat && authenticated) { e.preventDefault(); startPtt(); }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); endPtt(); }
+});
+
+/* Pre-fill auth form from stored credentials */
+const storedUser = localStorage.getItem('kerchunk_ptt_user');
+const storedPin = localStorage.getItem('kerchunk_ptt_pin');
+if (storedUser) $('auth-user').value = storedUser;
+if (storedPin) $('auth-pin').value = storedPin;
+
+/* Wait for page to fully load before connecting — iOS Safari can orphan
+ * WebSockets created during page load/reload transitions. */
+if (document.readyState === 'complete') {
+  connect();
+} else {
+  window.addEventListener('load', connect);
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+})();
+</script>
+</body>
+</html>

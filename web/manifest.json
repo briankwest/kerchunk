@@ -1,0 +1,14 @@
+{
+  "name": "Kerchunk PTT",
+  "short_name": "PTT",
+  "description": "Push-to-talk for kerchunkd repeater",
+  "start_url": "/ptt.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": [
+    {"src": "logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}

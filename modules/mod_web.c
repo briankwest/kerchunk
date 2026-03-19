@@ -1,0 +1,1717 @@
+/*
+ * mod_web.c — Embedded HTTP server for web dashboard
+ *
+ * Serves static files and JSON API endpoints. SSE for live events.
+ * API routes map directly to CLI handlers via kerchunk_resp_t.
+ * Uses mongoose (cesanta.com) for HTTP/HTTPS and SSE.
+ *
+ * TLS is available via mongoose's built-in TLS implementation —
+ * no external dependency required. Configure tls_cert and tls_key
+ * in [web] to enable HTTPS.
+ *
+ * Config: [web] section in kerchunk.conf
+ */
+
+#include "kerchunk.h"
+#include "kerchunk_module.h"
+#include "kerchunk_log.h"
+#include "kerchunk_user.h"
+#include "mongoose.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <fcntl.h>
+#include <strings.h>
+#include <time.h>
+#include <ctype.h>
+
+#define LOG_MOD "web"
+
+#define API_HEADERS \
+    "Content-Type: application/json\r\n" \
+    "Access-Control-Allow-Origin: *\r\n"
+
+#define CORS_HEADERS \
+    "Access-Control-Allow-Origin: *\r\n" \
+    "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n" \
+    "Access-Control-Allow-Headers: Authorization, Content-Type\r\n" \
+    "Access-Control-Max-Age: 86400\r\n"
+
+static int is_sensitive(const char *key) {
+    static const char *sens[] = {"api_key","auth_token","totp_secret",
+                                  "tls_key","google_maps_api_key",NULL};
+    for (int i = 0; sens[i]; i++)
+        if (strcmp(key, sens[i]) == 0) return 1;
+    return 0;
+}
+
+static kerchunk_core_t *g_core;
+
+/* Config */
+static int  g_enabled      = 0;
+static int  g_port         = 8080;
+static char g_bind[64]     = "127.0.0.1";
+static char g_auth_token[128] = "";
+static char g_static_dir[256] = "";
+static char g_tls_cert[256] = "";
+static char g_tls_key[256]  = "";
+static int  g_tls_active    = 0;
+
+/* Registration config */
+static int g_registration_enabled = 0;
+
+/* PTT config */
+static int g_ptt_enabled        = 0;   /* [web] ptt_enabled */
+static int g_ptt_max_duration_s = 30;  /* [web] ptt_max_duration */
+static int g_ptt_priority       = 2;   /* [web] ptt_priority */
+
+/* Mongoose state */
+static struct mg_mgr g_mgr;
+static unsigned long g_listener_id;
+static pthread_t g_web_thread;
+static volatile int g_running;
+static atomic_int g_sse_count;
+static atomic_int g_ws_audio_count;
+static uint16_t   g_ws_seq;
+
+/* ── WebSocket audio — lock-free SPSC ring (audio thread → web thread) ── */
+
+/* Frame: 4-byte header + 160 samples x 2 bytes = 324 bytes (PCM16 LE) */
+#define WS_FRAME_SIZE (4 + 160 * 2)
+
+/* Lock-free ring: audio thread writes, web thread reads.
+ * No syscalls, no mutexes on the audio thread — just memory writes. */
+#define WS_RING_SLOTS 512   /* power of 2, ~10s at 50 frames/sec */
+#define WS_RING_MASK  (WS_RING_SLOTS - 1)
+
+typedef struct {
+    int16_t samples[160];
+    uint8_t dir;   /* 0x00=RX, 0x01=TX */
+} ws_audio_slot_t;
+
+static ws_audio_slot_t g_ws_ring[WS_RING_SLOTS];
+static atomic_uint     g_ws_ring_w;   /* write index (audio thread only) */
+static atomic_uint     g_ws_ring_r;   /* read index (web thread only) */
+
+/* ── Per-connection WebSocket state (PTT) ── */
+
+#define WS_PTT_MAGIC 0x50545421  /* "PTT!" */
+
+typedef struct {
+    uint32_t magic;
+    int  authenticated;
+    int  user_id;
+    char user_name[32];
+    int  ptt_held;
+    size_t audio_len;    /* total samples queued (for duration tracking) */
+} ws_conn_state_t;
+
+/* Only one user can transmit via WebSocket PTT at a time */
+static ws_conn_state_t *g_ptt_holder;  /* NULL = channel free */
+
+/* Store/retrieve state pointer in c->data.
+ * data[0] = 'W' tag for WebSocket connections (vs 'E' for SSE).
+ * Pointer stored at data[1..8]. Only dereference after tag check. */
+static ws_conn_state_t *ws_get_state(struct mg_connection *c)
+{
+    if (c->data[0] != 'W') return NULL;
+    ws_conn_state_t *st = NULL;
+    memcpy(&st, c->data + 1, sizeof(st));
+    return st;
+}
+
+static void ws_set_state(struct mg_connection *c, ws_conn_state_t *st)
+{
+    c->data[0] = 'W';
+    memcpy(c->data + 1, &st, sizeof(st));
+}
+
+/* Push one 160-sample frame into the ring (called from audio thread) */
+static void ws_ring_push(const int16_t *pcm, size_t n, uint8_t dir)
+{
+    unsigned w = atomic_load_explicit(&g_ws_ring_w, memory_order_relaxed);
+    unsigned next = (w + 1) & WS_RING_MASK;
+    if (next == atomic_load_explicit(&g_ws_ring_r, memory_order_acquire))
+        return;  /* ring full — drop frame */
+
+    ws_audio_slot_t *s = &g_ws_ring[w];
+    size_t copy = n > 160 ? 160 : n;
+    memcpy(s->samples, pcm, copy * sizeof(int16_t));
+    if (copy < 160) memset(s->samples + copy, 0, (160 - copy) * sizeof(int16_t));
+    s->dir = dir;
+
+    atomic_store_explicit(&g_ws_ring_w, next, memory_order_release);
+}
+
+/* Flush ring → WebSocket clients (called from web thread before each poll) */
+static void ws_flush_ring(void)
+{
+    if (atomic_load(&g_ws_audio_count) <= 0) return;
+
+    unsigned r = atomic_load_explicit(&g_ws_ring_r, memory_order_relaxed);
+    unsigned w = atomic_load_explicit(&g_ws_ring_w, memory_order_acquire);
+
+    while (r != w) {
+        ws_audio_slot_t *s = &g_ws_ring[r];
+
+        uint8_t msg[WS_FRAME_SIZE];
+        msg[0] = 0x01;
+        msg[1] = s->dir;
+        msg[2] = (uint8_t)(g_ws_seq & 0xFF);
+        msg[3] = (uint8_t)((g_ws_seq >> 8) & 0xFF);
+        g_ws_seq++;
+        memcpy(msg + 4, s->samples, 160 * sizeof(int16_t));
+
+        for (struct mg_connection *c = g_mgr.conns; c != NULL; c = c->next) {
+            if (ws_get_state(c))
+                mg_ws_send(c, msg, WS_FRAME_SIZE, WEBSOCKET_OP_BINARY);
+        }
+
+        r = (r + 1) & WS_RING_MASK;
+    }
+
+    atomic_store_explicit(&g_ws_ring_r, r, memory_order_release);
+}
+
+/* ── Tap handlers (run on audio thread — zero syscalls) ── */
+
+static void ws_tx_playback_tap(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    if (atomic_load(&g_ws_audio_count) <= 0 || !evt->audio.samples)
+        return;
+
+    const int16_t *src = evt->audio.samples;
+    size_t remaining = evt->audio.n;
+    while (remaining > 0) {
+        size_t n = remaining > 160 ? 160 : remaining;
+        ws_ring_push(src, n, 0x01);
+        src += n;
+        remaining -= n;
+    }
+}
+
+static void ws_rx_audio_tap(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    if (atomic_load(&g_ws_audio_count) <= 0 || !evt->audio.samples)
+        return;
+
+    size_t n = evt->audio.n > 160 ? 160 : evt->audio.n;
+    int64_t sum_sq = 0;
+    for (size_t i = 0; i < n; i++) {
+        int32_t s = evt->audio.samples[i];
+        sum_sq += s * s;
+    }
+    int32_t rms = 0;
+    if (n > 0) {
+        int64_t avg = sum_sq / (int64_t)n;
+        while ((int64_t)rms * rms < avg) rms++;
+    }
+    if (rms < 100) return;
+
+    ws_ring_push(evt->audio.samples, n, 0x00);
+}
+
+/* ── WebSocket PTT command handlers ── */
+
+static void ws_send_json(struct mg_connection *c, const char *fmt, ...)
+{
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0)
+        mg_ws_send(c, buf, (size_t)n, WEBSOCKET_OP_TEXT);
+}
+
+static void ws_handle_auth(struct mg_connection *c, ws_conn_state_t *st,
+                           struct mg_ws_message *wm)
+{
+    char *user = mg_json_get_str(wm->data, "$.user");
+    char *pin  = mg_json_get_str(wm->data, "$.pin");
+
+    if (!user || !pin) {
+        ws_send_json(c, "{\"ok\":false,\"error\":\"missing user or pin\"}");
+        free(user); free(pin);
+        return;
+    }
+
+    /* Iterate user DB: match username (case-insensitive) AND dtmf_login == pin */
+    int count = kerchunk_user_count();
+    const kerchunk_user_t *found = NULL;
+    for (int i = 0; i < count; i++) {
+        const kerchunk_user_t *u = kerchunk_user_get(i);
+        if (!u) continue;
+        if (strcasecmp(u->username, user) == 0 && strcmp(u->dtmf_login, pin) == 0) {
+            found = u;
+            break;
+        }
+    }
+
+    if (!found) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "WS auth failed for user=%s (checked %d users)", user, count);
+        ws_send_json(c, "{\"ok\":false,\"error\":\"invalid credentials\"}");
+        free(user); free(pin);
+        return;
+    }
+
+    if (found->access < KERCHUNK_ACCESS_BASIC) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "WS auth denied for user=%s (access=%d)", user, found->access);
+        ws_send_json(c, "{\"ok\":false,\"error\":\"insufficient access\"}");
+        free(user); free(pin);
+        return;
+    }
+
+    st->authenticated = 1;
+    st->user_id = found->id;
+    snprintf(st->user_name, sizeof(st->user_name), "%s", found->name);
+
+    /* Do NOT fire KERCHEVT_CALLER_IDENTIFIED here — that event is for
+     * radio caller identification (COR cycle) and triggers mod_txcode
+     * to change the TX encoder.  Firing it from the web thread would
+     * race with the audio thread reading the encoder, corrupting
+     * CTCSS/DCS on all subsequent transmissions.  Web auth is tracked
+     * separately for CDR via the announcement event on PTT off. */
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "WS auth: user=%s id=%d", st->user_name, st->user_id);
+
+    ws_send_json(c, "{\"ok\":true,\"user\":\"%s\",\"ptt_enabled\":%s}",
+                 st->user_name, g_ptt_enabled ? "true" : "false");
+
+    free(user); free(pin);
+}
+
+static void ws_handle_ptt_on(struct mg_connection *c, ws_conn_state_t *st)
+{
+    if (!g_ptt_enabled) {
+        ws_send_json(c, "{\"ok\":false,\"error\":\"PTT disabled\"}");
+        return;
+    }
+    if (!st->authenticated) {
+        ws_send_json(c, "{\"ok\":false,\"error\":\"not authenticated\"}");
+        return;
+    }
+    if (st->ptt_held) {
+        ws_send_json(c, "{\"ok\":false,\"error\":\"PTT already held\"}");
+        return;
+    }
+    if (g_ptt_holder && g_ptt_holder != st) {
+        ws_send_json(c, "{\"ok\":false,\"error\":\"channel busy\"}");
+        return;
+    }
+
+    g_ptt_holder = st;
+    st->ptt_held = 1;
+    st->audio_len = 0;
+    /* No request_ptt here — the main loop's queue logic handles PTT
+     * automatically when it sees items in the queue.  This ensures
+     * proper tx_delay + CTCSS/DCS ramp-up before audio plays. */
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "WS PTT on: user=%s", st->user_name);
+
+    ws_send_json(c, "{\"ok\":true,\"state\":\"transmitting\",\"max_duration\":%d}",
+                 g_ptt_max_duration_s);
+}
+
+static void ws_handle_ptt_off(struct mg_connection *c, ws_conn_state_t *st)
+{
+    if (!st->ptt_held) {
+        ws_send_json(c, "{\"ok\":false,\"error\":\"PTT not held\"}");
+        return;
+    }
+
+    st->ptt_held = 0;
+    if (g_ptt_holder == st) g_ptt_holder = NULL;
+    double duration = (double)st->audio_len / 8000.0;
+    /* No release_ptt — queue system manages PTT automatically.
+     * It will hold PTT through tx_tail after the last frame drains. */
+
+    /* Fire announcement for CDR */
+    if (st->audio_len > 0) {
+        char desc[128];
+        snprintf(desc, sizeof(desc), "web_ptt user=%s duration=%.1fs",
+                 st->user_name, duration);
+        kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
+            .announcement = { .source = "web_ptt", .description = desc } };
+        kerchevt_fire(&ae);
+    }
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "WS PTT off: user=%s duration=%.1fs (%zu samples)",
+                st->user_name, duration, st->audio_len);
+
+    st->audio_len = 0;
+
+    ws_send_json(c, "{\"ok\":true,\"state\":\"idle\",\"duration\":%.1f}",
+                 duration);
+}
+
+static void ws_handle_audio_frame(ws_conn_state_t *st,
+                                  const uint8_t *data, size_t len)
+{
+    if (!st->ptt_held) return;
+    if (len != 321 || data[0] != 0x02) return;  /* 1 tag + 160 samples * 2 bytes */
+
+    size_t max_samples = (size_t)g_ptt_max_duration_s * 8000;
+    if (st->audio_len >= max_samples) return;
+
+    /* Queue each frame immediately for real-time playback.
+     * Thread-safe: kerchunk_queue has internal mutex protection. */
+    g_core->queue_audio_buffer((const int16_t *)(data + 1), 160,
+                               g_ptt_priority);
+    st->audio_len += 160;
+}
+
+/* TLS cert/key data (read once, reused per connection) */
+static struct mg_str g_cert_data;
+static struct mg_str g_key_data;
+
+/* ── Mongoose log redirect ── */
+
+static char g_mg_log_buf[512];
+static int  g_mg_log_pos;
+
+static void mg_log_cb(char ch, void *param)
+{
+    (void)param;
+    if (ch == '\n' || g_mg_log_pos >= (int)sizeof(g_mg_log_buf) - 1) {
+        g_mg_log_buf[g_mg_log_pos] = '\0';
+        if (g_mg_log_pos > 0 && g_core) {
+            /* Mongoose format: "<hex_ts> <level_int> <file:line:func>  <msg>"
+             * Map: MG 1=ERROR→LOG_ERROR, 2=INFO→LOG_INFO,
+             *      3=DEBUG→LOG_DEBUG, 4=VERBOSE→LOG_DEBUG */
+            int level = KERCHUNK_LOG_DEBUG;
+            const char *msg = g_mg_log_buf;
+            char *p = strchr(g_mg_log_buf, ' ');
+            if (p) {
+                switch (p[1]) {
+                case '1': level = KERCHUNK_LOG_ERROR; break;
+                case '2': level = KERCHUNK_LOG_INFO;  break;
+                default:  level = KERCHUNK_LOG_DEBUG; break;
+                }
+                /* Skip "<hex> <level> " to get the rest */
+                msg = p + 2;
+                while (*msg == ' ') msg++;
+            }
+            g_core->log(level, LOG_MOD, "%s", msg);
+        }
+        g_mg_log_pos = 0;
+    } else {
+        g_mg_log_buf[g_mg_log_pos++] = ch;
+    }
+}
+
+/* ── Auth check ── */
+
+static int check_auth(struct mg_http_message *hm)
+{
+    if (g_auth_token[0] == '\0') return 1;  /* No auth configured */
+
+    /* Check Authorization header first */
+    struct mg_str *auth = mg_http_get_header(hm, "Authorization");
+    if (auth) {
+        char expected[160];
+        int elen = snprintf(expected, sizeof(expected), "Bearer %s", g_auth_token);
+        if ((int)auth->len == elen &&
+            memcmp(auth->buf, expected, (size_t)elen) == 0)
+            return 1;
+    }
+
+    /* Fall back to ?token= query parameter (for EventSource/SSE) */
+    char token[128] = "";
+    if (mg_http_get_var(&hm->query, "token", token, sizeof(token)) > 0) {
+        if (strcmp(token, g_auth_token) == 0)
+            return 1;
+    }
+
+    return 0;
+}
+
+/* ── API dispatch ── */
+
+/* Map URL path to CLI command */
+typedef struct {
+    const char *path;
+    const char *cmd;
+    const char *arg;
+} api_route_t;
+
+static const api_route_t g_routes[] = {
+    { "/api/status",    "status",    NULL },
+    { "/api/stats",     "stats",     NULL },
+    { "/api/nws",       "nws",       NULL },
+    { "/api/cdr",       "cdr",       NULL },
+    { "/api/cwid",      "cwid",      NULL },
+    { "/api/parrot",    "parrot",    NULL },
+    { "/api/recorder",  "recorder",  NULL },
+    { "/api/emergency", "emergency", NULL },
+    { "/api/weather",   "weather",   NULL },
+    { "/api/time",      "time",      NULL },
+    { "/api/tts",       "tts",       "status" },
+    { "/api/modules",   "module",    "list" },
+    { "/api/dtmfcmd",   "dtmfcmd",   NULL },
+    { "/api/txcode",    "txcode",    NULL },
+    { NULL, NULL, NULL }
+};
+
+/* Core command handler lookup (set by main.c) */
+typedef int (*core_handler_t)(int argc, const char **argv, kerchunk_resp_t *r);
+
+typedef struct {
+    const char    *name;
+    core_handler_t handler;
+} core_cmd_lookup_t;
+
+extern void kerchunk_socket_set_core_commands(const void *cmds, int count);
+
+static void handle_api_get(struct mg_connection *c, struct mg_http_message *hm)
+{
+    for (int i = 0; g_routes[i].path; i++) {
+        if (!mg_match(hm->uri, mg_str(g_routes[i].path), NULL)) continue;
+
+        kerchunk_resp_t resp;
+        resp_init(&resp);
+
+        const char *argv[3] = { g_routes[i].cmd, g_routes[i].arg, NULL };
+        int argc = g_routes[i].arg ? 2 : 1;
+
+        kerchunk_dispatch_command(argc, argv, &resp);
+        resp_finish(&resp);
+
+        mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
+        return;
+    }
+
+    mg_http_reply(c, 404, API_HEADERS, "{\"error\":\"Unknown API endpoint\"}");
+}
+
+static void handle_api_post_cmd(struct mg_connection *c,
+                                 struct mg_http_message *hm)
+{
+    /* Parse {"cmd":"..."} from body */
+    const char *p = mg_json_get_str(hm->body, "$.cmd");
+    if (!p) {
+        /* Fallback: manual parse */
+        const char *s = hm->body.buf;
+        const char *f = strstr(s, "\"cmd\":");
+        if (!f) {
+            mg_http_reply(c, 400, API_HEADERS,
+                          "{\"error\":\"Missing cmd field\"}");
+            return;
+        }
+        f += 6;
+        while (*f == ' ' || *f == '"') f++;
+        char cmd[2048];
+        int ci = 0;
+        while (*f && *f != '"' && ci < 2047) cmd[ci++] = *f++;
+        cmd[ci] = '\0';
+
+        /* Send OK first, then dispatch */
+        mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
+
+        char cmd_copy[2048];
+        snprintf(cmd_copy, sizeof(cmd_copy), "%s", cmd);
+        const char *argv[32];
+        int argc = 0;
+        char *cp = cmd_copy;
+        while (*cp && argc < 32) {
+            while (*cp == ' ') cp++;
+            if (!*cp) break;
+            if (*cp == '"') {
+                cp++;
+                argv[argc++] = cp;
+                while (*cp && *cp != '"') cp++;
+            } else {
+                argv[argc++] = cp;
+                while (*cp && *cp != ' ') cp++;
+            }
+            if (*cp) *cp++ = '\0';
+        }
+        if (argc > 0) {
+            kerchunk_resp_t resp;
+            resp_init(&resp);
+            kerchunk_dispatch_command(argc, argv, &resp);
+            resp_finish(&resp);
+        }
+        return;
+    }
+
+    /* Send OK first, then dispatch */
+    mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
+
+    char cmd_copy[2048];
+    snprintf(cmd_copy, sizeof(cmd_copy), "%s", p);
+    free((void *)p);
+    const char *argv[32];
+    int argc = 0;
+    char *cp = cmd_copy;
+    while (*cp && argc < 32) {
+        while (*cp == ' ') cp++;
+        if (!*cp) break;
+        if (*cp == '"') {
+            cp++;
+            argv[argc++] = cp;
+            while (*cp && *cp != '"') cp++;
+        } else {
+            argv[argc++] = cp;
+            while (*cp && *cp != ' ') cp++;
+        }
+        if (*cp) *cp++ = '\0';
+    }
+    if (argc > 0) {
+        kerchunk_resp_t resp;
+        resp_init(&resp);
+        kerchunk_dispatch_command(argc, argv, &resp);
+        resp_finish(&resp);
+    }
+}
+
+/* ── Users API ── */
+
+static void handle_api_users(struct mg_connection *c)
+{
+    char buf[RESP_MAX] = "{\"users\":[";
+    int off = (int)strlen(buf);
+    int count = kerchunk_user_count();
+    for (int i = 0; i < count && off < RESP_MAX - 200; i++) {
+        const kerchunk_user_t *u = kerchunk_user_get(i);
+        if (!u) continue;
+        if (i > 0) buf[off++] = ',';
+        off += snprintf(buf + off, RESP_MAX - off,
+            "{\"id\":%d,\"username\":\"%s\",\"name\":\"%s\","
+            "\"email\":\"%s\","
+            "\"dtmf_login\":\"%s\",\"ani\":\"%s\",\"access\":%d,"
+            "\"voicemail\":%d,\"group\":%d,"
+            "\"totp_secret\":\"%s\"}",
+            u->id, u->username, u->name,
+            u->email,
+            u->dtmf_login, u->ani, u->access,
+            u->voicemail, u->group,
+            u->totp_secret);
+    }
+    off += snprintf(buf + off, RESP_MAX - off, "]}");
+    (void)off;
+    mg_http_reply(c, 200, API_HEADERS, "%s", buf);
+}
+
+/* ── Groups API ── */
+
+static void handle_api_groups(struct mg_connection *c)
+{
+    char buf[RESP_MAX] = "{\"groups\":[";
+    int off = (int)strlen(buf);
+    int count = kerchunk_group_count();
+    for (int i = 0; i < count && off < RESP_MAX - 200; i++) {
+        const kerchunk_group_t *g = kerchunk_group_get(i);
+        if (!g) continue;
+        if (i > 0) buf[off++] = ',';
+        off += snprintf(buf + off, RESP_MAX - off,
+            "{\"id\":%d,\"name\":\"%s\",\"tx_ctcss\":%d,\"tx_dcs\":%d}",
+            g->id, g->name, g->tx_ctcss_freq_x10, g->tx_dcs_code);
+    }
+    off += snprintf(buf + off, RESP_MAX - off, "]}");
+    (void)off;
+    mg_http_reply(c, 200, API_HEADERS, "%s", buf);
+}
+
+/* ── URI id helper ── */
+
+static int uri_id(struct mg_http_message *hm, const char *prefix)
+{
+    if (hm->uri.len <= strlen(prefix)) return -1;
+    return atoi(hm->uri.buf + strlen(prefix));
+}
+
+/* ── User CRUD ── */
+
+static void handle_api_user_create(struct mg_connection *c,
+                                    struct mg_http_message *hm)
+{
+    kerchunk_config_t *cfg = kerchunk_core_get_users_config();
+    if (!cfg) {
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
+        return;
+    }
+
+    char *name = mg_json_get_str(hm->body, "$.name");
+    if (!name) {
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"Missing name\"}");
+        return;
+    }
+
+    kerchunk_core_lock_config();
+
+    /* Find next available user ID (scan up to 9999) */
+    int new_id = -1;
+    for (int id = 1; id <= 9999; id++) {
+        if (!kerchunk_user_lookup_by_id(id)) { new_id = id; break; }
+    }
+    if (new_id < 0) {
+        kerchunk_core_unlock_config();
+        free(name);
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"Max users reached\"}");
+        return;
+    }
+
+    char section[32], vbuf[256];
+    snprintf(section, sizeof(section), "user.%d", new_id);
+    kerchunk_config_set(cfg, section, "name", name);
+    free(name);
+
+    char *s;
+    long lv;
+
+    s = mg_json_get_str(hm->body, "$.username");
+    if (s) { kerchunk_config_set(cfg, section, "username", s); free(s); }
+
+    s = mg_json_get_str(hm->body, "$.email");
+    if (s) { kerchunk_config_set(cfg, section, "email", s); free(s); }
+
+    s = mg_json_get_str(hm->body, "$.dtmf_login");
+    kerchunk_config_set(cfg, section, "dtmf_login", s ? s : "");
+    free(s);
+
+    s = mg_json_get_str(hm->body, "$.ani");
+    kerchunk_config_set(cfg, section, "ani", s ? s : "");
+    free(s);
+
+    lv = mg_json_get_long(hm->body, "$.access", 1);
+    snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+    kerchunk_config_set(cfg, section, "access", vbuf);
+
+    lv = mg_json_get_long(hm->body, "$.voicemail", 0);
+    snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+    kerchunk_config_set(cfg, section, "voicemail", vbuf);
+
+    lv = mg_json_get_long(hm->body, "$.group", 0);
+    snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+    kerchunk_config_set(cfg, section, "group", vbuf);
+
+    s = mg_json_get_str(hm->body, "$.totp_secret");
+    kerchunk_config_set(cfg, section, "totp_secret", s ? s : "");
+    free(s);
+
+    kerchunk_config_save(cfg);
+    kerchunk_core_unlock_config();
+    kill(getpid(), SIGHUP);
+
+    mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true,\"id\":%d}", new_id);
+}
+
+static void handle_api_user_update(struct mg_connection *c,
+                                    struct mg_http_message *hm)
+{
+    kerchunk_config_t *cfg = kerchunk_core_get_users_config();
+    if (!cfg) {
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
+        return;
+    }
+
+    int id = uri_id(hm, "/api/users/");
+    if (id < 1 || id > 9999) {
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"Invalid user ID\"}");
+        return;
+    }
+
+    kerchunk_core_lock_config();
+
+    char section[32], vbuf[256];
+    snprintf(section, sizeof(section), "user.%d", id);
+
+    char *s;
+    long lv;
+
+    s = mg_json_get_str(hm->body, "$.name");
+    if (s) { kerchunk_config_set(cfg, section, "name", s); free(s); }
+
+    s = mg_json_get_str(hm->body, "$.username");
+    if (s) { kerchunk_config_set(cfg, section, "username", s); free(s); }
+
+    s = mg_json_get_str(hm->body, "$.email");
+    if (s) { kerchunk_config_set(cfg, section, "email", s); free(s); }
+
+    s = mg_json_get_str(hm->body, "$.dtmf_login");
+    if (s) { kerchunk_config_set(cfg, section, "dtmf_login", s); free(s); }
+
+    s = mg_json_get_str(hm->body, "$.ani");
+    if (s) { kerchunk_config_set(cfg, section, "ani", s); free(s); }
+
+    lv = mg_json_get_long(hm->body, "$.access", -1);
+    if (lv >= 0) { snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+                    kerchunk_config_set(cfg, section, "access", vbuf); }
+
+    lv = mg_json_get_long(hm->body, "$.voicemail", -1);
+    if (lv >= 0) { snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+                    kerchunk_config_set(cfg, section, "voicemail", vbuf); }
+
+    lv = mg_json_get_long(hm->body, "$.group", -1);
+    if (lv >= 0) { snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+                    kerchunk_config_set(cfg, section, "group", vbuf); }
+
+    s = mg_json_get_str(hm->body, "$.totp_secret");
+    if (s) { kerchunk_config_set(cfg, section, "totp_secret", s); free(s); }
+
+    kerchunk_config_save(cfg);
+    kerchunk_core_unlock_config();
+    kill(getpid(), SIGHUP);
+
+    mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
+}
+
+static void handle_api_user_delete(struct mg_connection *c,
+                                    struct mg_http_message *hm)
+{
+    kerchunk_config_t *cfg = kerchunk_core_get_users_config();
+    if (!cfg) {
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
+        return;
+    }
+
+    int id = uri_id(hm, "/api/users/");
+    if (id < 1 || id > 9999) {
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"Invalid user ID\"}");
+        return;
+    }
+
+    kerchunk_core_lock_config();
+
+    char section[32];
+    snprintf(section, sizeof(section), "user.%d", id);
+    kerchunk_config_remove_section(cfg, section);
+    kerchunk_config_save(cfg);
+    kerchunk_core_unlock_config();
+    kill(getpid(), SIGHUP);
+
+    mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
+}
+
+/* ── Group CRUD ── */
+
+static void handle_api_group_create(struct mg_connection *c,
+                                     struct mg_http_message *hm)
+{
+    kerchunk_config_t *cfg = kerchunk_core_get_users_config();
+    if (!cfg) {
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
+        return;
+    }
+
+    char *name = mg_json_get_str(hm->body, "$.name");
+    if (!name) {
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"Missing name\"}");
+        return;
+    }
+
+    kerchunk_core_lock_config();
+
+    /* Find next available group ID */
+    int new_id = -1;
+    for (int id = 1; id <= KERCHUNK_MAX_GROUPS; id++) {
+        if (!kerchunk_group_lookup_by_id(id)) { new_id = id; break; }
+    }
+    if (new_id < 0) {
+        kerchunk_core_unlock_config();
+        free(name);
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"Max groups reached\"}");
+        return;
+    }
+
+    char section[32], vbuf[256];
+    snprintf(section, sizeof(section), "group.%d", new_id);
+    kerchunk_config_set(cfg, section, "name", name);
+    free(name);
+
+    long lv;
+
+    lv = mg_json_get_long(hm->body, "$.tx_ctcss", 0);
+    snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+    kerchunk_config_set(cfg, section, "tx_ctcss", vbuf);
+
+    lv = mg_json_get_long(hm->body, "$.tx_dcs", 0);
+    snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+    kerchunk_config_set(cfg, section, "tx_dcs", vbuf);
+
+    kerchunk_config_save(cfg);
+    kerchunk_core_unlock_config();
+    kill(getpid(), SIGHUP);
+
+    mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true,\"id\":%d}", new_id);
+}
+
+static void handle_api_group_update(struct mg_connection *c,
+                                     struct mg_http_message *hm)
+{
+    kerchunk_config_t *cfg = kerchunk_core_get_users_config();
+    if (!cfg) {
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
+        return;
+    }
+
+    int id = uri_id(hm, "/api/groups/");
+    if (id < 1 || id > KERCHUNK_MAX_GROUPS) {
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"Invalid group ID\"}");
+        return;
+    }
+
+    kerchunk_core_lock_config();
+
+    char section[32], vbuf[256];
+    snprintf(section, sizeof(section), "group.%d", id);
+
+    char *s;
+    long lv;
+
+    s = mg_json_get_str(hm->body, "$.name");
+    if (s) { kerchunk_config_set(cfg, section, "name", s); free(s); }
+
+    lv = mg_json_get_long(hm->body, "$.tx_ctcss", -1);
+    if (lv >= 0) { snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+                    kerchunk_config_set(cfg, section, "tx_ctcss", vbuf); }
+
+    lv = mg_json_get_long(hm->body, "$.tx_dcs", -1);
+    if (lv >= 0) { snprintf(vbuf, sizeof(vbuf), "%ld", lv);
+                    kerchunk_config_set(cfg, section, "tx_dcs", vbuf); }
+
+    kerchunk_config_save(cfg);
+    kerchunk_core_unlock_config();
+    kill(getpid(), SIGHUP);
+
+    mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
+}
+
+static void handle_api_group_delete(struct mg_connection *c,
+                                     struct mg_http_message *hm)
+{
+    kerchunk_config_t *cfg = kerchunk_core_get_users_config();
+    if (!cfg) {
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
+        return;
+    }
+
+    int id = uri_id(hm, "/api/groups/");
+    if (id < 1 || id > KERCHUNK_MAX_GROUPS) {
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"Invalid group ID\"}");
+        return;
+    }
+
+    kerchunk_core_lock_config();
+
+    char section[32];
+    snprintf(section, sizeof(section), "group.%d", id);
+    kerchunk_config_remove_section(cfg, section);
+    kerchunk_config_save(cfg);
+    kerchunk_core_unlock_config();
+    kill(getpid(), SIGHUP);
+
+    mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
+}
+
+/* ── Config API ── */
+
+static void handle_api_config_get(struct mg_connection *c,
+                                    struct mg_http_message *hm)
+{
+    (void)hm;
+    if (g_auth_token[0] == '\0') {
+        mg_http_reply(c, 403, API_HEADERS,
+                      "{\"error\":\"auth_token not configured\"}");
+        return;
+    }
+
+    kerchunk_config_t *cfg = kerchunk_core_get_config();
+    if (!cfg) {
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
+        return;
+    }
+
+    kerchunk_core_lock_config();
+
+    char buf[16384] = "{\"sections\":{";
+    int off = (int)strlen(buf);
+    int sec_iter = 0;
+    const char *section;
+    int first_sec = 1;
+
+    while ((section = kerchunk_config_next_section(cfg, &sec_iter)) != NULL) {
+        if (strncmp(section, "user.", 5) == 0 ||
+            strncmp(section, "group.", 6) == 0)
+            continue;
+
+        if (!first_sec && off < (int)sizeof(buf) - 2)
+            buf[off++] = ',';
+        first_sec = 0;
+
+        off += snprintf(buf + off, sizeof(buf) - off, "\"%s\":{", section);
+
+        int key_iter = 0;
+        const char *key, *val;
+        int first_key = 1;
+        while ((key = kerchunk_config_next_key(cfg, section, &key_iter,
+                                                &val)) != NULL) {
+            if (!first_key && off < (int)sizeof(buf) - 2)
+                buf[off++] = ',';
+            first_key = 0;
+
+            const char *show = is_sensitive(key) ? "********" : val;
+            off += snprintf(buf + off, sizeof(buf) - off,
+                            "\"%s\":\"%s\"", key, show);
+
+            if (off >= (int)sizeof(buf) - 64) break;
+        }
+
+        off += snprintf(buf + off, sizeof(buf) - off, "}");
+        if (off >= (int)sizeof(buf) - 64) break;
+    }
+
+    off += snprintf(buf + off, sizeof(buf) - off, "}}");
+    (void)off;
+    kerchunk_core_unlock_config();
+    mg_http_reply(c, 200, API_HEADERS, "%s", buf);
+}
+
+static void handle_api_config_put(struct mg_connection *c,
+                                    struct mg_http_message *hm)
+{
+    if (g_auth_token[0] == '\0') {
+        mg_http_reply(c, 403, API_HEADERS,
+                      "{\"error\":\"auth_token not configured\"}");
+        return;
+    }
+
+    kerchunk_config_t *cfg = kerchunk_core_get_config();
+    if (!cfg) {
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
+        return;
+    }
+
+    char *section = mg_json_get_str(hm->body, "$.section");
+    if (!section) {
+        mg_http_reply(c, 400, API_HEADERS,
+                      "{\"error\":\"Missing section\"}");
+        return;
+    }
+
+    if (strncmp(section, "user.", 5) == 0 ||
+        strncmp(section, "group.", 6) == 0) {
+        free(section);
+        mg_http_reply(c, 403, API_HEADERS,
+                      "{\"error\":\"Use users/groups API\"}");
+        return;
+    }
+
+    /* Find "values" object in body and iterate key:value pairs */
+    const char *vstart = strstr(hm->body.buf, "\"values\"");
+    if (!vstart) {
+        free(section);
+        mg_http_reply(c, 400, API_HEADERS,
+                      "{\"error\":\"Missing values\"}");
+        return;
+    }
+
+    kerchunk_core_lock_config();
+    vstart = strchr(vstart, '{');
+    if (vstart) {
+        vstart++; /* skip { */
+        char key[64], val[256];
+        while (*vstart && *vstart != '}') {
+            while (*vstart && (*vstart == ' ' || *vstart == ',' ||
+                               *vstart == '\n' || *vstart == '\r' ||
+                               *vstart == '\t'))
+                vstart++;
+            if (*vstart == '"') {
+                vstart++;
+                int ki = 0;
+                while (*vstart && *vstart != '"' && ki < 63)
+                    key[ki++] = *vstart++;
+                key[ki] = '\0';
+                if (*vstart == '"') vstart++;
+                while (*vstart && *vstart != ':') vstart++;
+                if (*vstart == ':') vstart++;
+                while (*vstart == ' ') vstart++;
+                if (*vstart == '"') {
+                    vstart++;
+                    int vi = 0;
+                    while (*vstart && *vstart != '"' && vi < 255)
+                        val[vi++] = *vstart++;
+                    val[vi] = '\0';
+                    if (*vstart == '"') vstart++;
+
+                    if (is_sensitive(key) && strcmp(val, "********") == 0)
+                        continue;
+                    kerchunk_config_set(cfg, section, key, val);
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    kerchunk_config_save(cfg);
+    kerchunk_core_unlock_config();
+    kill(getpid(), SIGHUP);
+    free(section);
+
+    mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
+}
+
+/* ── Registration handler ── */
+
+/* Simple rate limit: track last registration time, enforce minimum gap */
+static time_t g_last_register_time;
+#define REGISTER_RATE_LIMIT_S 10  /* one registration per 10 seconds */
+
+static void handle_api_register(struct mg_connection *c,
+                                 struct mg_http_message *hm)
+{
+    if (!g_registration_enabled) {
+        mg_http_reply(c, 403, API_HEADERS,
+                      "{\"error\":\"Registration disabled\"}");
+        return;
+    }
+
+    time_t now = time(NULL);
+    if (now - g_last_register_time < REGISTER_RATE_LIMIT_S) {
+        mg_http_reply(c, 429, API_HEADERS,
+                      "{\"error\":\"Too many requests, try again later\"}");
+        return;
+    }
+
+    char *username = mg_json_get_str(hm->body, "$.username");
+    if (!username || username[0] == '\0') {
+        free(username);
+        mg_http_reply(c, 400, API_HEADERS,
+                      "{\"error\":\"Missing username\"}");
+        return;
+    }
+
+    /* Validate: lowercase, no spaces, truncate to 31 */
+    for (int i = 0; username[i]; i++) {
+        if (username[i] == ' ' || (unsigned char)username[i] != (unsigned char)tolower((unsigned char)username[i])) {
+            free(username);
+            mg_http_reply(c, 400, API_HEADERS,
+                "{\"error\":\"Username must be lowercase with no spaces\"}");
+            return;
+        }
+    }
+    if (strlen(username) > 31) username[31] = '\0';
+
+    /* Check duplicate */
+    if (kerchunk_user_lookup_by_username(username)) {
+        free(username);
+        mg_http_reply(c, 409, API_HEADERS,
+                      "{\"error\":\"Username already taken\"}");
+        return;
+    }
+
+    char *name_str = mg_json_get_str(hm->body, "$.name");
+    char *email_str = mg_json_get_str(hm->body, "$.email");
+
+    kerchunk_config_t *cfg = kerchunk_core_get_users_config();
+    if (!cfg) {
+        free(username); free(name_str); free(email_str);
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
+        return;
+    }
+
+    kerchunk_core_lock_config();
+
+    /* Find next available user ID */
+    int new_id = -1;
+    for (int id = 1; id <= 9999; id++) {
+        if (!kerchunk_user_lookup_by_id(id)) { new_id = id; break; }
+    }
+    if (new_id < 0) {
+        kerchunk_core_unlock_config();
+        free(username); free(name_str); free(email_str);
+        mg_http_reply(c, 503, API_HEADERS,
+                      "{\"error\":\"No user slots available\"}");
+        return;
+    }
+
+    /* Generate random 4-digit DTMF login (1000-9999), collision check */
+    char dtmf_login[8] = "";
+    int attempts = 0;
+    srand((unsigned)(time(NULL) ^ (unsigned)new_id));
+    while (attempts < 100) {
+        int code = 1000 + (rand() % 9000);
+        snprintf(dtmf_login, sizeof(dtmf_login), "%d", code);
+        /* Check collision */
+        int collision = 0;
+        int ucount = kerchunk_user_count();
+        for (int i = 0; i < ucount; i++) {
+            const kerchunk_user_t *u = kerchunk_user_get(i);
+            if (u && strcmp(u->dtmf_login, dtmf_login) == 0) {
+                collision = 1; break;
+            }
+        }
+        if (!collision) break;
+        attempts++;
+    }
+    if (attempts >= 100) {
+        kerchunk_core_unlock_config();
+        free(username); free(name_str); free(email_str);
+        mg_http_reply(c, 503, API_HEADERS,
+                      "{\"error\":\"Could not generate unique DTMF login\"}");
+        return;
+    }
+
+    /* Generate random 5-digit ANI (10000-99999), collision check */
+    char ani[16] = "";
+    attempts = 0;
+    while (attempts < 100) {
+        int code = 10000 + (rand() % 90000);
+        snprintf(ani, sizeof(ani), "%d", code);
+        if (!kerchunk_user_lookup_by_ani(ani)) break;
+        attempts++;
+    }
+    if (attempts >= 100) {
+        kerchunk_core_unlock_config();
+        free(username); free(name_str); free(email_str);
+        mg_http_reply(c, 503, API_HEADERS,
+                      "{\"error\":\"Could not generate unique ANI\"}");
+        return;
+    }
+
+    /* Write config section */
+    char section[32];
+    snprintf(section, sizeof(section), "user.%d", new_id);
+    kerchunk_config_set(cfg, section, "username", username);
+    kerchunk_config_set(cfg, section, "name",
+                        (name_str && name_str[0]) ? name_str : username);
+    if (email_str && email_str[0])
+        kerchunk_config_set(cfg, section, "email", email_str);
+    kerchunk_config_set(cfg, section, "dtmf_login", dtmf_login);
+    kerchunk_config_set(cfg, section, "ani", ani);
+    kerchunk_config_set(cfg, section, "access", "1");
+    kerchunk_config_set(cfg, section, "voicemail", "0");
+    kerchunk_config_set(cfg, section, "group", "0");
+
+    kerchunk_config_save(cfg);
+    kerchunk_core_unlock_config();
+    kill(getpid(), SIGHUP);
+
+    const char *display_name = (name_str && name_str[0]) ? name_str : username;
+
+    g_last_register_time = time(NULL);
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "registered user %d: %s [%s]", new_id, display_name, username);
+
+    mg_http_reply(c, 200, API_HEADERS,
+        "{\"ok\":true,\"id\":%d,\"username\":\"%s\",\"name\":\"%s\","
+        "\"dtmf_login\":\"%s\",\"ani\":\"%s\"}",
+        new_id, username, display_name, dtmf_login, ani);
+
+    free(username); free(name_str); free(email_str);
+}
+
+/* ── Mongoose event handler ── */
+
+static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
+{
+    if (ev == MG_EV_ACCEPT && g_tls_active) {
+        struct mg_tls_opts opts = { .cert = g_cert_data, .key = g_key_data };
+        mg_tls_init(c, &opts);
+    }
+
+    if (ev == MG_EV_HTTP_MSG) {
+        struct mg_http_message *hm = (struct mg_http_message *)ev_data;
+
+        /* Access log */
+        {
+            uint8_t *ip = c->rem.addr.ip;
+            if (c->rem.is_ip6)
+                g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "%x:%x:%x:%x:%x:%x:%x:%x %.*s %.*s",
+                    (ip[0]<<8)|ip[1], (ip[2]<<8)|ip[3],
+                    (ip[4]<<8)|ip[5], (ip[6]<<8)|ip[7],
+                    (ip[8]<<8)|ip[9], (ip[10]<<8)|ip[11],
+                    (ip[12]<<8)|ip[13], (ip[14]<<8)|ip[15],
+                    (int)hm->method.len, hm->method.buf,
+                    (int)hm->uri.len, hm->uri.buf);
+            else
+                g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "%d.%d.%d.%d %.*s %.*s",
+                    ip[0], ip[1], ip[2], ip[3],
+                    (int)hm->method.len, hm->method.buf,
+                    (int)hm->uri.len, hm->uri.buf);
+        }
+
+        /* CORS preflight */
+        if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
+            mg_http_reply(c, 204, CORS_HEADERS, "");
+            return;
+        }
+
+        /* API routes */
+        if (mg_match(hm->uri, mg_str("/api/#"), NULL)) {
+
+            /* ── Public routes (no auth required) ── */
+            if (mg_match(hm->method, mg_str("GET"), NULL)) {
+                if (mg_match(hm->uri, mg_str("/api/status"), NULL) ||
+                    mg_match(hm->uri, mg_str("/api/weather"), NULL) ||
+                    mg_match(hm->uri, mg_str("/api/nws"), NULL)) {
+                    handle_api_get(c, hm);
+                    return;
+                }
+            }
+
+            /* WebSocket audio stream — public (PTT still requires WS auth) */
+            if (mg_match(hm->uri, mg_str("/api/audio"), NULL)) {
+                mg_ws_upgrade(c, hm, NULL);
+                return;
+            }
+
+            /* Registration — public */
+            if (mg_match(hm->method, mg_str("POST"), NULL) &&
+                mg_match(hm->uri, mg_str("/api/register"), NULL)) {
+                handle_api_register(c, hm);
+                return;
+            }
+
+            /* ── Everything else requires auth ── */
+            if (!check_auth(hm)) {
+                mg_http_reply(c, 401, API_HEADERS,
+                              "{\"error\":\"Invalid or missing token\"}");
+                return;
+            }
+
+            /* SSE */
+            if (mg_match(hm->uri, mg_str("/api/events"), NULL)) {
+                mg_printf(c,
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: text/event-stream\r\n"
+                    "Cache-Control: no-cache\r\n"
+                    "Connection: keep-alive\r\n"
+                    "Access-Control-Allow-Origin: *\r\n"
+                    "\r\n");
+                c->data[0] = 'E';  /* Mark as SSE client */
+                atomic_fetch_add(&g_sse_count, 1);
+                return;
+            }
+
+            /* POST /api/config/reload */
+            if (mg_match(hm->method, mg_str("POST"), NULL) &&
+                mg_match(hm->uri, mg_str("/api/config/reload"), NULL)) {
+                kill(getpid(), SIGHUP);
+                mg_http_reply(c, 200, API_HEADERS,
+                              "{\"ok\":true,\"action\":\"config_reload\"}");
+                return;
+            }
+
+            /* Config CRUD (GET/PUT /api/config) */
+            if (mg_match(hm->uri, mg_str("/api/config"), NULL)) {
+                if (mg_match(hm->method, mg_str("GET"), NULL))
+                    handle_api_config_get(c, hm);
+                else if (mg_match(hm->method, mg_str("PUT"), NULL))
+                    handle_api_config_put(c, hm);
+                else
+                    mg_http_reply(c, 405, API_HEADERS,
+                                  "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+
+            /* POST /api/cmd */
+            if (mg_match(hm->method, mg_str("POST"), NULL) &&
+                mg_match(hm->uri, mg_str("/api/cmd"), NULL)) {
+                handle_api_post_cmd(c, hm);
+                return;
+            }
+
+            /* Users CRUD */
+            if (mg_match(hm->method, mg_str("POST"), NULL) &&
+                mg_match(hm->uri, mg_str("/api/users"), NULL)) {
+                handle_api_user_create(c, hm);
+                return;
+            }
+            if (mg_match(hm->uri, mg_str("/api/users/#"), NULL)) {
+                if (mg_match(hm->method, mg_str("PUT"), NULL))
+                    handle_api_user_update(c, hm);
+                else if (mg_match(hm->method, mg_str("DELETE"), NULL))
+                    handle_api_user_delete(c, hm);
+                else
+                    mg_http_reply(c, 405, API_HEADERS, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+
+            /* Groups CRUD */
+            if (mg_match(hm->method, mg_str("POST"), NULL) &&
+                mg_match(hm->uri, mg_str("/api/groups"), NULL)) {
+                handle_api_group_create(c, hm);
+                return;
+            }
+            if (mg_match(hm->uri, mg_str("/api/groups/#"), NULL)) {
+                if (mg_match(hm->method, mg_str("PUT"), NULL))
+                    handle_api_group_update(c, hm);
+                else if (mg_match(hm->method, mg_str("DELETE"), NULL))
+                    handle_api_group_delete(c, hm);
+                else
+                    mg_http_reply(c, 405, API_HEADERS, "{\"error\":\"Method not allowed\"}");
+                return;
+            }
+            if (mg_match(hm->uri, mg_str("/api/groups"), NULL)) {
+                handle_api_groups(c);
+                return;
+            }
+
+            /* GET /api/users */
+            if (mg_match(hm->uri, mg_str("/api/users"), NULL)) {
+                handle_api_users(c);
+                return;
+            }
+
+            /* GET /api route table */
+            handle_api_get(c, hm);
+            return;
+        }
+
+        /* Static files */
+        if (g_static_dir[0]) {
+            struct mg_http_serve_opts opts = { .root_dir = g_static_dir };
+            mg_http_serve_dir(c, hm, &opts);
+        } else {
+            mg_http_reply(c, 404, "", "Not found\n");
+        }
+    }
+
+    /* WebSocket audio — connection opened */
+    if (ev == MG_EV_WS_OPEN) {
+        ws_conn_state_t *st = calloc(1, sizeof(ws_conn_state_t));
+        if (st) {
+            st->magic = WS_PTT_MAGIC;
+            ws_set_state(c, st);
+        }
+        int prev = atomic_fetch_add(&g_ws_audio_count, 1);
+        if (prev == 0) {
+            g_core->audio_tap_register(ws_rx_audio_tap, NULL);
+            g_core->playback_tap_register(ws_tx_playback_tap, NULL);
+            g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "audio streaming started");
+        }
+    }
+
+    /* WebSocket message (text commands or binary audio) */
+    if (ev == MG_EV_WS_MSG) {
+        struct mg_ws_message *wm = (struct mg_ws_message *)ev_data;
+        ws_conn_state_t *st = ws_get_state(c);
+        if (!st) return;
+
+        uint8_t opcode = wm->flags & 0x0F;
+
+        if (opcode == WEBSOCKET_OP_TEXT) {
+            char *cmd = mg_json_get_str(wm->data, "$.cmd");
+            if (cmd) {
+                if (strcmp(cmd, "auth") == 0)
+                    ws_handle_auth(c, st, wm);
+                else if (strcmp(cmd, "ptt_on") == 0)
+                    ws_handle_ptt_on(c, st);
+                else if (strcmp(cmd, "ptt_off") == 0)
+                    ws_handle_ptt_off(c, st);
+                else
+                    ws_send_json(c, "{\"ok\":false,\"error\":\"unknown cmd\"}");
+                free(cmd);
+            }
+        } else if (opcode == WEBSOCKET_OP_BINARY) {
+            ws_handle_audio_frame(st, (const uint8_t *)wm->data.buf,
+                                  wm->data.len);
+        }
+    }
+
+    /* SSE event data from another thread via mg_wakeup() */
+    if (ev == MG_EV_WAKEUP) {
+        struct mg_str *data = (struct mg_str *)ev_data;
+        if (data->len > 0) {
+            for (struct mg_connection *t = c->mgr->conns; t != NULL; t = t->next) {
+                if (t->data[0] == 'E')
+                    mg_printf(t, "data: %.*s\n\n", (int)data->len, data->buf);
+            }
+        }
+    }
+
+    /* Track client disconnections */
+    if (ev == MG_EV_CLOSE) {
+        if (c->data[0] == 'E') {
+            atomic_fetch_sub(&g_sse_count, 1);
+        } else {
+            ws_conn_state_t *st = ws_get_state(c);
+            if (st) {
+                if (st->ptt_held) {
+                    g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                                "WS disconnect while PTT held: user=%s",
+                                st->user_name);
+                    st->ptt_held = 0;
+                    if (g_ptt_holder == st) g_ptt_holder = NULL;
+                    /* Queue drains naturally; PTT releases when empty */
+                }
+                free(st);
+                ws_conn_state_t *nil = NULL;
+                ws_set_state(c, nil);
+
+                int prev = atomic_fetch_sub(&g_ws_audio_count, 1);
+                if (prev == 1) {
+                    g_core->audio_tap_unregister(ws_rx_audio_tap);
+                    g_core->playback_tap_unregister(ws_tx_playback_tap);
+                    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                                "audio streaming stopped");
+                }
+            }
+        }
+    }
+}
+
+/* ── Event handler for SSE broadcast ── */
+
+static void web_event_handler(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    if (evt->type == KERCHEVT_AUDIO_FRAME || evt->type == KERCHEVT_TICK ||
+        evt->type == KERCHEVT_CTCSS_DETECT || evt->type == KERCHEVT_DCS_DETECT)
+        return;
+    if (atomic_load(&g_sse_count) <= 0)
+        return;
+
+    char json[512];
+    int jlen = kerchevt_to_json(evt, json, sizeof(json));
+    if (jlen > 0)
+        mg_wakeup(&g_mgr, g_listener_id, json, (size_t)jlen);
+}
+
+/* ── Server thread ── */
+
+static void *web_thread(void *arg)
+{
+    (void)arg;
+    while (g_running) {
+        ws_flush_ring();           /* drain SPSC ring → WebSocket clients */
+        mg_mgr_poll(&g_mgr, 1);   /* process events + flush TCP output */
+    }
+    return NULL;
+}
+
+/* ── Module lifecycle ── */
+
+static int web_load(kerchunk_core_t *core)
+{
+    g_core = core;
+    return 0;
+}
+
+static int web_configure(const kerchunk_config_t *cfg)
+{
+    const char *v;
+
+    v = kerchunk_config_get(cfg, "web", "enabled");
+    g_enabled = (v && strcmp(v, "on") == 0);
+
+    g_port = kerchunk_config_get_int(cfg, "web", "port", 8080);
+
+    v = kerchunk_config_get(cfg, "web", "bind");
+    if (v) snprintf(g_bind, sizeof(g_bind), "%s", v);
+
+    v = kerchunk_config_get(cfg, "web", "auth_token");
+    if (v) snprintf(g_auth_token, sizeof(g_auth_token), "%s", v);
+
+    v = kerchunk_config_get(cfg, "web", "static_dir");
+    if (v) snprintf(g_static_dir, sizeof(g_static_dir), "%s", v);
+
+    v = kerchunk_config_get(cfg, "web", "tls_cert");
+    if (v) snprintf(g_tls_cert, sizeof(g_tls_cert), "%s", v);
+
+    v = kerchunk_config_get(cfg, "web", "tls_key");
+    if (v) snprintf(g_tls_key, sizeof(g_tls_key), "%s", v);
+
+    v = kerchunk_config_get(cfg, "web", "registration_enabled");
+    g_registration_enabled = (v && strcmp(v, "on") == 0);
+
+    v = kerchunk_config_get(cfg, "web", "ptt_enabled");
+    g_ptt_enabled = (v && strcmp(v, "on") == 0);
+
+    g_ptt_max_duration_s = kerchunk_config_get_int(cfg, "web", "ptt_max_duration", 30);
+    g_ptt_priority = kerchunk_config_get_int(cfg, "web", "ptt_priority", 2);
+
+    /* Redirect mongoose logs through our logger */
+    mg_log_set_fn(mg_log_cb, NULL);
+    mg_log_set(MG_LL_DEBUG);
+
+    /* If already running, just update config values (auth_token, static_dir)
+     * without restarting — restarting would deadlock if triggered by a web
+     * API handler on the mongoose thread via SIGHUP. */
+    if (g_running) {
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "config reloaded (port=%d auth=%s)",
+                    g_port, g_auth_token[0] ? "yes" : "no");
+        return 0;
+    }
+
+    if (!g_enabled) {
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "disabled");
+        return 0;
+    }
+
+    if (g_cert_data.buf) { free(g_cert_data.buf); g_cert_data.buf = NULL; }
+    if (g_key_data.buf) { free(g_key_data.buf); g_key_data.buf = NULL; }
+
+    /* TLS setup — read cert/key files once */
+    g_tls_active = 0;
+    if (g_tls_cert[0] && g_tls_key[0]) {
+        g_cert_data = mg_file_read(&mg_fs_posix, g_tls_cert);
+        if (g_cert_data.buf == NULL) {
+            g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                        "failed to read TLS cert: %s", g_tls_cert);
+            g_enabled = 0;
+            return 0;
+        }
+        g_key_data = mg_file_read(&mg_fs_posix, g_tls_key);
+        if (g_key_data.buf == NULL) {
+            g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                        "failed to read TLS key: %s", g_tls_key);
+            free(g_cert_data.buf);
+            g_cert_data.buf = NULL;
+            g_enabled = 0;
+            return 0;
+        }
+        g_tls_active = 1;
+    }
+
+    /* Initialize mongoose */
+    mg_mgr_init(&g_mgr);
+    mg_wakeup_init(&g_mgr);
+
+    /* Make wakeup pipe non-blocking so event producers (audio thread,
+     * main thread) never block if the pipe buffer is full. Mongoose's
+     * MSG_NONBLOCKING is defined as 0 on Linux, so send() would block. */
+    if (g_mgr.pipe != MG_INVALID_SOCKET)
+        fcntl((int)(size_t)g_mgr.pipe, F_SETFL,
+              fcntl((int)(size_t)g_mgr.pipe, F_GETFL) | O_NONBLOCK);
+
+    char url[128];
+    snprintf(url, sizeof(url), "%s://%s:%d",
+             g_tls_active ? "https" : "http", g_bind, g_port);
+
+    struct mg_connection *listener = mg_http_listen(&g_mgr, url,
+                                                     ev_handler, NULL);
+    if (!listener) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "failed to listen on %s", url);
+        mg_mgr_free(&g_mgr);
+        if (g_cert_data.buf) { free(g_cert_data.buf); g_cert_data.buf = NULL; }
+        if (g_key_data.buf) { free(g_key_data.buf); g_key_data.buf = NULL; }
+        g_enabled = 0;
+        return 0;
+    }
+    g_listener_id = listener->id;
+
+    /* Subscribe to events for SSE broadcast (unsubscribe first to avoid
+     * duplicates on config reload — configure() is called on every SIGHUP) */
+    static const kerchevt_type_t types[] = {
+        KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
+        KERCHEVT_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_TIMEOUT,
+        KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
+        KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
+        KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_RECORDING_SAVED,
+        KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN,
+    };
+    for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
+        g_core->unsubscribe(types[i], web_event_handler);
+    for (int i = 0; i <= 15; i++)
+        g_core->unsubscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + i), web_event_handler);
+
+    for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
+        g_core->subscribe(types[i], web_event_handler, NULL);
+    for (int i = 0; i <= 15; i++)
+        g_core->subscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + i),
+                           web_event_handler, NULL);
+
+    /* Start server thread */
+    g_running = 1;
+    g_sse_count = 0;
+    if (pthread_create(&g_web_thread, NULL, web_thread, NULL) != 0) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "failed to create web thread");
+        mg_mgr_free(&g_mgr);
+        g_enabled = 0;
+        return 0;
+    }
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "listening on %s://%s:%d%s",
+                g_tls_active ? "https" : "http",
+                g_bind, g_port,
+                g_auth_token[0] ? " (auth required)" : "");
+    return 0;
+}
+
+static void web_unload(void)
+{
+    /* Unsubscribe from all event types */
+    static const kerchevt_type_t types[] = {
+        KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
+        KERCHEVT_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_TIMEOUT,
+        KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
+        KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
+        KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_RECORDING_SAVED,
+        KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN,
+    };
+    for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
+        g_core->unsubscribe(types[i], web_event_handler);
+    for (int i = 0; i <= 15; i++)
+        g_core->unsubscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + i), web_event_handler);
+
+    if (g_running) {
+        g_running = 0;
+        pthread_join(g_web_thread, NULL);
+    }
+
+    mg_mgr_free(&g_mgr);
+
+    if (g_cert_data.buf) { free(g_cert_data.buf); g_cert_data.buf = NULL; }
+    if (g_key_data.buf) { free(g_key_data.buf); g_key_data.buf = NULL; }
+}
+
+/* ── CLI ── */
+
+static int cli_web(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    (void)argc; (void)argv;
+    resp_bool(r, "enabled", g_enabled);
+    resp_int(r, "port", g_port);
+    resp_str(r, "bind", g_bind);
+    resp_bool(r, "auth", g_auth_token[0] != '\0');
+    resp_bool(r, "tls", g_tls_active);
+    if (g_tls_active)
+        resp_str(r, "tls_cert", g_tls_cert);
+    resp_int(r, "sse_clients", atomic_load(&g_sse_count));
+    resp_int(r, "audio_clients", atomic_load(&g_ws_audio_count));
+    resp_bool(r, "ptt_enabled", g_ptt_enabled);
+    if (g_ptt_enabled) {
+        resp_int(r, "ptt_max_duration", g_ptt_max_duration_s);
+        resp_int(r, "ptt_priority", g_ptt_priority);
+    }
+    if (g_static_dir[0])
+        resp_str(r, "static_dir", g_static_dir);
+    return 0;
+}
+
+static const kerchunk_cli_cmd_t cli_cmds[] = {
+    { "web", "web", "Web server status", cli_web },
+};
+
+static kerchunk_module_def_t mod_web = {
+    .name             = "mod_web",
+    .version          = "2.0.0",
+    .description      = "Embedded HTTP/HTTPS server for web dashboard",
+    .load             = web_load,
+    .configure        = web_configure,
+    .unload           = web_unload,
+    .cli_commands     = cli_cmds,
+    .num_cli_commands = 1,
+};
+
+KERCHUNK_MODULE_DEFINE(mod_web);

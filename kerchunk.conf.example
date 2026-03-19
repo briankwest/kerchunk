@@ -1,0 +1,424 @@
+; ============================================================================
+; kerchunk.conf.example — Complete configuration reference for kerchunkd
+;
+; Copy to kerchunk.conf and edit for your installation.
+; Lines starting with ; are comments. All values shown are defaults
+; unless noted otherwise.
+; ============================================================================
+
+; ----------------------------------------------------------------------------
+; General settings
+; ----------------------------------------------------------------------------
+[general]
+callsign = WRDP519              ; FCC callsign (used for CW ID)
+frequency = 462.550              ; Repeater output frequency (MHz, for display)
+offset = +5.000                  ; Input offset (MHz, for display)
+sample_rate = 8000               ; Audio sample rate (Hz) — must be 8000
+log_level = info                 ; error | warn | info | debug
+sounds_dir = ./sounds            ; Base path for WAV sound files
+socket_path = /tmp/kerchunk.sock   ; Unix socket for CLI control
+; pid_file = /tmp/kerchunkd.pid  ; PID file path
+; users_file = users.conf       ; Separate user/group database file
+;                                ; When set, [user.N] and [group.N] sections
+;                                ; are loaded from this file instead of kerchunk.conf.
+;                                ; The web UI writes changes to this file only.
+
+; Site location (for dashboard display and coverage planner)
+; address = 123 Main St, McAlester, OK 74501
+; latitude = 34.9334
+; longitude = -95.7697
+; elevation = 780                ; Site elevation (ft ASL)
+; google_maps_api_key =          ; Google Maps API key for coverage planner
+
+; ----------------------------------------------------------------------------
+; Module loading
+; ----------------------------------------------------------------------------
+[modules]
+module_path = ./modules          ; Directory containing .so module files
+
+; Comma-separated list of modules to load (order matters — dependencies first)
+; mod_tts should load before mod_nws so TTS is available for announcements
+load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_txcode,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,mod_webhook,mod_scrambler,mod_sdr,mod_web
+
+; ----------------------------------------------------------------------------
+; Audio device (PortAudio)
+;
+; Use kerchunkd -d to list available devices.
+; For the RIM-Lite v2, this is typically plughw:1,0 on Linux.
+; ----------------------------------------------------------------------------
+[audio]
+capture_device = default         ; PortAudio capture device name
+playback_device = default        ; PortAudio playback device name
+; hw_rate = 48000                ; Force hardware sample rate (0=auto)
+;                                ; Recommended: 48000 for USB devices — many claim
+;                                ; to support 8kHz but produce garbled audio. Software
+;                                ; resampling at 48kHz gives clean results.
+preemphasis = off                ; on | off (RT-97L handles this in hardware)
+; preemphasis_alpha = 0.95       ; Pre-emphasis filter coefficient (if enabled)
+
+; ----------------------------------------------------------------------------
+; USB HID interface (RIM-Lite v2 / CM119)
+;
+; COR = Carrier Operated Relay (receive detect)
+; PTT = Push To Talk (transmit control)
+; ----------------------------------------------------------------------------
+[hid]
+device = /dev/hidraw0            ; HID device path
+cor_bit = 0                      ; GPIO bit for COR input (0-7)
+cor_polarity = active_low        ; active_low | active_high
+ptt_bit = 2                      ; GPIO bit for PTT output (0-7)
+
+; ----------------------------------------------------------------------------
+; Repeater state machine
+; ----------------------------------------------------------------------------
+[repeater]
+tail_time = 2000                 ; Tail hang time after COR drop (ms)
+hang_time = 500                  ; Hang time after tail before idle (ms)
+timeout_time = 180000            ; Time-Out Timer — max TX duration (ms, 3 min)
+cor_debounce = 150               ; COR debounce / kerchunk filter (ms)
+tx_delay = 100                   ; Silence after PTT assert before audio (ms)
+tx_tail = 200                    ; Silence after audio before PTT release (ms)
+
+; Software relay: kerchunkd captures RX audio and retransmits it in software
+; with TX CTCSS/DCS mixed in. Disable the radio's internal relay when using this.
+; Enables full software control over retransmitted audio (recording, filtering).
+; Queue playback pauses when COR is active — live voice always has priority.
+software_relay = off             ; on | off
+relay_drain = 500                ; ms to continue relaying after COR drop (0-5000)
+;                                ; Prevents cutting off speech mid-word. Audio in
+;                                ; the playback buffer also drains fully before PTT
+;                                ; releases regardless of this timer.
+
+; Closed repeater: require caller identification before allowing relay.
+; When on, COR debounce is extended to at least 500ms for tone detection.
+; If no identification by debounce expiry, access is denied. DTMF login
+; users: login first (*code#), then rekey — session persists.
+require_identification = off     ; on | off
+
+; CW ID settings (FCC 95.1751: max 15 min interval)
+cwid_interval = 600000           ; CW ID interval (ms, 10 min)
+; voice_id = on                  ; Speak frequency/PL via TTS after CW ID
+cwid_wpm = 20                    ; Morse code words per minute
+cwid_freq = 800                  ; CW tone frequency (Hz)
+
+; Quiet hours: suppress CW ID and voice ID during this window.
+; Uses 24-hour local time. Wraps midnight (e.g., 22-6 = 10PM-6AM).
+; Omit or set to -1 to disable (24/7 operation).
+; quiet_start = 22               ; Hour to begin quiet (0-23)
+; quiet_end = 6                  ; Hour to end quiet (0-23)
+;
+; Solar quiet hours: auto-compute from sunrise/sunset (requires lat/lon in [general]).
+; Overrides quiet_start/quiet_end when enabled.
+; quiet_mode = solar             ; "solar" or omit for fixed hours
+; solar_offset = 30              ; Minutes: quiet starts after sunset, ends before sunrise
+
+; Default TX tone (used when no user/group override applies)
+; Set one or the other, not both. Value is freq_x10 for CTCSS, code for DCS.
+; tx_ctcss = 1318                ; CTCSS 131.8 Hz (value = freq * 10)
+; tx_dcs = 23                    ; DCS code 023
+
+; ----------------------------------------------------------------------------
+; Web dashboard (embedded HTTP server)
+;
+; Public routes (no auth): /api/status, /api/weather, /api/nws, /api/audio,
+; POST /api/register. All other API routes require auth_token.
+;
+; Pages: index.html (public dashboard), register.html, ptt.html,
+;        admin.html (requires auth), users.html, config.html, coverage.html
+; ----------------------------------------------------------------------------
+[web]
+; enabled = off
+; port = 8080
+; bind = 127.0.0.1              ; Use 0.0.0.0 for external access
+; auth_token =                  ; Bearer token for admin API auth (empty = no auth)
+; static_dir = /etc/kerchunk/web  ; Path to HTML/JS/CSS files
+; tls_cert =                    ; Path to TLS certificate (PEM). Enables HTTPS.
+; tls_key =                     ; Path to TLS private key (PEM). Required with tls_cert.
+; ptt_enabled = off              ; Enable WebSocket push-to-talk
+; ptt_max_duration = 30          ; Max PTT duration (seconds)
+; ptt_priority = 2               ; Queue priority for PTT audio
+; registration_enabled = off     ; Enable public user self-registration
+
+; ----------------------------------------------------------------------------
+; Statistics persistence
+; When on, saves counters to disk on shutdown and restores on startup.
+; Tracks total uptime, restart count, and cumulative metrics across restarts.
+; ----------------------------------------------------------------------------
+[stats]
+; persist = off                  ; on | off (default: off)
+; persist_file = stats.dat       ; Binary file for persistence
+
+; ----------------------------------------------------------------------------
+; Courtesy tone (boop after COR drop)
+; ----------------------------------------------------------------------------
+[courtesy]
+freq = 800                       ; Tone frequency (Hz)
+duration = 100                   ; Tone duration (ms)
+amplitude = 4000                 ; Tone amplitude (0-32767)
+; queue_courtesy = off            ; Also beep after queue playback (CW ID, weather, etc.)
+
+; ----------------------------------------------------------------------------
+; Caller identification
+;
+; Methods: dtmf_ani, dtmf_login (comma-separated)
+; DTMF ANI: first digits after COR used as station ID
+; DTMF login: *1XX# to identify (persists across COR cycles)
+;
+; Note: CTCSS/DCS tones are NOT used for caller identification.
+; They are reserved for repeater access, tone routing, and selective calling.
+; ----------------------------------------------------------------------------
+[caller]
+methods = dtmf_ani,dtmf_login
+ani_window = 1000                ; Window after COR to capture ANI digits (ms)
+login_timeout = 1800000          ; DTMF login session timeout (ms, 30 min)
+
+; ----------------------------------------------------------------------------
+; Voicemail
+;
+; DTMF commands: *87# status, *86# record, *85# play, *83# delete, *84# list
+; ----------------------------------------------------------------------------
+[voicemail]
+enabled = on                     ; on | off
+voicemail_dir = /var/lib/kerchunk/voicemail
+max_messages = 20                ; Max messages per user
+max_duration = 60                ; Max recording duration (seconds)
+
+; ----------------------------------------------------------------------------
+; DTMF command processing
+; ----------------------------------------------------------------------------
+[dtmf]
+inter_digit_timeout = 3000       ; Timeout between digits before reset (ms)
+cor_gate_ms = 200                ; Suppress DTMF during squelch transients (ms, 0=disable)
+
+; ----------------------------------------------------------------------------
+; GPIO relay control
+;
+; DTMF commands: *41<pin># on, *40<pin># off
+; Only pins listed in allowed_pins can be controlled.
+; ----------------------------------------------------------------------------
+[gpio]
+allowed_pins = 17,27,22          ; Comma-separated list of allowed GPIO pins
+
+; ----------------------------------------------------------------------------
+; Event logger
+;
+; Tees all log output to a file in addition to stderr.
+; ----------------------------------------------------------------------------
+[logger]
+file = events.log                ; Log file path
+; max_size_mb = 10               ; Max log file size before rotation (MB)
+
+; ----------------------------------------------------------------------------
+; Weather announcements (weatherapi.com)
+;
+; DTMF commands: *93# current weather, *94# forecast
+; Auto-announce is off by default (FCC 95.1733 — unsolicited one-way)
+; ----------------------------------------------------------------------------
+[weather]
+api_key = YOUR_WEATHERAPI_KEY    ; weatherapi.com API key
+location = 74501                 ; ZIP code or city name
+interval = 1800000               ; Auto-announce interval (ms, 30 min)
+auto_announce = off              ; on | off
+announce_temp = on               ; Include temperature
+announce_conditions = on         ; Include sky conditions
+announce_wind = on               ; Include wind speed/direction
+
+; ----------------------------------------------------------------------------
+; Transmission recording
+;
+; Records every RX and TX transmission to timestamped WAV files.
+; Files: recordings/YYYYMMDD_HHMMSS_RX_username.wav
+; Also maintains recordings/activity.log for FCC 95.1705 compliance.
+; ----------------------------------------------------------------------------
+[recording]
+enabled = on                     ; on | off
+directory = recordings           ; Output directory
+max_duration = 300               ; Max recording length (seconds, 5 min)
+
+; ----------------------------------------------------------------------------
+; Time announcements
+;
+; DTMF command: *95# for on-demand time check
+; Auto-announce is off by default (FCC 95.1733)
+; ----------------------------------------------------------------------------
+[time]
+enabled = off                    ; on | off (auto-announce)
+interval = 900000                ; Auto-announce interval (ms, 15 min)
+timezone = central               ; Timezone name for WAV files (sounds/time/)
+
+; ----------------------------------------------------------------------------
+; Emergency mode
+;
+; DTMF commands: *911# activate, *910# deactivate
+; Suppresses TOT and automated announcements while active.
+; Auto-deactivates after timeout.
+; ----------------------------------------------------------------------------
+[emergency]
+timeout = 1800000                ; Auto-deactivate timeout (ms, 30 min)
+
+; ----------------------------------------------------------------------------
+; Parrot / echo mode
+;
+; DTMF command: *88# arms parrot. Next transmission is recorded and played
+; back so the user can check their audio quality. Max 10 seconds.
+; ----------------------------------------------------------------------------
+[parrot]
+; enabled = on                   ; on | off (default: on)
+max_duration = 10                ; Max recording length (seconds, capped at 30)
+
+; ----------------------------------------------------------------------------
+; Call Detail Records (CDR)
+;
+; Logs every transmission to daily CSV files: cdr/YYYY-MM-DD.csv
+; Fields: timestamp, date, time, user_id, user_name, method, duration,
+;         emergency, recording_path
+; ----------------------------------------------------------------------------
+[cdr]
+; enabled = on                   ; on | off (default: on)
+directory = cdr                  ; Output directory
+
+; ----------------------------------------------------------------------------
+; Text-to-Speech (ElevenLabs API)
+;
+; Provides g_core->tts_speak() for other modules (mod_nws, etc.)
+; Get an API key at https://elevenlabs.io
+; Voice IDs: https://api.elevenlabs.io/v1/voices
+;
+; Responses are cached as WAV files keyed by text hash in
+; <sounds_dir>/cache/tts/. Identical text is synthesized once.
+; Use "tts cache-clear" CLI command to flush the cache.
+; ----------------------------------------------------------------------------
+[tts]
+api_key = YOUR_ELEVENLABS_API_KEY
+voice_id = 21m00Tcm4TlvDq8ikWAM ; Rachel (default ElevenLabs voice)
+model = eleven_turbo_v2_5        ; eleven_turbo_v2_5 | eleven_monolingual_v1
+; normalize_far_dir =            ; Path to NeMo FAR grammar files for text normalization
+;                                ; Normalizes numbers, times, abbreviations before TTS.
+;                                ; Install: make -C libnemo_normalize && make install
+
+; ----------------------------------------------------------------------------
+; National Weather Service alert monitor
+;
+; Polls api.weather.gov for active alerts at your location.
+; Announces new alerts via TTS, re-announces every 15 min while active.
+; DTMF command: *96# for on-demand alert readout.
+;
+; Extreme alerts play EAS-style attention tones (950/1400/1750 Hz).
+; Falls back to tone-only announcements if mod_tts is not loaded.
+; ----------------------------------------------------------------------------
+[nws]
+enabled = off                    ; on | off
+latitude = 34.9334               ; Location latitude (decimal degrees)
+longitude = -95.7697             ; Location longitude (decimal degrees)
+contact = your@email.com         ; Required by NWS API (User-Agent)
+poll_interval = 300000           ; API poll interval (ms, 5 min)
+reannounce_interval = 900000     ; Re-announce active alerts (ms, 15 min)
+min_severity = moderate          ; extreme | severe | moderate | minor
+auto_announce = on               ; Announce new alerts automatically
+attention_tones = on             ; EAS-style tones for extreme alerts
+
+; ----------------------------------------------------------------------------
+; OTP Authentication (RFC 6238 TOTP)
+;
+; Users with totp_secret can authenticate via DTMF: *68<6-digit code>#
+; Compatible with Google Authenticator, Authy, and other TOTP apps.
+; On success, grants elevated access for session_timeout duration.
+; Other modules can check kerchunk_core_get_otp_elevated(user_id).
+; ----------------------------------------------------------------------------
+[otp]
+session_timeout = 120000          ; Elevated session duration (ms, 2 min)
+time_skew = 1                    ; Accept +/- N time steps (each 30s)
+
+; ----------------------------------------------------------------------------
+; Webhook notifications
+;
+; Fires HTTP POST to a URL when specified events occur.
+; Background thread — never blocks the main loop or audio thread.
+; ----------------------------------------------------------------------------
+[webhook]
+; enabled = off
+; url = https://example.com/api/webhook
+; secret =                       ; Optional shared secret (sent as X-Webhook-Secret header)
+; events = cor_assert,cor_drop,caller_identified,announcement,recording_saved,shutdown
+;                                ; Comma-separated list of events to fire on:
+;                                ; cor_assert, cor_drop, ptt_assert, ptt_drop,
+;                                ; caller_identified, caller_cleared, announcement,
+;                                ; recording_saved, state_change, config_reload, shutdown
+; timeout_ms = 5000              ; HTTP request timeout (ms)
+; retry_count = 2                ; Retry failed requests (0 = no retry)
+
+; ----------------------------------------------------------------------------
+; Voice scrambler (frequency inversion)
+;
+; Self-inverse: same operation scrambles and descrambles.
+; Both sides must use the same code to communicate.
+; DTMF: *97# toggle, *970# off, *971#-*978# set code.
+; CW ID and emergency mode always transmit in the clear.
+; ----------------------------------------------------------------------------
+[scrambler]
+; enabled = off
+; code = 4                       ; 1-8 (carrier = 2600 + code*100 Hz)
+;                                ; 1=2700, 2=2800, 3=2900, 4=3000,
+;                                ; 5=3100, 6=3200, 7=3300, 8=3400 Hz
+; frequency = 3000               ; Optional: explicit carrier Hz (overrides code)
+
+; ----------------------------------------------------------------------------
+; SDR GMRS/FRS channel monitor
+;
+; Uses an RTL-SDR dongle (librtlsdr) to monitor a single GMRS/FRS channel.
+; Tunes to channel frequency at 240 kHz, FM demod + de-emphasis to 8 kHz audio.
+; CTCSS/DCS/DTMF decoding, FM squelch, and CSV activity logging.
+; Requires: sudo apt install librtlsdr-dev
+;
+; Channels 1-7: FRS/GMRS simplex (462 MHz)
+; Channels 8-14: FRS only (467 MHz)
+; Channels 15-22: GMRS repeater (462 MHz)
+; ----------------------------------------------------------------------------
+[sdr]
+; enabled = off
+; device_index = 0               ; RTL-SDR device index (0 = first)
+; channel = 1                    ; Channel number (1-22)
+; log_file = sdr_activity.csv    ; Activity log file
+
+; ============================================================================
+; User and group database
+;
+; Users are identified by DTMF ANI or DTMF login.
+; Groups provide TX tone settings for their members.
+; TX tone resolution: group -> repeater default.
+;
+; Users without a username field get one auto-derived from their name
+; (lowercase, spaces replaced with underscores).
+;
+; Access levels: 0 = none, 1 = basic, 2 = admin
+; ============================================================================
+
+[group.1]
+name = Family
+tx_ctcss = 1000                  ; TX CTCSS for this group (freq * 10)
+; tx_dcs = 23                    ; TX DCS code (alternative to CTCSS)
+
+[group.2]
+name = Friends
+tx_ctcss = 1318
+
+[user.1]
+username = bwest                 ; Lowercase, no spaces — used for PTT login
+name = Brian West                ; Display name
+email = brian@example.com        ; Contact email
+ani = 5551                       ; DTMF ANI sequence (auto-sent by radio)
+dtmf_login = 101                 ; DTMF login code (*101#)
+access = 2                       ; 2 = admin
+voicemail = 1                    ; 1 = voicemail enabled
+group = 1                        ; Group membership (TX tone from group)
+; totp_secret = JBSWY3DPEHPK3PXP ; Base32 TOTP secret (Google Authenticator)
+
+[user.2]
+username = alice
+name = Alice
+ani = 5552
+dtmf_login = 102
+access = 1
+voicemail = 1
+group = 2
+; totp_secret = HXDMVJECJJWSRB3H ; Base32 TOTP secret
