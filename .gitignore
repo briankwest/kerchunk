@@ -1,0 +1,25 @@
+# Build artifacts
+*.o
+*.so
+*.a
+kerchunkd
+kerchunk
+test_kerchunk
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Runtime
+*.pid
+*.log
+*.sock
+events.log
+kerchunk.conf
+stats.dat
+recordings/
+cdr/

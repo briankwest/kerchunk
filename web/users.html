@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.ico" type="image/x-icon">
+<title>Kerchunk Users &amp; Groups</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px; max-width: 1400px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+header .sub { color: var(--dim); font-size: 14px; }
+.badge { font-size: 12px; padding: 2px 10px; border-radius: 12px; font-weight: 600; }
+.badge-idle { background: var(--green); color: #000; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px;
+           margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border);
+           font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; }
+table td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table tr:last-child td { border-bottom: none; }
+table tr:hover td { background: rgba(88,166,255,0.04); }
+.btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
+       text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-sm { font-size: 10px; padding: 2px 8px; }
+.btn-danger { border-color: var(--red); color: var(--red); }
+.btn-danger:hover { background: rgba(248,81,73,0.15); }
+.btn-green { border-color: var(--green); color: var(--green); }
+.btn-green:hover { background: rgba(63,185,80,0.15); }
+.btn-accent { border-color: var(--accent); color: var(--accent); }
+.btn-accent:hover { background: rgba(88,166,255,0.15); }
+.two-col { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; }
+@media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+.actions { display: flex; gap: 4px; flex-wrap: nowrap; }
+
+/* Modal overlay */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+                 z-index: 1000; align-items: center; justify-content: center; }
+.modal-overlay.active { display: flex; }
+.modal { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+         padding: 20px; width: 440px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+.modal h3 { font-size: 15px; margin-bottom: 14px; }
+.form-group { margin-bottom: 10px; }
+.form-group label { display: block; font-size: 11px; color: var(--dim); text-transform: uppercase;
+                    letter-spacing: 0.5px; margin-bottom: 3px; }
+.form-group input, .form-group select { width: 100%; padding: 6px 8px; background: var(--bg);
+                                         border: 1px solid var(--border); border-radius: 5px;
+                                         color: var(--text); font-size: 13px; }
+.form-group input:focus, .form-group select:focus { outline: none; border-color: var(--accent); }
+.form-group input[type="checkbox"] { width: auto; margin-right: 6px; }
+.form-row { display: flex; gap: 10px; }
+.form-row .form-group { flex: 1; }
+.form-actions { display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end; }
+.empty-msg { color: var(--dim); font-size: 13px; padding: 12px 0; text-align: center; }
+
+/* QR modal */
+.qr-modal { text-align: center; }
+.qr-modal canvas { border: 8px solid #fff; border-radius: 4px; margin: 12px auto; display: block; }
+.qr-modal .secret-text { font-family: 'SF Mono', Monaco, monospace; font-size: 14px;
+                          background: var(--bg); padding: 8px 12px; border-radius: 5px;
+                          border: 1px solid var(--border); word-break: break-all;
+                          margin: 8px 0; display: inline-block; user-select: all; }
+.qr-modal p { font-size: 12px; color: var(--dim); margin: 6px 0; }
+
+/* Toast notification */
+.toast { position: fixed; bottom: 20px; right: 20px; background: var(--card); border: 1px solid var(--border);
+         border-radius: 5px; padding: 10px 16px; font-size: 13px; z-index: 2000;
+         transition: opacity 0.3s; opacity: 0; pointer-events: none; }
+.toast.show { opacity: 1; }
+.toast.error { border-color: var(--red); color: var(--red); }
+.toast.success { border-color: var(--green); color: var(--green); }
+
+.table-wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Users &amp; Groups</h1>
+  <span class="sub">Kerchunk Management</span>
+  <nav style="margin-left:auto;display:flex;gap:8px">
+    <a href="index.html" class="btn">Dashboard</a>
+    <a href="config.html" class="btn">Config</a>
+    <a href="coverage.html" class="btn">Coverage</a>
+  </nav>
+</header>
+
+<div class="two-col">
+  <!-- Groups -->
+  <div class="card">
+    <h2>Groups</h2>
+    <button class="btn btn-green btn-sm" onclick="openGroupModal()" style="margin-bottom:10px">+ Add Group</button>
+    <div class="table-wrap">
+      <table id="groups-table">
+        <thead><tr><th>ID</th><th>Name</th><th>TX CTCSS</th><th>TX DCS</th><th>Actions</th></tr></thead>
+        <tbody id="groups-body"><tr><td colspan="5" class="empty-msg">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Users -->
+  <div class="card">
+    <h2>Users</h2>
+    <button class="btn btn-green btn-sm" onclick="openUserModal()" style="margin-bottom:10px">+ Add User</button>
+    <div class="table-wrap">
+      <table id="users-table">
+        <thead><tr><th>ID</th><th>Name</th><th>DTMF</th><th>ANI</th><th>Access</th><th>Group</th><th>TOTP</th><th>Actions</th></tr></thead>
+        <tbody id="users-body"><tr><td colspan="8" class="empty-msg">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Group Modal -->
+<div class="modal-overlay" id="group-modal">
+  <div class="modal">
+    <h3 id="group-modal-title">Add Group</h3>
+    <input type="hidden" id="group-edit-id">
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="grp-name" placeholder="Group name">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>TX CTCSS</label>
+        <select id="grp-tx-ctcss"></select>
+      </div>
+      <div class="form-group">
+        <label>TX DCS</label>
+        <select id="grp-tx-dcs"></select>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeGroupModal()">Cancel</button>
+      <button class="btn btn-green" onclick="saveGroup()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- User Modal -->
+<div class="modal-overlay" id="user-modal">
+  <div class="modal">
+    <h3 id="user-modal-title">Add User</h3>
+    <input type="hidden" id="user-edit-id">
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="usr-name" placeholder="Callsign or name">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>DTMF Login</label>
+        <input type="text" id="usr-dtmf-login" placeholder="e.g. 1234">
+      </div>
+      <div class="form-group">
+        <label>ANI</label>
+        <input type="text" id="usr-ani" placeholder="e.g. 1234">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Access</label>
+        <select id="usr-access">
+          <option value="0">None</option>
+          <option value="1">Basic</option>
+          <option value="2">Admin</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Group</label>
+        <select id="usr-group"><option value="0">None</option></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>TX CTCSS</label>
+        <select id="usr-tx-ctcss"></select>
+      </div>
+      <div class="form-group">
+        <label>TX DCS</label>
+        <select id="usr-tx-dcs"></select>
+      </div>
+    </div>
+    <div class="form-group" style="display:flex;align-items:center;gap:6px">
+      <input type="checkbox" id="usr-totp-enabled" onchange="onTotpToggle()">
+      <label for="usr-totp-enabled" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">TOTP Authentication</label>
+    </div>
+    <input type="hidden" id="usr-totp-secret">
+    <div id="usr-totp-preview" style="display:none;text-align:center;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+      <canvas id="usr-totp-qr" width="260" height="260" style="margin:0 auto 8px;display:block;background:#fff;border-radius:4px"></canvas>
+      <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Scan with Google Authenticator</div>
+      <code id="usr-totp-display" style="font-size:12px;color:var(--accent);word-break:break-all"></code>
+    </div>
+    <div class="form-group" style="display:flex;align-items:center;gap:6px">
+      <input type="checkbox" id="usr-voicemail">
+      <label for="usr-voicemail" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">Voicemail enabled</label>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeUserModal()">Cancel</button>
+      <button class="btn btn-green" onclick="saveUser()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOTP QR Modal -->
+<div class="modal-overlay" id="totp-modal">
+  <div class="modal qr-modal">
+    <h3>TOTP Setup</h3>
+    <p>Scan this QR code with your authenticator app</p>
+    <canvas id="qr-canvas" width="260" height="260"></canvas>
+    <p>Or enter this secret manually:</p>
+    <div class="secret-text" id="totp-display-secret"></div>
+    <p style="margin-top:4px;font-size:11px;color:var(--dim)" id="totp-display-user"></p>
+    <div class="form-actions" style="justify-content:center;margin-top:12px">
+      <button class="btn btn-accent" onclick="generateNewSecret()">Generate New Secret</button>
+      <button class="btn" onclick="closeTotpModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// Auth
+// ============================================================
+function getToken() { return localStorage.getItem('kerchunk_token') || ''; }
+function setToken(t) { localStorage.setItem('kerchunk_token', t); }
+
+async function apiFetch(url, opts = {}) {
+  const token = getToken();
+  if (!opts.headers) opts.headers = {};
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  if (opts.body && typeof opts.body === 'object') {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(url, opts);
+  if (res.status === 401) {
+    const t = prompt('Authentication required. Enter bearer token:');
+    if (t) { setToken(t); return apiFetch(url, opts); }
+    throw new Error('Unauthorized');
+  }
+  return res;
+}
+
+// ============================================================
+// Toast
+// ============================================================
+let toastTimer = null;
+function showToast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + (type || '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+}
+
+// ============================================================
+// Standard CTCSS / DCS codes (EIA)
+// ============================================================
+const CTCSS_TONES = [
+  670,693,719,744,770,797,825,854,885,915,948,974,1000,1035,1072,1109,
+  1148,1188,1230,1273,1318,1365,1413,1462,1514,1567,1598,1622,1655,1679,
+  1713,1738,1773,1799,1835,1862,1899,1928,1966,1995,2035,2065,2107,2181,
+  2257,2291,2336,2418,2503,2541
+];
+const DCS_CODES = [
+  23,25,26,31,32,36,43,47,51,53,54,65,71,72,73,74,114,115,116,122,125,
+  131,132,134,143,145,152,155,156,162,165,172,174,205,212,223,225,226,
+  243,244,245,246,251,252,255,261,263,265,266,271,274,306,311,315,325,
+  331,332,343,346,351,356,364,365,371,411,412,413,423,431,432,445,446,
+  452,454,455,462,464,465,466,503,506,516,523,526,532,546,565,606,612,
+  624,627,631,632,654,662,664,703,712,723,731,732,734,743,754
+];
+
+function fmtCtcss(v) { return v ? (v/10).toFixed(1) + ' Hz' : 'None'; }
+function fmtDcs(v) { return v ? ('000'+v).slice(-3) : 'None'; }
+
+// Only exclude tones already assigned to OTHER groups (not this one).
+// User forms don't exclude anything — users can override to any tone.
+function takenCtcss(excludeType, excludeId) {
+  const taken = new Set();
+  if (excludeType === 'group') {
+    groups.forEach(g => { if (g.tx_ctcss && (g.id||g.ID) !== excludeId) taken.add(g.tx_ctcss); });
+  }
+  return taken;
+}
+
+function takenDcs(excludeType, excludeId) {
+  const taken = new Set();
+  if (excludeType === 'group') {
+    groups.forEach(g => { if (g.tx_dcs && (g.id||g.ID) !== excludeId) taken.add(g.tx_dcs); });
+  }
+  return taken;
+}
+
+function populateCtcssSelect(sel, currentVal, excludeType, excludeId) {
+  const taken = takenCtcss(excludeType, excludeId);
+  sel.innerHTML = '<option value="0">None</option>';
+  CTCSS_TONES.forEach(t => {
+    const inUse = taken.has(t) && t !== currentVal;
+    sel.innerHTML += '<option value="'+t+'"' +
+      (t === currentVal ? ' selected' : '') +
+      (inUse ? ' disabled style="color:var(--dim)"' : '') +
+      '>' + (t/10).toFixed(1) + ' Hz' + (inUse ? ' (in use)' : '') + '</option>';
+  });
+}
+
+function populateDcsSelect(sel, currentVal, excludeType, excludeId) {
+  const taken = takenDcs(excludeType, excludeId);
+  sel.innerHTML = '<option value="0">None</option>';
+  DCS_CODES.forEach(c => {
+    const inUse = taken.has(c) && c !== currentVal;
+    sel.innerHTML += '<option value="'+c+'"' +
+      (c === currentVal ? ' selected' : '') +
+      (inUse ? ' disabled style="color:var(--dim)"' : '') +
+      '>' + ('000'+c).slice(-3) + (inUse ? ' (in use)' : '') + '</option>';
+  });
+}
+
+// ============================================================
+// Data
+// ============================================================
+let groups = [];
+let users = [];
+let totpTargetUser = null;
+
+async function loadGroups() {
+  try {
+    const res = await apiFetch('/api/groups');
+    const data = await res.json();
+    groups = data.groups || data || [];
+    renderGroups();
+    populateGroupDropdown();
+  } catch (e) {
+    document.getElementById('groups-body').innerHTML =
+      '<tr><td colspan="5" class="empty-msg">Failed to load groups</td></tr>';
+  }
+}
+
+async function loadUsers() {
+  try {
+    const res = await apiFetch('/api/users');
+    const data = await res.json();
+    users = data.users || data || [];
+    renderUsers();
+  } catch (e) {
+    document.getElementById('users-body').innerHTML =
+      '<tr><td colspan="8" class="empty-msg">Failed to load users</td></tr>';
+  }
+}
+
+function renderGroups() {
+  const tbody = document.getElementById('groups-body');
+  if (!groups.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No groups defined</td></tr>';
+    return;
+  }
+  tbody.innerHTML = groups.map(g =>
+    '<tr>' +
+    '<td>' + (g.id || g.ID || '-') + '</td>' +
+    '<td>' + esc(g.name || '') + '</td>' +
+    '<td>' + fmtCtcss(g.tx_ctcss) + '</td>' +
+    '<td>' + fmtDcs(g.tx_dcs) + '</td>' +
+    '<td><div class="actions">' +
+      '<button class="btn btn-sm" onclick="editGroup(' + (g.id || g.ID) + ')">Edit</button>' +
+      '<button class="btn btn-sm btn-danger" onclick="deleteGroup(' + (g.id || g.ID) + ')">Delete</button>' +
+    '</div></td>' +
+    '</tr>'
+  ).join('');
+}
+
+function accessLabel(a) {
+  if (a === 2 || a === 'Admin') return 'Admin';
+  if (a === 1 || a === 'Basic') return 'Basic';
+  return 'None';
+}
+
+function groupName(gid) {
+  if (!gid) return '-';
+  const g = groups.find(x => (x.id || x.ID) === gid);
+  return g ? esc(g.name) : gid;
+}
+
+function renderUsers() {
+  const tbody = document.getElementById('users-body');
+  if (!users.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">No users defined</td></tr>';
+    return;
+  }
+  tbody.innerHTML = users.map(u => {
+    const uid = u.id || u.ID || 0;
+    const hasTotp = !!(u.totp_secret);
+    return '<tr>' +
+      '<td>' + uid + '</td>' +
+      '<td>' + esc(u.name || '') + '</td>' +
+      '<td>' + esc(u.dtmf_login || '-') + '</td>' +
+      '<td>' + esc(u.ani || '-') + '</td>' +
+      '<td>' + accessLabel(u.access) + '</td>' +
+      '<td>' + groupName(u.group) + '</td>' +
+      '<td>' + (hasTotp
+        ? '<button class="btn btn-sm btn-accent" onclick="showTotp(' + uid + ')">QR</button>'
+        : '<span style="color:var(--dim)">-</span>') + '</td>' +
+      '<td><div class="actions">' +
+        '<button class="btn btn-sm" onclick="editUser(' + uid + ')">Edit</button>' +
+        '<button class="btn btn-sm btn-danger" onclick="deleteUser(' + uid + ')">Delete</button>' +
+      '</div></td>' +
+      '</tr>';
+  }).join('');
+}
+
+function populateGroupDropdown() {
+  const sel = document.getElementById('usr-group');
+  sel.innerHTML = '<option value="0">None</option>' +
+    groups.map(g => '<option value="' + (g.id || g.ID) + '">' + esc(g.name) + '</option>').join('');
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ============================================================
+// Group Modal
+// ============================================================
+function openGroupModal(g) {
+  document.getElementById('group-modal-title').textContent = g ? 'Edit Group' : 'Add Group';
+  document.getElementById('group-edit-id').value = g ? (g.id || g.ID || '') : '';
+  document.getElementById('grp-name').value = g ? (g.name || '') : '';
+  const editId = g ? (g.id || g.ID || 0) : 0;
+  populateCtcssSelect(document.getElementById('grp-tx-ctcss'), g ? (g.tx_ctcss||0) : 0, 'group', editId);
+  populateDcsSelect(document.getElementById('grp-tx-dcs'), g ? (g.tx_dcs||0) : 0, 'group', editId);
+  document.getElementById('group-modal').classList.add('active');
+}
+
+function closeGroupModal() {
+  document.getElementById('group-modal').classList.remove('active');
+}
+
+function editGroup(id) {
+  const g = groups.find(x => (x.id || x.ID) === id);
+  if (g) openGroupModal(g);
+}
+
+async function saveGroup() {
+  const editId = document.getElementById('group-edit-id').value;
+  const body = {
+    name: document.getElementById('grp-name').value.trim(),
+    tx_ctcss: parseInt(document.getElementById('grp-tx-ctcss').value) || 0,
+    tx_dcs: parseInt(document.getElementById('grp-tx-dcs').value) || 0
+  };
+  if (!body.name) { showToast('Group name is required', 'error'); return; }
+
+  try {
+    if (editId) {
+      await apiFetch('/api/groups/' + editId, { method: 'PUT', body });
+      showToast('Group updated', 'success');
+    } else {
+      await apiFetch('/api/groups', { method: 'POST', body });
+      showToast('Group created', 'success');
+    }
+    closeGroupModal();
+    await new Promise(r => setTimeout(r, 300));
+    await loadGroups();
+    await loadUsers();
+  } catch (e) {
+    showToast('Failed to save group: ' + e.message, 'error');
+  }
+}
+
+async function deleteGroup(id) {
+  if (!confirm('Delete this group?')) return;
+  try {
+    await apiFetch('/api/groups/' + id, { method: 'DELETE' });
+    showToast('Group deleted', 'success');
+    await new Promise(r => setTimeout(r, 300));
+    await loadGroups();
+    await loadUsers();
+  } catch (e) {
+    showToast('Failed to delete group: ' + e.message, 'error');
+  }
+}
+
+// ============================================================
+// User Modal
+// ============================================================
+function openUserModal(u) {
+  document.getElementById('user-modal-title').textContent = u ? 'Edit User' : 'Add User';
+  document.getElementById('user-edit-id').value = u ? (u.id || u.ID || '') : '';
+  document.getElementById('usr-name').value = u ? (u.name || '') : '';
+  document.getElementById('usr-dtmf-login').value = u ? (u.dtmf_login || '') : '';
+  document.getElementById('usr-ani').value = u ? (u.ani || '') : '';
+  document.getElementById('usr-access').value = u ? (u.access || 0) : 0;
+  document.getElementById('usr-group').value = u ? (u.group || 0) : 0;
+  populateCtcssSelect(document.getElementById('usr-tx-ctcss'), u ? (u.tx_ctcss||0) : 0, 'user', 0);
+  populateDcsSelect(document.getElementById('usr-tx-dcs'), u ? (u.tx_dcs||0) : 0, 'user', 0);
+  document.getElementById('usr-totp-secret').value = u ? (u.totp_secret || '') : '';
+  document.getElementById('usr-totp-enabled').checked = !!(u && u.totp_secret);
+  document.getElementById('usr-voicemail').checked = u ? !!(u.voicemail) : false;
+  updateTotpPreview();
+  document.getElementById('user-modal').classList.add('active');
+}
+
+function closeUserModal() {
+  document.getElementById('user-modal').classList.remove('active');
+}
+
+function editUser(id) {
+  const u = users.find(x => (x.id || x.ID) === id);
+  if (u) openUserModal(u);
+}
+
+async function saveUser() {
+  const editId = document.getElementById('user-edit-id').value;
+  const body = {
+    name: document.getElementById('usr-name').value.trim(),
+    dtmf_login: document.getElementById('usr-dtmf-login').value.trim(),
+    ani: document.getElementById('usr-ani').value.trim(),
+    access: parseInt(document.getElementById('usr-access').value) || 0,
+    group: parseInt(document.getElementById('usr-group').value) || 0,
+    tx_ctcss: parseInt(document.getElementById('usr-tx-ctcss').value) || 0,
+    tx_dcs: parseInt(document.getElementById('usr-tx-dcs').value) || 0,
+    voicemail: document.getElementById('usr-voicemail').checked ? 1 : 0
+  };
+
+  /* Handle TOTP toggle */
+  const totpEnabled = document.getElementById('usr-totp-enabled').checked;
+  const existingSecret = document.getElementById('usr-totp-secret').value.trim();
+  let newTotpGenerated = false;
+
+  if (totpEnabled && !existingSecret) {
+    /* Generate a new secret */
+    const bytes = new Uint8Array(20);
+    crypto.getRandomValues(bytes);
+    body.totp_secret = base32Encode(bytes);
+    newTotpGenerated = true;
+  } else if (totpEnabled) {
+    body.totp_secret = existingSecret;
+  } else {
+    body.totp_secret = '';  /* Clear secret when disabled */
+  }
+
+  if (!body.name) { showToast('User name is required', 'error'); return; }
+
+  try {
+    let savedId = editId;
+    const savedSecret = body.totp_secret;
+    if (editId) {
+      const res = await apiFetch('/api/users/' + editId, { method: 'PUT', body });
+      await res.text();  /* consume response */
+      showToast('User updated', 'success');
+    } else {
+      const res = await apiFetch('/api/users', { method: 'POST', body });
+      const data = await res.json();
+      savedId = data.id;
+      showToast('User created', 'success');
+    }
+    closeUserModal();
+    await new Promise(r => setTimeout(r, 300));  /* wait for SIGHUP reload */
+    await loadGroups();
+    await loadUsers();
+
+    /* Show QR code immediately when TOTP was just enabled */
+    if (newTotpGenerated && savedId && savedSecret) {
+      /* Ensure the reloaded user has the secret (API now returns it) */
+      const u = users.find(x => (x.id || x.ID) == savedId);
+      if (u) {
+        if (!u.totp_secret) u.totp_secret = savedSecret;  /* fallback */
+        showTotp(u.id || u.ID);
+      }
+    }
+  } catch (e) {
+    showToast('Failed to save user: ' + e.message, 'error');
+  }
+}
+
+function onTotpToggle() {
+  const checked = document.getElementById('usr-totp-enabled').checked;
+  if (checked && !document.getElementById('usr-totp-secret').value.trim()) {
+    /* Generate secret immediately */
+    const bytes = new Uint8Array(20);
+    crypto.getRandomValues(bytes);
+    document.getElementById('usr-totp-secret').value = base32Encode(bytes);
+  } else if (!checked) {
+    document.getElementById('usr-totp-secret').value = '';
+  }
+  updateTotpPreview();
+}
+
+function updateTotpPreview() {
+  const secret = document.getElementById('usr-totp-secret').value.trim();
+  const preview = document.getElementById('usr-totp-preview');
+  if (!secret) {
+    preview.style.display = 'none';
+    return;
+  }
+  const name = document.getElementById('usr-name').value.trim() || 'User';
+  const uri = 'otpauth://totp/Kerchunk:' + encodeURIComponent(name) +
+    '?secret=' + encodeURIComponent(secret) + '&issuer=Kerchunk';
+  const canvas = document.getElementById('usr-totp-qr');
+  generateQR(canvas, uri);
+  document.getElementById('usr-totp-display').textContent = secret;
+  preview.style.display = 'block';
+}
+
+async function deleteUser(id) {
+  if (!confirm('Delete this user?')) return;
+  try {
+    await apiFetch('/api/users/' + id, { method: 'DELETE' });
+    showToast('User deleted', 'success');
+    await new Promise(r => setTimeout(r, 300));
+    await loadGroups();
+    await loadUsers();
+  } catch (e) {
+    showToast('Failed to delete user: ' + e.message, 'error');
+  }
+}
+
+// ============================================================
+// TOTP / QR Code
+// ============================================================
+function showTotp(uid) {
+  const u = users.find(x => (x.id || x.ID) === uid);
+  if (!u || !u.totp_secret) { showToast('No TOTP secret configured', 'error'); return; }
+  totpTargetUser = u;
+  const secret = u.totp_secret;
+  const name = u.name || 'User' + uid;
+  const uri = 'otpauth://totp/Kerchunk:' + encodeURIComponent(name) +
+    '?secret=' + encodeURIComponent(secret) + '&issuer=Kerchunk';
+
+  document.getElementById('totp-display-secret').textContent = secret;
+  document.getElementById('totp-display-user').textContent = 'Account: Kerchunk:' + name;
+
+  const canvas = document.getElementById('qr-canvas');
+  generateQR(canvas, uri);
+  document.getElementById('totp-modal').classList.add('active');
+}
+
+function closeTotpModal() {
+  document.getElementById('totp-modal').classList.remove('active');
+  totpTargetUser = null;
+}
+
+function generateNewSecret() {
+  const bytes = new Uint8Array(20);
+  crypto.getRandomValues(bytes);
+  const secret = base32Encode(bytes);
+  if (totpTargetUser) {
+    // Update the user's totp_secret via API
+    const uid = totpTargetUser.id || totpTargetUser.ID;
+    totpTargetUser.totp_secret = secret;
+    apiFetch('/api/users/' + uid, {
+      method: 'PUT',
+      body: { totp_secret: secret }
+    }).then(() => {
+      showToast('New TOTP secret saved', 'success');
+      loadUsers();
+    }).catch(e => showToast('Failed to save secret: ' + e.message, 'error'));
+    showTotp(uid);
+  }
+}
+
+// Base32 encoding (RFC 4648)
+function base32Encode(data) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0, value = 0, output = '';
+  for (let i = 0; i < data.length; i++) {
+    value = (value << 8) | data[i];
+    bits += 8;
+    while (bits >= 5) {
+      output += alphabet[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) {
+    output += alphabet[(value << (5 - bits)) & 31];
+  }
+  return output;
+}
+
+// ============================================================
+// QR Code Generator
+// Renders a QR code on a canvas element using the qrserver.com API.
+// ============================================================
+function generateQR(canvas, text) {
+  const ctx = canvas.getContext('2d');
+  const size = canvas.width;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, size, size);
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => ctx.drawImage(img, 0, 0, size, size);
+  img.onerror = () => {
+    ctx.fillStyle = '#666';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('QR generation failed', size / 2, size / 2);
+  };
+  img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size +
+            '&data=' + encodeURIComponent(text);
+}
+
+// ============================================================
+// Close modals on overlay click or Escape
+// ============================================================
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', e => {
+    if (e.target === el) el.classList.remove('active');
+  });
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.active').forEach(el => el.classList.remove('active'));
+  }
+});
+
+// ============================================================
+// Init
+// ============================================================
+loadGroups().then(() => loadUsers());
+</script>
+</body>
+</html>

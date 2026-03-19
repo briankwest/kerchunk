@@ -1,0 +1,4 @@
+[submodule "libplcode"]
+	path = libplcode
+	url = https://github.com/briankwest/libplcode.git
+	branch = main

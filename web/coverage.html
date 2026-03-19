@@ -1,0 +1,1874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="favicon.ico" type="image/x-icon">
+<title>Kerchunk Coverage Planner</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#sidebar {
+  width: 320px;
+  min-width: 320px;
+  background: var(--card);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+#sidebar h1 {
+  font-size: 16px;
+  padding: 14px 16px;
+  background: var(--card);
+  color: var(--text);
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+#sidebar h1 span { font-size: 20px; }
+
+.nav-bar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+.nav-bar a {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.nav-bar a:hover { border-color: var(--accent); color: var(--accent); }
+.nav-bar a.active { border-color: var(--accent); color: var(--accent); }
+
+.section {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.section h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--dim);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.field { margin-bottom: 8px; }
+
+.field label {
+  display: block;
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: 2px;
+  font-weight: 500;
+}
+
+.field input, .field select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.field input:focus, .field select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(88,166,255,0.15);
+}
+
+.field input:disabled, .field select:disabled {
+  background: var(--border);
+  color: var(--dim);
+}
+
+.field-row { display: flex; gap: 8px; }
+.field-row .field { flex: 1; }
+
+button {
+  padding: 7px 14px;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #000;
+  border: 1px solid var(--accent);
+}
+.btn-primary:hover { background: #79b8ff; }
+.btn-primary:disabled { background: var(--border); color: var(--dim); border-color: var(--border); cursor: not-allowed; }
+
+.btn-secondary {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-row { display: flex; gap: 8px; margin-top: 4px; }
+.btn-row button:first-child { flex: 2; }
+
+.info-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.info-grid .label { color: var(--dim); }
+.info-grid .value { color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+
+#map-container { flex: 1; position: relative; }
+#map { width: 100%; height: 100%; }
+
+#init-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  font-size: 15px;
+  gap: 8px;
+}
+
+#init-overlay span { font-size: 48px; opacity: 0.3; }
+
+#status {
+  font-size: 12px;
+  color: var(--dim);
+  margin-top: 8px;
+  min-height: 16px;
+  line-height: 1.4;
+}
+
+#status.error { color: var(--red); }
+
+.progress-bar {
+  width: 100%;
+  height: 5px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 8px;
+  display: none;
+}
+
+.progress-bar .fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #79b8ff);
+  transition: width 0.2s ease;
+  width: 0%;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 3px;
+  color: var(--dim);
+}
+
+.legend-swatch {
+  width: 18px;
+  height: 11px;
+  border-radius: 2px;
+  margin-right: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.legend-item {
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: opacity 0.15s;
+}
+
+.legend-item:hover { background: rgba(255,255,255,0.04); }
+
+.legend-item.hidden-band {
+  opacity: 0.35;
+  text-decoration: line-through;
+}
+
+.legend-item.hidden-band .legend-swatch {
+  background: var(--border) !important;
+}
+
+.help-text {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+/* Mobile Unit & Link Analysis */
+.link-panel {
+  margin-top: 10px;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.link-direction { margin-bottom: 8px; }
+.link-direction:last-of-type { margin-bottom: 0; }
+
+.dir-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 3px;
+}
+
+.link-signal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.signal-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.signal-bar .fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+
+.signal-value {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 72px;
+  text-align: right;
+}
+
+.signal-good { color: var(--green); }
+.signal-fair { color: var(--yellow); }
+.signal-weak { color: #ff6a33; }
+.signal-none { color: var(--red); }
+
+.link-verdict {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.verdict-good { background: rgba(63,185,80,0.15); color: var(--green); }
+.verdict-fair { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.verdict-weak { background: rgba(255,106,51,0.15); color: #ff6a33; }
+.verdict-none { background: rgba(248,81,73,0.15); color: var(--red); }
+
+#profileCanvas {
+  width: 100%;
+  height: 130px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.mode-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  background: var(--accent);
+  color: #000;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  animation: pulse-badge 1.5s infinite;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Preset buttons */
+.preset-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.btn-preset {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 6px;
+  background: var(--bg);
+  color: var(--dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.btn-preset:hover { background: var(--border); border-color: var(--accent); color: var(--accent); }
+
+.channel-info {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>Kerchunk Coverage Planner</h1>
+
+  <div class="nav-bar">
+    <a href="index.html">Dashboard</a>
+    <a href="users.html">Users</a>
+    <a href="config.html">Config</a>
+    <a href="coverage.html" class="active">Coverage</a>
+  </div>
+
+  <input type="hidden" id="apiKey">
+  <input type="hidden" id="address">
+
+  <div class="section">
+    <h2>Transmitter Location</h2>
+    <div class="info-grid">
+      <span class="label">Address</span><span class="value" id="dispAddr">&mdash;</span>
+      <span class="label">Latitude</span><span class="value" id="dispLat">&mdash;</span>
+      <span class="label">Longitude</span><span class="value" id="dispLng">&mdash;</span>
+      <span class="label">Elev (ASL)</span><span class="value" id="dispElev">&mdash;</span>
+    </div>
+    <div class="help-text" id="locationHelp" style="display:none">
+      Drag marker to reposition. Click map to place.
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Presets</h2>
+    <div style="font-size:11px;color:var(--dim);margin-bottom:6px;font-weight:500">TX Power</div>
+    <div class="preset-row">
+      <button class="btn-preset" id="preset5">5W</button>
+      <button class="btn-preset" id="preset10">10W</button>
+      <button class="btn-preset" id="preset15">15W</button>
+      <button class="btn-preset" id="preset20">20W</button>
+      <button class="btn-preset" id="preset25">25W</button>
+      <button class="btn-preset" id="preset50">50W</button>
+    </div>
+    <div style="font-size:11px;color:var(--dim);margin-bottom:6px;margin-top:8px;font-weight:500">Mobile Unit</div>
+    <div class="preset-row">
+      <button class="btn-preset" id="presetMobHT">HT (5W)</button>
+      <button class="btn-preset" id="presetMobMobile">Mobile (15W)</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>RF Parameters</h2>
+    <div class="field">
+      <label>GMRS Channel</label>
+      <select id="gmrsChannel" disabled>
+        <option value="15">Ch 15R &mdash; 462.5500 / 467.5500 MHz</option>
+        <option value="16">Ch 16R &mdash; 462.5750 / 467.5750 MHz</option>
+        <option value="17">Ch 17R &mdash; 462.6000 / 467.6000 MHz</option>
+        <option value="18">Ch 18R &mdash; 462.6250 / 467.6250 MHz</option>
+        <option value="19" selected>Ch 19R &mdash; 462.6500 / 467.6500 MHz</option>
+        <option value="20">Ch 20R &mdash; 462.6750 / 467.6750 MHz</option>
+        <option value="21">Ch 21R &mdash; 462.7000 / 467.7000 MHz</option>
+        <option value="22">Ch 22R &mdash; 462.7250 / 467.7250 MHz</option>
+      </select>
+      <div class="channel-info" id="channelInfo">Output: 462.6500 MHz / Input: 467.6500 MHz</div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>TX Power (W)</label>
+        <input type="number" id="txPower" value="50" min="1" max="50" disabled>
+      </div>
+      <div class="field">
+        <label>Ant. Gain (dBi)</label>
+        <input type="number" id="txGain" value="8.15" min="0" max="15" step="0.5" disabled>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Ant. Height (ft AGL)</label>
+        <input type="number" id="txHeight" value="30" min="1" max="2000" disabled>
+      </div>
+      <div class="field">
+        <label>RX Sens (dBm)</label>
+        <input type="number" id="rxSens" value="-116" min="-130" max="-60" disabled>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>System Loss (dB)</label>
+        <input type="number" id="systemLoss" value="2" min="0" max="20" step="0.5" disabled>
+      </div>
+      <div class="field">
+        <label>Environment</label>
+        <select id="environment" disabled>
+          <option value="open">Open / Flat Rural</option>
+          <option value="suburban" selected>Suburban / Rolling Hills</option>
+          <option value="forest">Forest / Wooded</option>
+          <option value="urban">Urban / Dense</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Coverage Calculation</h2>
+    <div class="field-row">
+      <div class="field">
+        <label>Max Range (mi)</label>
+        <input type="number" id="maxRange" value="15" min="1" max="50" disabled>
+      </div>
+      <div class="field">
+        <label>Resolution</label>
+        <select id="resolution" disabled>
+          <option value="low">Low (72 rays)</option>
+          <option value="medium" selected>Medium (180 rays)</option>
+          <option value="high">High (360 rays)</option>
+          <option value="ultra">Ultra (720 rays)</option>
+        </select>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary" id="btnCalc" disabled>Calculate Coverage</button>
+      <button class="btn-secondary" id="btnClear" disabled>Clear</button>
+      <button class="btn-secondary" id="btnExport" disabled>Export Image</button>
+    </div>
+    <div class="progress-bar" id="progress"><div class="fill" id="progressFill"></div></div>
+    <div id="status"></div>
+  </div>
+
+  <div class="section">
+    <h2>Signal Legend</h2>
+    <div class="legend-item" data-band="0"><div class="legend-swatch" style="background:rgba(0,140,0,0.7)"></div>Excellent (&gt; &minus;70 dBm)</div>
+    <div class="legend-item" data-band="1"><div class="legend-swatch" style="background:rgba(255,200,0,0.7)"></div>Good (&minus;70 to &minus;85 dBm)</div>
+    <div class="legend-item" data-band="2"><div class="legend-swatch" style="background:rgba(255,100,0,0.7)"></div>Fair (&minus;85 to &minus;100 dBm)</div>
+    <div class="legend-item" data-band="3"><div class="legend-swatch" style="background:rgba(220,0,0,0.7)"></div>Weak (&minus;100 to &minus;110 dBm)</div>
+    <div class="legend-item" data-band="4"><div class="legend-swatch" style="background:rgba(140,0,80,0.7)"></div>Marginal (&minus;110 to &minus;116 dBm)</div>
+    <div class="help-text" style="margin-top:4px">Click a level to hide it and all below</div>
+  </div>
+
+  <div class="section">
+    <h2>Mobile Unit (5W Handheld)</h2>
+    <div class="field-row">
+      <div class="field">
+        <label>TX Power (W)</label>
+        <input type="number" id="mobPower" value="5" min="0.5" max="50" step="0.5" disabled>
+      </div>
+      <div class="field">
+        <label>Ant. Gain (dBi)</label>
+        <input type="number" id="mobGain" value="2.15" min="-3" max="10" step="0.5" disabled>
+      </div>
+    </div>
+    <div class="field">
+      <label>Height (ft AGL)</label>
+      <input type="number" id="mobHeight" value="5" min="1" max="100" disabled>
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary" id="btnDropMob" disabled>Drop Mobile on Map</button>
+      <button class="btn-secondary" id="btnRemoveMob" disabled>Remove</button>
+    </div>
+    <div id="mobMode" style="display:none;margin-top:8px;text-align:center">
+      <span class="mode-badge">Click map to place mobile</span>
+    </div>
+    <div class="info-grid" id="mobInfo" style="display:none">
+      <span class="label">Latitude</span><span class="value" id="mobDispLat">&mdash;</span>
+      <span class="label">Longitude</span><span class="value" id="mobDispLng">&mdash;</span>
+      <span class="label">Elev (ASL)</span><span class="value" id="mobDispElev">&mdash;</span>
+      <span class="label">Distance</span><span class="value" id="mobDispDist">&mdash;</span>
+    </div>
+    <div id="linkResults" style="display:none">
+      <div class="link-panel">
+        <div class="link-direction">
+          <div class="dir-label" id="dlLabel">&#x2193; Downlink (Repeater &rarr; Mobile)</div>
+          <div class="link-signal">
+            <div class="signal-bar"><div class="fill" id="dlBar"></div></div>
+            <span class="signal-value" id="dlSignal">&mdash;</span>
+          </div>
+        </div>
+        <div class="link-direction">
+          <div class="dir-label" id="ulLabel">&#x2191; Uplink (Mobile &rarr; Repeater)</div>
+          <div class="link-signal">
+            <div class="signal-bar"><div class="fill" id="ulBar"></div></div>
+            <span class="signal-value" id="ulSignal">&mdash;</span>
+          </div>
+        </div>
+        <div class="link-verdict" id="linkVerdict"></div>
+      </div>
+      <canvas id="profileCanvas"></canvas>
+      <div class="help-text" style="margin-top:4px">
+        Red line = LOS &nbsp; Blue dashed = 60% Fresnel zone
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="map-container">
+  <div id="map"></div>
+  <div id="init-overlay">
+    <span>&#x1F5FA;</span>
+    Loading map...
+  </div>
+</div>
+
+<script>
+// ============================================================
+// GMRS Repeater Channel Table
+// ============================================================
+const GMRS_CHANNELS = {
+  15: { output: 462.5500, input: 467.5500 },
+  16: { output: 462.5750, input: 467.5750 },
+  17: { output: 462.6000, input: 467.6000 },
+  18: { output: 462.6250, input: 467.6250 },
+  19: { output: 462.6500, input: 467.6500 },
+  20: { output: 462.6750, input: 467.6750 },
+  21: { output: 462.7000, input: 467.7000 },
+  22: { output: 462.7250, input: 467.7250 }
+};
+
+// ============================================================
+// Constants
+// ============================================================
+const SPEED_OF_LIGHT   = 299792458;
+const EARTH_RADIUS_M   = 6371000;
+const K_FACTOR         = 4 / 3;
+const EFF_EARTH_RADIUS = EARTH_RADIUS_M * K_FACTOR;
+const FT_TO_M          = 0.3048;
+const MI_TO_M          = 1609.344;
+const M_TO_FT          = 3.28084;
+const RX_HEIGHT_M      = 1.5;   // handheld at chest height
+
+function getSelectedChannel() {
+  const ch = parseInt($('gmrsChannel').value);
+  return GMRS_CHANNELS[ch];
+}
+
+function getOutputFreq() { return getSelectedChannel().output; }
+function getInputFreq()  { return getSelectedChannel().input; }
+function wavelengthForFreq(freqMHz) { return SPEED_OF_LIGHT / (freqMHz * 1e6); }
+
+const RESOLUTIONS = {
+  low:    { radials: 72,   samples: 64  },
+  medium: { radials: 180,  samples: 128 },
+  high:   { radials: 360,  samples: 192 },
+  ultra:  { radials: 720,  samples: 256 }
+};
+
+const SIGNAL_BANDS = [
+  { min: -70,  rgb: [0, 140, 0],   alpha: 0.30 },
+  { min: -85,  rgb: [255, 200, 0], alpha: 0.35 },
+  { min: -100, rgb: [255, 100, 0], alpha: 0.40 },
+  { min: -110, rgb: [220, 0, 0],   alpha: 0.45 },
+  { min: -116, rgb: [140, 0, 80],  alpha: 0.50 }
+];
+
+// ============================================================
+// Application State
+// ============================================================
+let gMap           = null;
+let gMarker        = null;
+let gOverlay       = null;
+let gElevator      = null;
+let gGeocoder      = null;
+let gCoverageData  = null;
+let gInfoWindow    = null;
+let gCalculating   = false;
+let gMobileMarker  = null;
+let gPathLine      = null;
+let gPlacingMobile = false;
+let gVisibleBands  = SIGNAL_BANDS.length;
+let gLastRender    = null;
+
+// ============================================================
+// DOM References
+// ============================================================
+const $ = id => document.getElementById(id);
+
+// ============================================================
+// Channel Selector
+// ============================================================
+function updateChannelInfo() {
+  const ch = getSelectedChannel();
+  $('channelInfo').textContent =
+    'Output: ' + ch.output.toFixed(4) + ' MHz / Input: ' + ch.input.toFixed(4) + ' MHz';
+}
+
+// ============================================================
+// Preset Buttons
+// ============================================================
+function applyPresetTX(power, gain, height, loss) {
+  $('txPower').value     = power;
+  $('txGain').value      = gain;
+  $('txHeight').value    = height;
+  $('systemLoss').value  = loss;
+  saveSettings();
+}
+
+function applyPresetMob(power, gain, height) {
+  $('mobPower').value   = power;
+  $('mobGain').value    = gain;
+  $('mobHeight').value  = height;
+  saveSettings();
+}
+
+// ============================================================
+// Google Maps Bootstrap
+// ============================================================
+async function loadMap() {
+  const key = $('apiKey').value.trim();
+  if (!key) return setStatus('No Google Maps API key. Add google_maps_api_key to kerchunk.conf.', true);
+
+  setStatus('Loading Google Maps\u2026');
+
+  try {
+    // Bootstrap the Google Maps JS API loader (async best-practice)
+    (g=>{var h,a,k,p="The Google Maps JavaScript API",c="google",l="importLibrary",q="__ib__",m=document,b=window;b=b[c]||(b[c]={});var d=b.maps||(b.maps={}),r=new Set,e=new URLSearchParams,u=()=>h||(h=new Promise(async(f,n)=>{await (a=m.createElement("script"));e.set("libraries",[...r]+"");for(k in g)e.set(k.replace(/[A-Z]/g,t=>"_"+t[0].toLowerCase()),g[k]);e.set("callback",c+".maps."+q);a.src=`https://maps.googleapis.com/maps/api/js?`+e;d[q]=f;a.onerror=()=>h=n(Error(p+" could not load."));a.nonce=m.querySelector("script[nonce]")?.nonce||"";m.head.append(a)}));d[l]?console.warn(p+" only loads once. Ignoring:",g):d[l]=(f,...n)=>r.add(f)&&u().then(()=>d[l](f,...n))})({
+      key: key, v: "weekly"
+    });
+
+    // Load required libraries
+    await google.maps.importLibrary("maps");
+    await google.maps.importLibrary("geometry");
+
+    initMap();
+  } catch (e) {
+    setStatus('Failed to load Google Maps. Check your API key and enabled APIs.', true);
+  }
+}
+
+function initMap() {
+  gMap = new google.maps.Map($('map'), {
+    center:  { lat: 39.8, lng: -98.5 },
+    zoom:    5,
+    mapTypeId: 'terrain',
+    mapTypeControl: true,
+    mapTypeControlOptions: {
+      mapTypeIds: ['roadmap', 'satellite', 'terrain', 'hybrid'],
+      position:   google.maps.ControlPosition.TOP_RIGHT
+    },
+    fullscreenControl: true,
+    streetViewControl: false,
+    gestureHandling: 'greedy',
+    styles: [
+      { featureType: 'poi',     elementType: 'all', stylers: [{ visibility: 'off' }] },
+      { featureType: 'transit', elementType: 'all', stylers: [{ visibility: 'off' }] }
+    ]
+  });
+
+  gElevator  = new google.maps.ElevationService();
+  gGeocoder  = new google.maps.Geocoder();
+  gInfoWindow = new google.maps.InfoWindow();
+
+  gMap.addListener('click', e => {
+    if (gCalculating) return;
+    if (gPlacingMobile) {
+      placeMobile(e.latLng);
+    } else if (gCoverageData) {
+      showSignalInfo(e.latLng);
+    } else {
+      placeMarker(e.latLng);
+    }
+  });
+
+  $('init-overlay').style.display = 'none';
+  enableInputs(true);
+  setStatus('Click the map to place the transmitter, or wait for auto-geocode.');
+}
+
+// ============================================================
+// Geocoding
+// ============================================================
+function geocode() {
+  const addr = $('address').value.trim();
+  if (!addr) return setStatus('Enter an address.', true);
+  setStatus('Geocoding\u2026');
+
+  gGeocoder.geocode({ address: addr }, (results, status) => {
+    if (status === 'OK' && results[0]) {
+      const loc = results[0].geometry.location;
+      placeMarker(loc);
+      gMap.setCenter(loc);
+      gMap.setZoom(12);
+      $('dispAddr').textContent = results[0].formatted_address;
+      setStatus('Ready to calculate coverage.');
+    } else {
+      setStatus('Geocode failed: ' + status, true);
+    }
+  });
+}
+
+// ============================================================
+// Transmitter Marker
+// ============================================================
+function placeMarker(latLng) {
+  if (gMarker) {
+    gMarker.setPosition(latLng);
+  } else {
+    gMarker = new google.maps.Marker({
+      position:  latLng,
+      map:       gMap,
+      draggable: true,
+      title:     'Transmitter \u2014 drag to move',
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE, scale: 10,
+        fillColor: '#e74c3c', fillOpacity: 1,
+        strokeColor: '#fff', strokeWeight: 2
+      },
+      zIndex: 999
+    });
+
+    gMarker.addListener('dragend', () => {
+      refreshMarkerInfo();
+      if (gOverlay) setStatus('Transmitter moved. Recalculate to update coverage.');
+      if (gMobileMarker) analyzeMobileLink();
+    });
+
+    $('locationHelp').style.display = 'block';
+  }
+
+  refreshMarkerInfo();
+  $('btnCalc').disabled = false;
+}
+
+async function refreshMarkerInfo() {
+  const pos = gMarker.getPosition();
+  $('dispLat').textContent = pos.lat().toFixed(6);
+  $('dispLng').textContent = pos.lng().toFixed(6);
+
+  try {
+    const elev = await elevationAt(pos);
+    $('dispElev').textContent = `${(elev * M_TO_FT).toFixed(0)} ft`;
+  } catch (_) {
+    $('dispElev').textContent = 'N/A';
+  }
+}
+
+function elevationAt(latLng) {
+  return new Promise((resolve, reject) => {
+    gElevator.getElevationForLocations(
+      { locations: [latLng] },
+      (res, st) => (st === 'OK' && res[0]) ? resolve(res[0].elevation) : reject(st)
+    );
+  });
+}
+
+// ============================================================
+// Click-for-Signal-Info
+// ============================================================
+function showSignalInfo(latLng) {
+  if (!gCoverageData || !gMarker) return;
+
+  const txPos   = gMarker.getPosition();
+  const distM   = google.maps.geometry.spherical.computeDistanceBetween(txPos, latLng);
+  const heading = google.maps.geometry.spherical.computeHeading(txPos, latLng);
+  const bearing = (heading + 360) % 360;
+
+  // Find closest radial
+  let bestRadial = null, bestDelta = 999;
+  for (const r of gCoverageData) {
+    let d = Math.abs(bearing - r.bearing);
+    if (d > 180) d = 360 - d;
+    if (d < bestDelta) { bestDelta = d; bestRadial = r; }
+  }
+  if (!bestRadial) return;
+
+  // Find closest distance sample
+  let bestSample = null, bestDD = Infinity;
+  for (const s of bestRadial.samples) {
+    const dd = Math.abs(distM - s.distance);
+    if (dd < bestDD) { bestDD = dd; bestSample = s; }
+  }
+  if (!bestSample) return;
+
+  const distMi  = (bestSample.distance / MI_TO_M).toFixed(1);
+  const sigStr  = bestSample.signal.toFixed(1);
+  const elevFt  = (bestSample.elevation * M_TO_FT).toFixed(0);
+  const quality = signalQuality(bestSample.signal);
+
+  gInfoWindow.setContent(
+    `<div style="font:13px/1.5 -apple-system,sans-serif;min-width:140px">` +
+    `<b>${quality}</b><br>` +
+    `Signal: ${sigStr} dBm<br>` +
+    `Distance: ${distMi} mi<br>` +
+    `Elevation: ${elevFt} ft ASL` +
+    `</div>`
+  );
+  gInfoWindow.setPosition(latLng);
+  gInfoWindow.open(gMap);
+}
+
+function signalQuality(dbm) {
+  if (dbm >= -70)  return 'Excellent';
+  if (dbm >= -85)  return 'Good';
+  if (dbm >= -100) return 'Fair';
+  if (dbm >= -110) return 'Weak';
+  if (dbm >= -116) return 'Marginal';
+  return 'No coverage';
+}
+
+// ============================================================
+// Mobile Unit
+// ============================================================
+function startMobilePlacement() {
+  if (!gMarker) return setStatus('Place the repeater first.', true);
+  gPlacingMobile = true;
+  $('mobMode').style.display = 'block';
+  $('btnDropMob').disabled = true;
+  gMap.setOptions({ draggableCursor: 'crosshair' });
+  setStatus('Click on the map to place the mobile unit.');
+}
+
+function placeMobile(latLng) {
+  gPlacingMobile = false;
+  $('mobMode').style.display = 'none';
+  $('btnDropMob').disabled = false;
+  $('btnRemoveMob').disabled = false;
+  gMap.setOptions({ draggableCursor: null });
+
+  if (gMobileMarker) {
+    gMobileMarker.setPosition(latLng);
+  } else {
+    gMobileMarker = new google.maps.Marker({
+      position: latLng,
+      map: gMap,
+      draggable: true,
+      title: 'Mobile Unit \u2014 drag to move',
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE, scale: 8,
+        fillColor: '#3498db', fillOpacity: 1,
+        strokeColor: '#fff', strokeWeight: 2
+      },
+      zIndex: 998
+    });
+    gMobileMarker.addListener('dragend', () => analyzeMobileLink());
+  }
+
+  $('mobInfo').style.display = 'grid';
+  analyzeMobileLink();
+}
+
+function removeMobile() {
+  if (gMobileMarker) { gMobileMarker.setMap(null); gMobileMarker = null; }
+  if (gPathLine) { gPathLine.setMap(null); gPathLine = null; }
+  $('mobInfo').style.display = 'none';
+  $('linkResults').style.display = 'none';
+  $('btnRemoveMob').disabled = true;
+  gPlacingMobile = false;
+  $('mobMode').style.display = 'none';
+  gMap.setOptions({ draggableCursor: null });
+}
+
+async function analyzeMobileLink() {
+  if (!gMarker || !gMobileMarker) return;
+
+  const rptPos = gMarker.getPosition();
+  const mobPos = gMobileMarker.getPosition();
+
+  // Update mobile info display
+  $('mobDispLat').textContent = mobPos.lat().toFixed(6);
+  $('mobDispLng').textContent = mobPos.lng().toFixed(6);
+
+  const distM = google.maps.geometry.spherical.computeDistanceBetween(rptPos, mobPos);
+  const distMi = distM / MI_TO_M;
+  $('mobDispDist').textContent = distMi.toFixed(2) + ' mi';
+
+  // Draw/update path line
+  if (gPathLine) {
+    gPathLine.setPath([rptPos, mobPos]);
+  } else {
+    gPathLine = new google.maps.Polyline({
+      path: [rptPos, mobPos],
+      strokeColor: '#3498db',
+      strokeOpacity: 0.7,
+      strokeWeight: 2,
+      geodesic: true,
+      map: gMap
+    });
+  }
+
+  try {
+    // Fetch elevation profile between repeater and mobile (128 samples)
+    const elevations = await fetchElevationPath(rptPos, mobPos, 128, 3);
+
+    const rptGroundElev = elevations[0].elevation;
+    const mobGroundElev = elevations[elevations.length - 1].elevation;
+    $('mobDispElev').textContent =
+      `${(mobGroundElev * M_TO_FT).toFixed(0)} ft`;
+
+    // Read parameters
+    const rptPowerW    = parseFloat($('txPower').value);
+    const rptGainDBi   = parseFloat($('txGain').value);
+    const rptHeightM   = parseFloat($('txHeight').value) * FT_TO_M;
+    const rxSensDBm    = parseFloat($('rxSens').value);
+    const sysLoss      = parseFloat($('systemLoss').value);
+    const mobPowerW    = parseFloat($('mobPower').value);
+    const mobGainDBi   = parseFloat($('mobGain').value);
+    const mobHeightM   = parseFloat($('mobHeight').value) * FT_TO_M;
+
+    const rptPowerDBm = 10 * Math.log10(rptPowerW * 1000);
+    const mobPowerDBm = 10 * Math.log10(mobPowerW * 1000);
+
+    const rptAntennaElev = rptGroundElev + rptHeightM;
+    const mobAntennaElev = mobGroundElev + mobHeightM;
+
+    const outputFreq = getOutputFreq();
+    const inputFreq  = getInputFreq();
+
+    // Compute path loss using terrain profile + Hata model
+    const plDown = computePathLoss(elevations, rptAntennaElev, mobAntennaElev, rptHeightM, mobHeightM, distM, outputFreq);
+    const plUp   = computePathLoss(elevations, rptAntennaElev, mobAntennaElev, rptHeightM, mobHeightM, distM, inputFreq);
+
+    // Downlink: repeater TX -> mobile RX  (RPT power + RPT gain + MOB gain - sysLoss - loss)
+    const downlinkDBm = rptPowerDBm + rptGainDBi + mobGainDBi - sysLoss - plDown.pathLoss;
+    // Uplink:   mobile TX -> repeater RX  (MOB power + MOB gain + RPT gain - sysLoss - loss)
+    const uplinkDBm   = mobPowerDBm + mobGainDBi + rptGainDBi - sysLoss - plUp.pathLoss;
+
+    // Update direction labels with frequencies
+    $('dlLabel').innerHTML = '&#x2193; Downlink (Repeater &#x2192; Mobile) (' + outputFreq.toFixed(4) + ' MHz)';
+    $('ulLabel').innerHTML = '&#x2191; Uplink (Mobile &#x2192; Repeater) (' + inputFreq.toFixed(4) + ' MHz)';
+
+    displayLinkResults(downlinkDBm, uplinkDBm, rxSensDBm);
+    drawElevationProfile(elevations, rptAntennaElev, mobAntennaElev, distM, outputFreq);
+
+    // Color path line by link quality
+    const limiting = Math.min(downlinkDBm, uplinkDBm);
+    gPathLine.setOptions({ strokeColor: linkColor(limiting) });
+
+  } catch (e) {
+    console.error('Link analysis error:', e);
+    $('mobDispElev').textContent = 'N/A';
+    setStatus('Link analysis error: ' + e.message, true);
+  }
+}
+
+function computePathLoss(elevations, txAntennaElev, rxAntennaElev, txHeightM, rxHeightM, distM, freqMHz) {
+  const n = elevations.length;
+  const distKm = distM / 1000;
+  const env = $('environment').value;
+  const wl = wavelengthForFreq(freqMHz);
+  let worstV = -Infinity;
+
+  for (let j = 1; j < n - 1; j++) {
+    const d1 = (j / (n - 1)) * distM;
+    const d2 = distM - d1;
+    if (d1 <= 0 || d2 <= 0) continue;
+
+    const losH    = txAntennaElev + (d1 / distM) * (rxAntennaElev - txAntennaElev);
+    const bulge   = (d1 * d2) / (2 * EFF_EARTH_RADIUS);
+    const terrainH = elevations[j].elevation + bulge;
+    const clearance = losH - terrainH;
+    const f1 = Math.sqrt(wl * d1 * d2 / (d1 + d2));
+    const v  = -clearance * Math.sqrt(2) / f1;
+    if (v > worstV) worstV = v;
+  }
+
+  let pathLoss = basePathLoss(distKm, txHeightM, rxHeightM, env, freqMHz);
+  if (worstV > 0) {
+    const loss = 6.9 + 20 * Math.log10(
+      Math.sqrt((worstV - 0.1) * (worstV - 0.1) + 1) + worstV - 0.1
+    );
+    pathLoss += Math.max(0, loss);
+  }
+
+  return { pathLoss, worstV };
+}
+
+// ============================================================
+// Link Results Display
+// ============================================================
+function displayLinkResults(downlinkDBm, uplinkDBm, rxSensDBm) {
+  $('linkResults').style.display = 'block';
+
+  // Signal bar scale: -116 dBm = 0%, -66 dBm = 100%
+  const barPct = dbm => Math.max(0, Math.min(100, (dbm + 116) / 50 * 100));
+
+  $('dlBar').style.width      = barPct(downlinkDBm) + '%';
+  $('dlBar').style.background = linkColor(downlinkDBm);
+  $('dlSignal').textContent   = downlinkDBm.toFixed(1) + ' dBm';
+  $('dlSignal').className     = 'signal-value ' + signalCssClass(downlinkDBm);
+
+  $('ulBar').style.width      = barPct(uplinkDBm) + '%';
+  $('ulBar').style.background = linkColor(uplinkDBm);
+  $('ulSignal').textContent   = uplinkDBm.toFixed(1) + ' dBm';
+  $('ulSignal').className     = 'signal-value ' + signalCssClass(uplinkDBm);
+
+  // Verdict
+  const limiting = Math.min(downlinkDBm, uplinkDBm);
+  const isUpLimited = uplinkDBm < downlinkDBm;
+  const note = isUpLimited ? ' (uplink limited)' : '';
+  const v = $('linkVerdict');
+
+  if (limiting >= -85) {
+    v.textContent = 'Two-way link: Good';
+    v.className = 'link-verdict verdict-good';
+  } else if (limiting >= -100) {
+    v.textContent = 'Two-way link: Fair' + note;
+    v.className = 'link-verdict verdict-fair';
+  } else if (limiting >= rxSensDBm) {
+    v.textContent = 'Two-way link: Weak' + note;
+    v.className = 'link-verdict verdict-weak';
+  } else {
+    const which = (downlinkDBm < rxSensDBm && uplinkDBm < rxSensDBm) ? 'both directions'
+                : uplinkDBm < rxSensDBm ? 'uplink' : 'downlink';
+    v.textContent = `No link \u2014 ${which} below sensitivity`;
+    v.className = 'link-verdict verdict-none';
+  }
+}
+
+function linkColor(dbm) {
+  if (dbm >= -85)  return '#00aa00';
+  if (dbm >= -100) return '#ffaa00';
+  if (dbm >= -110) return '#ff5500';
+  return '#cc0000';
+}
+
+function signalCssClass(dbm) {
+  if (dbm >= -85)  return 'signal-good';
+  if (dbm >= -100) return 'signal-fair';
+  if (dbm >= -110) return 'signal-weak';
+  return 'signal-none';
+}
+
+// ============================================================
+// Elevation Profile Drawing
+// ============================================================
+function drawElevationProfile(elevations, txAntennaElev, rxAntennaElev, totalDistM, freqMHz) {
+  const canvas = $('profileCanvas');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth;
+  const H = 130;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const wl = wavelengthForFreq(freqMHz || getOutputFreq());
+
+  const pad = { top: 12, bottom: 18, left: 38, right: 10 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  // Elevation range
+  let minE = Infinity, maxE = -Infinity;
+  for (const e of elevations) {
+    minE = Math.min(minE, e.elevation);
+    maxE = Math.max(maxE, e.elevation);
+  }
+  maxE = Math.max(maxE, txAntennaElev, rxAntennaElev);
+  minE = Math.min(minE, txAntennaElev, rxAntennaElev);
+  const span = maxE - minE || 1;
+  minE -= span * 0.12;
+  maxE += span * 0.12;
+  const elevRange = maxE - minE;
+
+  const toX = i => pad.left + (i / (elevations.length - 1)) * plotW;
+  const toY = elev => pad.top + plotH - ((elev - minE) / elevRange) * plotH;
+
+  // Clear (dark background)
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (i / 4) * plotH;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + plotW, y); ctx.stroke();
+  }
+
+  // Terrain fill
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top + plotH);
+  for (let i = 0; i < elevations.length; i++) ctx.lineTo(toX(i), toY(elevations[i].elevation));
+  ctx.lineTo(pad.left + plotW, pad.top + plotH);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(63,185,80,0.15)';
+  ctx.fill();
+
+  // Terrain outline
+  ctx.beginPath();
+  for (let i = 0; i < elevations.length; i++) {
+    i === 0 ? ctx.moveTo(toX(i), toY(elevations[i].elevation))
+            : ctx.lineTo(toX(i), toY(elevations[i].elevation));
+  }
+  ctx.strokeStyle = 'var(--green, #3fb950)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // LOS line
+  ctx.beginPath();
+  ctx.moveTo(toX(0), toY(txAntennaElev));
+  ctx.lineTo(toX(elevations.length - 1), toY(rxAntennaElev));
+  ctx.strokeStyle = '#f85149';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([]);
+  ctx.stroke();
+
+  // 60% Fresnel zone boundaries (dashed blue)
+  ctx.strokeStyle = 'rgba(88, 166, 255, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+
+  for (const sign of [1, -1]) {
+    ctx.beginPath();
+    for (let i = 0; i < elevations.length; i++) {
+      const d1 = (i / (elevations.length - 1)) * totalDistM;
+      const d2 = totalDistM - d1;
+      const losH = txAntennaElev + (d1 / totalDistM) * (rxAntennaElev - txAntennaElev);
+      const f1 = (d1 > 0 && d2 > 0) ? Math.sqrt(wl * d1 * d2 / (d1 + d2)) : 0;
+      i === 0 ? ctx.moveTo(toX(i), toY(losH + sign * f1 * 0.6))
+              : ctx.lineTo(toX(i), toY(losH + sign * f1 * 0.6));
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // Antenna dots
+  ctx.fillStyle = '#f85149';
+  ctx.beginPath(); ctx.arc(toX(0), toY(txAntennaElev), 4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#58a6ff';
+  ctx.beginPath(); ctx.arc(toX(elevations.length - 1), toY(rxAntennaElev), 4, 0, Math.PI * 2); ctx.fill();
+
+  // Labels
+  ctx.font = '9px -apple-system, sans-serif';
+  ctx.fillStyle = '#8b949e';
+  ctx.textAlign = 'right';
+  ctx.fillText((maxE * M_TO_FT).toFixed(0) + '\'', pad.left - 3, pad.top + 9);
+  ctx.fillText((minE * M_TO_FT).toFixed(0) + '\'', pad.left - 3, pad.top + plotH);
+  ctx.textAlign = 'left';
+  ctx.fillText('0', pad.left, H - 3);
+  ctx.textAlign = 'right';
+  ctx.fillText((totalDistM / MI_TO_M).toFixed(1) + ' mi', pad.left + plotW, H - 3);
+
+  // Antenna labels
+  ctx.font = 'bold 8px -apple-system, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#f85149';
+  ctx.fillText('RPT', toX(0) + 6, toY(txAntennaElev) - 5);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#58a6ff';
+  ctx.fillText('MOB', toX(elevations.length - 1) - 6, toY(rxAntennaElev) - 5);
+}
+
+// ============================================================
+// Coverage Calculation  (main entry)
+// ============================================================
+async function calculate() {
+  if (!gMarker || gCalculating) return;
+
+  const txPowerW   = parseFloat($('txPower').value);
+  const txGainDBi  = parseFloat($('txGain').value);
+  const txHeightFt = parseFloat($('txHeight').value);
+  const rxSensDBm  = parseFloat($('rxSens').value);
+  const sysLoss    = parseFloat($('systemLoss').value);
+  const maxRangeMi = parseFloat($('maxRange').value);
+  const res        = $('resolution').value;
+
+  const txPowerDBm = 10 * Math.log10(txPowerW * 1000);
+  const txHeightM  = txHeightFt * FT_TO_M;
+  const maxRangeM  = maxRangeMi * MI_TO_M;
+  const { radials: numRadials, samples: numSamples } = RESOLUTIONS[res];
+  const angStep    = 360 / numRadials;
+  const txPos      = gMarker.getPosition();
+  const outputFreq = getOutputFreq();
+
+  gCalculating = true;
+  $('btnCalc').disabled = true;
+  showProgress(true);
+  setStatus('Fetching transmitter elevation\u2026');
+
+  try {
+    const txGroundElev  = await elevationAt(txPos);
+    const txAntennaElev = txGroundElev + txHeightM;
+
+    const bearings = Array.from({ length: numRadials }, (_, i) => i * angStep);
+
+    setStatus('Sampling terrain\u2026');
+    const radials = await fetchAllElevations(txPos, bearings, maxRangeM, numSamples);
+
+    setStatus('Computing RF propagation\u2026');
+    updateProgress(0.85);
+
+    const env = $('environment').value;
+    const coverage = radials.map(r => ({
+      bearing: r.bearing,
+      samples: propagate(r.elevations, txAntennaElev, txHeightM, txPowerDBm, txGainDBi, sysLoss, maxRangeM, env, outputFreq)
+    }));
+
+    setStatus('Rendering\u2026');
+    updateProgress(0.95);
+    clearCoverage();
+    renderCoverage(coverage, txPos, maxRangeM, angStep);
+
+    const latDelta = maxRangeM / 111320;
+    const lngDelta = maxRangeM / (111320 * Math.cos(txPos.lat() * Math.PI / 180));
+    gMap.fitBounds(new google.maps.LatLngBounds(
+      { lat: txPos.lat() - latDelta, lng: txPos.lng() - lngDelta },
+      { lat: txPos.lat() + latDelta, lng: txPos.lng() + lngDelta }
+    ));
+
+    updateProgress(1);
+    const totalSamples = coverage.reduce((s, r) => s + r.samples.length, 0);
+    setStatus(`Done \u2014 ${numRadials} radials, ${totalSamples.toLocaleString()} points evaluated.`);
+
+  } catch (e) {
+    console.error(e);
+    setStatus('Error: ' + e.message, true);
+  }
+
+  showProgress(false);
+  gCalculating = false;
+  $('btnCalc').disabled = false;
+  $('btnClear').disabled = false;
+  $('btnExport').disabled = false;
+}
+
+// ============================================================
+// Elevation Fetch (batched with rate-limit backoff)
+// ============================================================
+async function fetchAllElevations(txPos, bearings, maxRangeM, numSamples) {
+  const results   = [];
+  const batchSize = 6;
+  const maxRetries = 3;
+
+  for (let i = 0; i < bearings.length; i += batchSize) {
+    const batch = bearings.slice(i, Math.min(i + batchSize, bearings.length));
+
+    const promises = batch.map(bearing => {
+      const endPt = google.maps.geometry.spherical.computeOffset(txPos, maxRangeM, bearing);
+      return fetchElevationPath(txPos, endPt, numSamples, maxRetries)
+        .then(elev => ({ bearing, elevations: elev }));
+    });
+
+    const batchResults = await Promise.all(promises);
+    results.push(...batchResults);
+
+    const pct = Math.min((i + batch.length) / bearings.length, 1);
+    updateProgress(pct * 0.80);
+    setStatus(`Sampling terrain\u2026 ${Math.round(pct * 100)}%`);
+
+    if (i + batchSize < bearings.length) await sleep(300);
+  }
+
+  return results;
+}
+
+async function fetchElevationPath(start, end, samples, retries) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await new Promise((resolve, reject) => {
+        gElevator.getElevationAlongPath(
+          { path: [start, end], samples },
+          (res, st) => {
+            if (st === 'OK') resolve(res);
+            else reject(new Error(st));
+          }
+        );
+      });
+    } catch (e) {
+      if (e.message === 'OVER_QUERY_LIMIT' && attempt < retries) {
+        await sleep(1000 * (attempt + 1));
+      } else {
+        throw e;
+      }
+    }
+  }
+}
+
+// ============================================================
+// RF Propagation Model  (Okumura-Hata + terrain diffraction)
+// ============================================================
+function hataLoss(distKm, freqMHz, hBasem, hMobilem, env) {
+  const logF  = Math.log10(freqMHz);
+  const logHb = Math.log10(Math.max(hBasem, 1));
+  const logD  = Math.log10(Math.max(distKm, 0.02));
+
+  const aHm = (1.1 * logF - 0.7) * hMobilem - (1.56 * logF - 0.8);
+
+  const Lu = 69.55 + 26.16 * logF - 13.82 * logHb - aHm
+           + (44.9 - 6.55 * logHb) * logD;
+
+  switch (env) {
+    case 'open':
+      return Lu - 4.78 * logF * logF + 18.33 * logF - 40.94;
+    case 'suburban':
+      return Lu - 2 * Math.pow(Math.log10(freqMHz / 28), 2) - 5.4;
+    case 'forest':
+      return Lu + 6;
+    case 'urban':
+    default:
+      return Lu;
+  }
+}
+
+function basePathLoss(distKm, hBasem, hMobilem, env, freqMHz) {
+  const fspl = 20 * Math.log10(Math.max(distKm, 0.001))
+             + 20 * Math.log10(freqMHz) + 32.44;
+
+  if (distKm < 0.1) return fspl;
+
+  const hata = hataLoss(distKm, freqMHz, hBasem, hMobilem, env);
+
+  return Math.max(fspl, hata);
+}
+
+function propagate(elevations, txAntennaElev, txHeightM, txPowerDBm, txGainDBi, sysLoss, maxRangeM, env, freqMHz) {
+  const n       = elevations.length;
+  const samples = [];
+  const wl      = wavelengthForFreq(freqMHz);
+
+  for (let i = 1; i < n; i++) {
+    const distM  = (i / (n - 1)) * maxRangeM;
+    const distKm = distM / 1000;
+    if (distKm < 0.05) continue;
+
+    const rxElev = elevations[i].elevation + RX_HEIGHT_M;
+
+    let worstV = -Infinity;
+
+    for (let j = 1; j < i; j++) {
+      const d1 = (j / (n - 1)) * maxRangeM;
+      const d2 = distM - d1;
+      if (d1 <= 0 || d2 <= 0) continue;
+
+      const losH     = txAntennaElev + (d1 / distM) * (rxElev - txAntennaElev);
+      const bulge    = (d1 * d2) / (2 * EFF_EARTH_RADIUS);
+      const terrainH = elevations[j].elevation + bulge;
+      const clearance = losH - terrainH;
+      const f1 = Math.sqrt(wl * d1 * d2 / (d1 + d2));
+      const v  = -clearance * Math.sqrt(2) / f1;
+
+      if (v > worstV) worstV = v;
+    }
+
+    let pathLoss = basePathLoss(distKm, txHeightM, RX_HEIGHT_M, env, freqMHz);
+
+    if (worstV > 0) {
+      const loss = 6.9 + 20 * Math.log10(
+        Math.sqrt((worstV - 0.1) * (worstV - 0.1) + 1) + worstV - 0.1
+      );
+      pathLoss += Math.max(0, loss);
+    }
+
+    const signalDBm = txPowerDBm + txGainDBi - sysLoss - pathLoss;
+
+    samples.push({
+      distance:  distM,
+      signal:    signalDBm,
+      elevation: elevations[i].elevation,
+      lat:       elevations[i].location.lat(),
+      lng:       elevations[i].location.lng()
+    });
+  }
+
+  return samples;
+}
+
+// ============================================================
+// Coverage Rendering (offscreen canvas -> GroundOverlay)
+// ============================================================
+function renderCoverage(radials, txPos, maxRangeM, angStep) {
+  const SIZE = 2000;
+  const canvas = document.createElement('canvas');
+  canvas.width = SIZE; canvas.height = SIZE;
+  const ctx = canvas.getContext('2d');
+
+  const cx = SIZE / 2;
+  const cy = SIZE / 2;
+  const pxPerM = (SIZE / 2) / maxRangeM;
+  const angStepRad = angStep * Math.PI / 180;
+
+  for (const radial of radials) {
+    const bRad = radial.bearing * Math.PI / 180;
+    const a1   = bRad - angStepRad / 2 - Math.PI / 2;
+    const a2   = bRad + angStepRad / 2 - Math.PI / 2;
+
+    for (let i = 0; i < radial.samples.length; i++) {
+      const s     = radial.samples[i];
+      const color = signalColor(s.signal);
+      if (!color) continue;
+
+      const rOuter = s.distance * pxPerM;
+      const rInner = i > 0 ? radial.samples[i - 1].distance * pxPerM : 0;
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(rOuter, 0.5), a1, a2);
+      ctx.arc(cx, cy, Math.max(rInner, 0),   a2, a1, true);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+  }
+
+  const latDeg = maxRangeM / 111320;
+  const lngDeg = maxRangeM / (111320 * Math.cos(txPos.lat() * Math.PI / 180));
+
+  const bounds = new google.maps.LatLngBounds(
+    { lat: txPos.lat() - latDeg, lng: txPos.lng() - lngDeg },
+    { lat: txPos.lat() + latDeg, lng: txPos.lng() + lngDeg }
+  );
+
+  gOverlay = new google.maps.GroundOverlay(canvas.toDataURL(), bounds, {
+    opacity:   1.0,
+    clickable: false
+  });
+  gOverlay.setMap(gMap);
+  gCoverageData = radials;
+  gLastRender = { radials, txPos, maxRangeM, angStep };
+}
+
+function reRenderCoverage() {
+  if (!gLastRender) return;
+  const { radials, txPos, maxRangeM, angStep } = gLastRender;
+  if (gOverlay) { gOverlay.setMap(null); gOverlay = null; }
+  renderCoverage(radials, txPos, maxRangeM, angStep);
+}
+
+function toggleBand(clickedIdx) {
+  if (gVisibleBands <= clickedIdx) {
+    gVisibleBands = clickedIdx + 1;
+  } else if (gVisibleBands === clickedIdx + 1) {
+    gVisibleBands = clickedIdx;
+  } else {
+    gVisibleBands = clickedIdx;
+  }
+
+  document.querySelectorAll('.legend-item[data-band]').forEach(el => {
+    const idx = parseInt(el.dataset.band);
+    el.classList.toggle('hidden-band', idx >= gVisibleBands);
+  });
+
+  reRenderCoverage();
+}
+
+function signalColor(dbm) {
+  for (let i = 0; i < SIGNAL_BANDS.length; i++) {
+    const b = SIGNAL_BANDS[i];
+    if (dbm >= b.min) {
+      if (i >= gVisibleBands) return null;
+      return `rgba(${b.rgb[0]},${b.rgb[1]},${b.rgb[2]},${b.alpha})`;
+    }
+  }
+  return null;
+}
+
+function clearCoverage() {
+  if (gOverlay) { gOverlay.setMap(null); gOverlay = null; }
+  gCoverageData = null;
+  gLastRender = null;
+  gVisibleBands = SIGNAL_BANDS.length;
+  gInfoWindow && gInfoWindow.close();
+  $('btnClear').disabled = true;
+  $('btnExport').disabled = true;
+  setStatus('');
+  document.querySelectorAll('.legend-item[data-band]').forEach(el => {
+    el.classList.remove('hidden-band');
+  });
+}
+
+// ============================================================
+// Export Coverage Image
+// ============================================================
+async function exportImage() {
+  if (!gLastRender) return setStatus('No coverage to export.', true);
+
+  const { radials, txPos, maxRangeM, angStep } = gLastRender;
+  const ch = getSelectedChannel();
+  const chNum = $('gmrsChannel').value;
+
+  setStatus('Exporting coverage image\u2026');
+
+  const MAP_W = 640, MAP_H = 640, SCALE = 2;
+  const zoom = gMap.getZoom();
+  const mapType = gMap.getMapTypeId() || 'terrain';
+  const key = $('apiKey').value.trim();
+  const staticUrl =
+    `https://maps.googleapis.com/maps/api/staticmap?` +
+    `center=${txPos.lat()},${txPos.lng()}&zoom=${zoom}` +
+    `&size=${MAP_W}x${MAP_H}&scale=${SCALE}&maptype=${mapType}` +
+    `&style=feature:poi|visibility:off&style=feature:transit|visibility:off` +
+    `&key=${encodeURIComponent(key)}`;
+
+  let mapImg = null;
+  try {
+    mapImg = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Static map failed'));
+      img.src = staticUrl;
+    });
+  } catch (_) {
+    setStatus('Static Maps API unavailable \u2014 exporting without map background.', true);
+  }
+
+  const PX_W = MAP_W * SCALE;
+  const PX_H = MAP_H * SCALE;
+  const HEADER = 60;
+  const FOOTER = 30;
+  const LEGEND_W = 260;
+  const TOTAL_W = PX_W + LEGEND_W;
+  const TOTAL_H = HEADER + PX_H + FOOTER;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = TOTAL_W;
+  canvas.height = TOTAL_H;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, TOTAL_W, TOTAL_H);
+
+  if (mapImg) {
+    ctx.drawImage(mapImg, 0, HEADER, PX_W, PX_H);
+  } else {
+    ctx.fillStyle = '#e9ecef';
+    ctx.fillRect(0, HEADER, PX_W, PX_H);
+  }
+
+  const project = (lat, lng) => {
+    const siny = Math.sin(lat * Math.PI / 180);
+    const clampedSiny = Math.min(Math.max(siny, -0.9999), 0.9999);
+    const worldSize = 256 * Math.pow(2, zoom) * SCALE;
+    const worldX = worldSize * (0.5 + lng / 360);
+    const worldY = worldSize * (0.5 - Math.log((1 + clampedSiny) / (1 - clampedSiny)) / (4 * Math.PI));
+
+    const centerLat = txPos.lat(), centerLng = txPos.lng();
+    const sinC = Math.sin(centerLat * Math.PI / 180);
+    const clampedC = Math.min(Math.max(sinC, -0.9999), 0.9999);
+    const cWorldX = worldSize * (0.5 + centerLng / 360);
+    const cWorldY = worldSize * (0.5 - Math.log((1 + clampedC) / (1 - clampedC)) / (4 * Math.PI));
+
+    return {
+      x: (worldX - cWorldX) + PX_W / 2,
+      y: (worldY - cWorldY) + PX_H / 2
+    };
+  };
+
+  const latDeg = maxRangeM / 111320;
+  const lngDeg = maxRangeM / (111320 * Math.cos(txPos.lat() * Math.PI / 180));
+
+  const topLeft = project(txPos.lat() + latDeg, txPos.lng() - lngDeg);
+  const botRight = project(txPos.lat() - latDeg, txPos.lng() + lngDeg);
+
+  const ovW = botRight.x - topLeft.x;
+  const ovH = botRight.y - topLeft.y;
+
+  const ovCanvas = document.createElement('canvas');
+  const OV_SIZE = 2000;
+  ovCanvas.width = OV_SIZE; ovCanvas.height = OV_SIZE;
+  const ovCtx = ovCanvas.getContext('2d');
+
+  const ovCx = OV_SIZE / 2, ovCy = OV_SIZE / 2;
+  const ovPxPerM = (OV_SIZE / 2) / maxRangeM;
+  const angStepRad = angStep * Math.PI / 180;
+
+  for (const radial of radials) {
+    const bRad = radial.bearing * Math.PI / 180;
+    const a1 = bRad - angStepRad / 2 - Math.PI / 2;
+    const a2 = bRad + angStepRad / 2 - Math.PI / 2;
+    for (let i = 0; i < radial.samples.length; i++) {
+      const s = radial.samples[i];
+      const color = signalColor(s.signal);
+      if (!color) continue;
+      const rOuter = s.distance * ovPxPerM;
+      const rInner = i > 0 ? radial.samples[i - 1].distance * ovPxPerM : 0;
+      ovCtx.beginPath();
+      ovCtx.arc(ovCx, ovCy, Math.max(rOuter, 0.5), a1, a2);
+      ovCtx.arc(ovCx, ovCy, Math.max(rInner, 0), a2, a1, true);
+      ovCtx.closePath();
+      ovCtx.fillStyle = color;
+      ovCtx.fill();
+    }
+  }
+
+  ctx.drawImage(ovCanvas, topLeft.x, HEADER + topLeft.y, ovW, ovH);
+
+  // TX marker on map
+  const txPx = project(txPos.lat(), txPos.lng());
+  ctx.fillStyle = '#e74c3c';
+  ctx.beginPath(); ctx.arc(txPx.x, HEADER + txPx.y, 8, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(txPx.x, HEADER + txPx.y, 8, 0, Math.PI * 2); ctx.stroke();
+
+  // Range rings
+  ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 4]);
+  const maxMi = maxRangeM / MI_TO_M;
+  const ringStep = maxMi <= 10 ? 2 : maxMi <= 25 ? 5 : 10;
+  const mPerPx = maxRangeM / (ovW / 2);
+  for (let mi = ringStep; mi <= maxMi; mi += ringStep) {
+    const r = (mi * MI_TO_M) / mPerPx;
+    ctx.beginPath(); ctx.arc(txPx.x, HEADER + txPx.y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.font = '11px -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.textAlign = 'center';
+    const label = mi + ' mi';
+    const tw = ctx.measureText(label).width;
+    ctx.fillRect(txPx.x - tw/2 - 2, HEADER + txPx.y - r + 4, tw + 4, 14);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillText(label, txPx.x, HEADER + txPx.y - r + 15);
+  }
+  ctx.setLineDash([]);
+
+  // Header
+  ctx.fillStyle = '#161b22';
+  ctx.fillRect(0, 0, TOTAL_W, HEADER);
+  ctx.font = 'bold 20px -apple-system, sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'left';
+  ctx.fillText('GMRS Coverage - Ch ' + chNum + 'R (' + ch.output.toFixed(4) + ' MHz)', 16, 24);
+  ctx.font = '13px -apple-system, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillText(
+    txPos.lat().toFixed(5) + ', ' + txPos.lng().toFixed(5) +
+    '   ' + $('txPower').value + 'W  ' + $('txGain').value + ' dBi  ' +
+    $('txHeight').value + 'ft AGL  Loss: ' + $('systemLoss').value + ' dB  ' +
+    $('environment').value,
+    16, 46
+  );
+
+  // Legend panel
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillRect(PX_W, HEADER, LEGEND_W, PX_H);
+  ctx.strokeStyle = '#dee2e6';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PX_W, HEADER); ctx.lineTo(PX_W, HEADER + PX_H); ctx.stroke();
+
+  const lx = PX_W + 20;
+  let ly = HEADER + 30;
+  ctx.font = 'bold 14px -apple-system, sans-serif';
+  ctx.fillStyle = '#161b22';
+  ctx.textAlign = 'left';
+  ctx.fillText('Signal Level', lx, ly); ly += 28;
+
+  const labels = [
+    'Excellent (> -70 dBm)',
+    'Good (-70 to -85 dBm)',
+    'Fair (-85 to -100 dBm)',
+    'Weak (-100 to -110 dBm)',
+    'Marginal (-110 to -116 dBm)'
+  ];
+  for (let i = 0; i < SIGNAL_BANDS.length; i++) {
+    if (i >= gVisibleBands) break;
+    const b = SIGNAL_BANDS[i];
+    ctx.fillStyle = `rgba(${b.rgb[0]},${b.rgb[1]},${b.rgb[2]},0.7)`;
+    ctx.fillRect(lx, ly - 10, 18, 13);
+    ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+    ctx.strokeRect(lx, ly - 10, 18, 13);
+    ctx.font = '12px -apple-system, sans-serif';
+    ctx.fillStyle = '#495057';
+    ctx.fillText(labels[i], lx + 24, ly + 1);
+    ly += 22;
+  }
+
+  // Footer
+  ctx.fillStyle = '#161b22';
+  ctx.fillRect(0, HEADER + PX_H, TOTAL_W, FOOTER);
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.fillStyle = '#8b949e';
+  ctx.textAlign = 'left';
+  ctx.fillText('Generated ' + new Date().toLocaleString() + '  |  Kerchunk Coverage Planner', 12, HEADER + PX_H + 19);
+
+  // Download
+  canvas.toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.download = 'coverage_Ch' + chNum + 'R_' + ts + '.png';
+    a.href = url;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus('Coverage image exported.');
+  }, 'image/png');
+}
+
+// ============================================================
+// UI Helpers
+// ============================================================
+function setStatus(msg, isError) {
+  const el = $('status');
+  el.textContent = msg;
+  el.className = isError ? 'error' : '';
+}
+
+function showProgress(show) {
+  $('progress').style.display = show ? 'block' : 'none';
+  if (!show) $('progressFill').style.width = '0%';
+}
+
+function updateProgress(frac) {
+  $('progressFill').style.width = (frac * 100).toFixed(1) + '%';
+}
+
+function enableInputs(on) {
+  ['txPower', 'txGain', 'txHeight',
+   'rxSens', 'systemLoss', 'environment', 'maxRange', 'resolution',
+   'gmrsChannel', 'mobPower', 'mobGain', 'mobHeight', 'btnDropMob'].forEach(id => $(id).disabled = !on);
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ============================================================
+// Settings Persistence (localStorage)
+// ============================================================
+const PERSIST_FIELDS = [
+  'apiKey', 'address',
+  'gmrsChannel',
+  'txPower', 'txGain', 'txHeight', 'rxSens', 'systemLoss', 'environment',
+  'maxRange', 'resolution',
+  'mobPower', 'mobGain', 'mobHeight'
+];
+const STORAGE_KEY = 'gmrs_coverage_settings';
+
+function saveSettings() {
+  const data = {};
+  for (const id of PERSIST_FIELDS) {
+    data[id] = $(id).value;
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      const oldKey = localStorage.getItem('gmrs_api_key');
+      if (oldKey) $('apiKey').value = oldKey;
+      return;
+    }
+    const data = JSON.parse(raw);
+    for (const id of PERSIST_FIELDS) {
+      if (data[id] !== undefined && $(id)) $(id).value = data[id];
+    }
+    updateChannelInfo();
+  } catch (_) {}
+}
+
+// ============================================================
+// Event Wiring
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  loadSettings();
+  updateChannelInfo();
+
+  $('btnCalc').addEventListener('click', calculate);
+  $('btnClear').addEventListener('click', clearCoverage);
+  $('btnExport').addEventListener('click', exportImage);
+  $('btnDropMob').addEventListener('click', startMobilePlacement);
+  $('btnRemoveMob').addEventListener('click', removeMobile);
+
+  $('gmrsChannel').addEventListener('change', () => {
+    updateChannelInfo();
+    saveSettings();
+  });
+
+  // Preset buttons
+  $('preset5').addEventListener('click',  () => { $('txPower').value = 5;  saveSettings(); });
+  $('preset10').addEventListener('click', () => { $('txPower').value = 10; saveSettings(); });
+  $('preset15').addEventListener('click', () => { $('txPower').value = 15; saveSettings(); });
+  $('preset20').addEventListener('click', () => { $('txPower').value = 20; saveSettings(); });
+  $('preset25').addEventListener('click', () => { $('txPower').value = 25; saveSettings(); });
+  $('preset50').addEventListener('click', () => { $('txPower').value = 50; saveSettings(); });
+
+  $('presetMobHT').addEventListener('click',     () => applyPresetMob(5,  2.15, 5));
+  $('presetMobMobile').addEventListener('click', () => applyPresetMob(15, 5,    6));
+
+  // Legend band toggles
+  document.querySelectorAll('.legend-item[data-band]').forEach(el => {
+    el.addEventListener('click', () => toggleBand(parseInt(el.dataset.band)));
+  });
+
+  // Auto-save
+  for (const id of PERSIST_FIELDS) {
+    $(id).addEventListener('input', saveSettings);
+  }
+
+  // Load site config from repeater API and auto-init map
+  (async () => {
+    try {
+      const TOKEN = localStorage.getItem('kerchunk_token') || '';
+      const hdrs = TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
+      const r = await fetch('/api/status', { headers: hdrs });
+      if (r.ok) {
+        const d = await r.json();
+        if (d.google_maps_api_key) $('apiKey').value = d.google_maps_api_key;
+        if (d.address) {
+          $('address').value = d.address;
+          $('dispAddr').textContent = d.address;
+        }
+        if (d.elevation && !$('txHeight').value)
+          $('txHeight').value = d.elevation;
+        saveSettings();
+      }
+    } catch(_) {}
+
+    const key = $('apiKey').value.trim();
+    if (!key) {
+      setStatus('No Google Maps API key configured. Add google_maps_api_key to [general] in kerchunk.conf.', true);
+      return;
+    }
+
+    await loadMap();
+    const addr = $('address').value.trim();
+    if (addr) geocode();
+  })();
+});
+</script>
+</body>
+</html>

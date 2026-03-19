@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.ico" type="image/x-icon">
+<title>Kerchunk Configuration</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px; max-width: 1920px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+header .sub { color: var(--dim); font-size: 14px; }
+.btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
+       text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-green { border-color: var(--green); color: var(--green); }
+.btn-green:hover { background: rgba(63,185,80,0.15); }
+.grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+@media (max-width: 1100px) { .grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px;
+           margin-bottom: 10px; }
+.form-group { margin-bottom: 8px; }
+.form-group label { display: block; font-size: 11px; color: var(--dim); text-transform: uppercase;
+                    letter-spacing: 0.5px; margin-bottom: 3px; }
+.form-group input, .form-group select { width: 100%; padding: 6px 8px; background: var(--bg);
+                                         border: 1px solid var(--border); border-radius: 5px;
+                                         color: var(--text); font-size: 13px; }
+.form-group input:focus, .form-group select:focus { outline: none; border-color: var(--accent); }
+.form-group input:disabled { opacity: 0.5; cursor: not-allowed; }
+.form-group .field-note { font-size: 10px; color: var(--yellow); margin-top: 2px; }
+.toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.toggle-row label { font-size: 12px; color: var(--text); cursor: pointer; }
+.toggle-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.card-footer { margin-top: 12px; display: flex; justify-content: flex-end; }
+
+/* Toast notification */
+.toast { position: fixed; bottom: 20px; right: 20px; background: var(--card); border: 1px solid var(--border);
+         border-radius: 5px; padding: 10px 16px; font-size: 13px; z-index: 2000;
+         transition: opacity 0.3s; opacity: 0; pointer-events: none; }
+.toast.show { opacity: 1; }
+.toast.error { border-color: var(--red); color: var(--red); }
+.toast.success { border-color: var(--green); color: var(--green); }
+
+.auth-error { text-align: center; padding: 40px; color: var(--red); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Configuration</h1>
+  <span class="sub">Kerchunk Management</span>
+  <nav style="margin-left:auto;display:flex;gap:8px">
+    <a href="index.html" class="btn">Dashboard</a>
+    <a href="users.html" class="btn">Users</a>
+    <a href="config.html" class="btn" style="border-color:var(--accent);color:var(--accent)">Config</a>
+    <a href="coverage.html" class="btn">Coverage</a>
+  </nav>
+</header>
+
+<div id="auth-error" class="auth-error" style="display:none"></div>
+<div class="grid" id="config-grid"></div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// Config metadata
+// ============================================================
+const SECTION_ORDER = [
+  'general','audio','hid','repeater','courtesy','caller','dtmf','voicemail',
+  'weather','time','nws','emergency','recording','cdr','parrot','tts','otp',
+  'gpio','logger','stats','web','modules'
+];
+
+const SECTION_NAMES = {
+  general:'General', audio:'Audio Device', hid:'HID Interface', repeater:'Repeater',
+  courtesy:'Courtesy Tone', caller:'Caller ID', dtmf:'DTMF Processing', voicemail:'Voicemail',
+  weather:'Weather', time:'Time', nws:'NWS Alerts', emergency:'Emergency',
+  recording:'Recording', cdr:'CDR Logging', parrot:'Parrot / Echo', tts:'Text-to-Speech',
+  otp:'OTP Auth', gpio:'GPIO Control', logger:'Event Logger', stats:'Statistics',
+  web:'Web Dashboard', modules:'Modules'
+};
+
+const TOGGLE_KEYS = new Set([
+  'preemphasis','software_relay','require_identification','enabled',
+  'auto_announce','announce_temp','announce_conditions','announce_wind',
+  'attention_tones','persist'
+]);
+
+const NUMBER_KEYS = new Set([
+  'tail_time','hang_time','timeout_time','cor_debounce','tx_delay','tx_tail',
+  'relay_drain','cwid_interval','cwid_wpm','cwid_freq','tx_ctcss','tx_dcs',
+  'freq','duration','amplitude','ani_window','login_timeout','max_messages',
+  'max_duration','inter_digit_timeout','cor_gate_ms','interval','timeout',
+  'session_timeout','time_skew','port','hw_rate','preemphasis_alpha',
+  'cor_bit','ptt_bit','max_size_mb','poll_interval','reannounce_interval'
+]);
+
+const PASSWORD_KEYS = new Set(['api_key','auth_token','google_maps_api_key']);
+
+const SELECT_KEYS = {
+  log_level: ['error','warn','info','debug'],
+  cor_polarity: ['active_low','active_high'],
+  min_severity: ['extreme','severe','moderate','minor']
+};
+
+const READONLY_KEYS = new Set([
+  'sample_rate','socket_path','pid_file','module_path','load',
+  'tls_cert','tls_key','capture_device','playback_device','device',
+  'port','bind','static_dir'
+]);
+
+const UNIT_MAP = {
+  tail_time:'ms', hang_time:'ms', timeout_time:'ms', cor_debounce:'ms',
+  tx_delay:'ms', tx_tail:'ms', relay_drain:'ms', cwid_interval:'ms',
+  cwid_freq:'Hz', freq:'Hz', duration:'ms', ani_window:'ms',
+  login_timeout:'ms', max_duration:'sec', inter_digit_timeout:'ms',
+  cor_gate_ms:'ms', interval:'ms', timeout:'ms', session_timeout:'ms',
+  hw_rate:'Hz', max_size_mb:'MB', poll_interval:'ms', reannounce_interval:'ms',
+  port:'', cwid_wpm:'', amplitude:'', time_skew:'', preemphasis_alpha:'',
+  cor_bit:'', ptt_bit:'', max_messages:'', tx_ctcss:'', tx_dcs:''
+};
+
+// ============================================================
+// Auth
+// ============================================================
+function getToken() { return localStorage.getItem('kerchunk_token') || ''; }
+function setToken(t) { localStorage.setItem('kerchunk_token', t); }
+
+async function apiFetch(url, opts) {
+  opts = opts || {};
+  const token = getToken();
+  if (!opts.headers) opts.headers = {};
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  if (opts.body && typeof opts.body === 'object') {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(url, opts);
+  if (res.status === 403) {
+    document.getElementById('config-grid').style.display = 'none';
+    document.getElementById('auth-error').style.display = 'block';
+    document.getElementById('auth-error').textContent = 'auth_token must be set in kerchunk.conf';
+    throw new Error('Forbidden');
+  }
+  if (res.status === 401) {
+    localStorage.removeItem('kerchunk_token');
+    const t = prompt('Authentication required. Enter bearer token:');
+    if (t) { setToken(t); location.reload(); }
+    throw new Error('Unauthorized');
+  }
+  return res;
+}
+
+// ============================================================
+// Toast
+// ============================================================
+let toastTimer = null;
+function showToast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + (type || '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() { el.className = 'toast'; }, 3000);
+}
+
+// ============================================================
+// Label formatting
+// ============================================================
+function formatLabel(key) {
+  // Special abbreviations
+  const abbrevs = {
+    cwid:'CWID', wpm:'WPM', dcs:'DCS', ctcss:'CTCSS', ani:'ANI', nws:'NWS',
+    tts:'TTS', otp:'OTP', gpio:'GPIO', cdr:'CDR', hid:'HID', api:'API',
+    tls:'TLS', pid:'PID', hz:'Hz', ms:'ms', mb:'MB', ip:'IP', ptt:'PTT',
+    cor:'COR', tx:'TX', rx:'RX'
+  };
+
+  var parts = key.split('_');
+  var labeled = parts.map(function(p) {
+    var lower = p.toLowerCase();
+    if (abbrevs[lower]) return abbrevs[lower];
+    return p.charAt(0).toUpperCase() + p.slice(1);
+  });
+
+  var label = labeled.join(' ');
+  var unit = UNIT_MAP[key];
+  if (unit) label += ' (' + unit + ')';
+  return label;
+}
+
+// ============================================================
+// Field type detection
+// ============================================================
+function getFieldType(key, section) {
+  if (READONLY_KEYS.has(key)) return 'readonly';
+  /* voice_id is a toggle in repeater/stats but a text field in tts */
+  if (key === 'voice_id' && section !== 'tts') return 'toggle';
+  if (TOGGLE_KEYS.has(key)) return 'toggle';
+  if (NUMBER_KEYS.has(key)) return 'number';
+  if (PASSWORD_KEYS.has(key)) return 'password';
+  if (SELECT_KEYS[key]) return 'select';
+  return 'text';
+}
+
+// ============================================================
+// Render
+// ============================================================
+var configData = {};
+
+function renderConfig(data) {
+  configData = data;
+  var grid = document.getElementById('config-grid');
+  grid.innerHTML = '';
+
+  SECTION_ORDER.forEach(function(section) {
+    var values = data[section];
+    if (!values) return;
+
+    var card = document.createElement('div');
+    card.className = 'card';
+    card.id = 'section-' + section;
+
+    var h2 = document.createElement('h2');
+    h2.textContent = SECTION_NAMES[section] || section;
+    card.appendChild(h2);
+
+    var keys = Object.keys(values);
+    keys.forEach(function(key) {
+      var val = values[key];
+      var type = getFieldType(key, section);
+      var label = formatLabel(key);
+
+      if (type === 'toggle') {
+        var row = document.createElement('div');
+        row.className = 'toggle-row';
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.id = 'cfg-' + section + '-' + key;
+        cb.dataset.section = section;
+        cb.dataset.key = key;
+        cb.checked = (val === 'on' || val === 'true' || val === '1' || val === true);
+        var lbl = document.createElement('label');
+        lbl.htmlFor = cb.id;
+        lbl.textContent = label;
+        row.appendChild(cb);
+        row.appendChild(lbl);
+        card.appendChild(row);
+      } else {
+        var group = document.createElement('div');
+        group.className = 'form-group';
+        var lbl = document.createElement('label');
+        lbl.textContent = label;
+        group.appendChild(lbl);
+
+        if (type === 'select') {
+          var sel = document.createElement('select');
+          sel.id = 'cfg-' + section + '-' + key;
+          sel.dataset.section = section;
+          sel.dataset.key = key;
+          SELECT_KEYS[key].forEach(function(opt) {
+            var o = document.createElement('option');
+            o.value = opt;
+            o.textContent = opt;
+            if (String(val) === opt) o.selected = true;
+            sel.appendChild(o);
+          });
+          group.appendChild(sel);
+        } else {
+          var inp = document.createElement('input');
+          inp.id = 'cfg-' + section + '-' + key;
+          inp.dataset.section = section;
+          inp.dataset.key = key;
+          inp.value = (val !== null && val !== undefined) ? String(val) : '';
+
+          if (type === 'number') {
+            inp.type = 'number';
+            inp.step = 'any';
+          } else if (type === 'password') {
+            inp.type = 'password';
+          } else if (type === 'readonly') {
+            inp.type = 'text';
+            inp.disabled = true;
+          } else {
+            inp.type = 'text';
+          }
+
+          group.appendChild(inp);
+
+          if (type === 'readonly') {
+            var note = document.createElement('div');
+            note.className = 'field-note';
+            note.textContent = 'Restart required to change';
+            group.appendChild(note);
+          }
+        }
+        card.appendChild(group);
+      }
+    });
+
+    // Save button
+    var footer = document.createElement('div');
+    footer.className = 'card-footer';
+    var saveBtn = document.createElement('button');
+    saveBtn.className = 'btn btn-green';
+    saveBtn.textContent = 'Save & Reload';
+    saveBtn.dataset.section = section;
+    saveBtn.addEventListener('click', function() { saveSection(section); });
+    footer.appendChild(saveBtn);
+    card.appendChild(footer);
+
+    grid.appendChild(card);
+  });
+
+  // Render any sections not in the predefined order
+  Object.keys(data).forEach(function(section) {
+    if (SECTION_ORDER.indexOf(section) === -1) {
+      var values = data[section];
+      var card = document.createElement('div');
+      card.className = 'card';
+      card.id = 'section-' + section;
+
+      var h2 = document.createElement('h2');
+      h2.textContent = SECTION_NAMES[section] || section;
+      card.appendChild(h2);
+
+      Object.keys(values).forEach(function(key) {
+        var val = values[key];
+        var type = getFieldType(key, section);
+        var label = formatLabel(key);
+
+        var group = document.createElement('div');
+        group.className = 'form-group';
+        var lbl = document.createElement('label');
+        lbl.textContent = label;
+        group.appendChild(lbl);
+
+        var inp = document.createElement('input');
+        inp.id = 'cfg-' + section + '-' + key;
+        inp.dataset.section = section;
+        inp.dataset.key = key;
+        inp.type = 'text';
+        inp.value = (val !== null && val !== undefined) ? String(val) : '';
+        group.appendChild(inp);
+        card.appendChild(group);
+      });
+
+      var footer = document.createElement('div');
+      footer.className = 'card-footer';
+      var saveBtn = document.createElement('button');
+      saveBtn.className = 'btn btn-green';
+      saveBtn.textContent = 'Save & Reload';
+      saveBtn.dataset.section = section;
+      saveBtn.addEventListener('click', function() { saveSection(section); });
+      footer.appendChild(saveBtn);
+      card.appendChild(footer);
+
+      grid.appendChild(card);
+    }
+  });
+}
+
+// ============================================================
+// Save
+// ============================================================
+async function saveSection(section) {
+  var values = {};
+  var inputs = document.querySelectorAll('[data-section="' + section + '"]');
+
+  inputs.forEach(function(el) {
+    if (el.tagName === 'BUTTON') return;
+    var key = el.dataset.key;
+    if (!key) return;
+    if (el.disabled) return; // skip readonly fields
+
+    if (el.type === 'checkbox') {
+      values[key] = el.checked ? 'on' : 'off';
+    } else {
+      values[key] = el.value;
+    }
+  });
+
+  try {
+    var res = await apiFetch('/api/config', {
+      method: 'PUT',
+      body: { section: section, values: values }
+    });
+    if (!res.ok) {
+      var errText = await res.text();
+      throw new Error(errText || 'Save failed');
+    }
+    showToast(SECTION_NAMES[section] + ' saved and reloaded', 'success');
+    // Re-fetch config to refresh displayed values
+    await loadConfig();
+  } catch (e) {
+    showToast('Failed to save: ' + e.message, 'error');
+  }
+}
+
+// ============================================================
+// Load config
+// ============================================================
+async function loadConfig() {
+  try {
+    var res = await apiFetch('/api/config');
+    var data = await res.json();
+    renderConfig(data.sections || data);
+  } catch (e) {
+    if (e.message !== 'Forbidden' && e.message !== 'Unauthorized') {
+      showToast('Failed to load config: ' + e.message, 'error');
+    }
+  }
+}
+
+// ============================================================
+// Init
+// ============================================================
+(async function init() {
+  var token = getToken();
+  if (!token) {
+    var t = prompt('Enter auth token for kerchunkd:');
+    if (t) {
+      setToken(t);
+      location.reload();
+      return;
+    }
+  }
+  await loadConfig();
+})();
+</script>
+</body>
+</html>
