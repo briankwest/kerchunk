@@ -64,9 +64,9 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 |  |  mod_nws        NWS weather alert monitor                | |
 |  |  mod_stats      Statistics, metrics, persistence         | |
 |  |  mod_web        HTTP server + SSE + web dashboard        | |
-|  |  mod_webhook    HTTP POST notifications on events       | |
-|  |  mod_scrambler  Frequency inversion voice scrambler     | |
-|  |  mod_sdr        RTL-SDR wideband GMRS/FRS monitor       | |
+|  |  mod_webhook    HTTP POST notifications on events        | |
+|  |  mod_scrambler  Frequency inversion voice scrambler      | |
+|  |  mod_sdr        RTL-SDR wideband GMRS/FRS monitor        | |
 |  +----------------------------------------------------------+ |
 +---------------------------------------------------------------+
 ```
