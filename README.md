@@ -66,7 +66,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 |  |  mod_web        HTTP server + SSE + web dashboard        | |
 |  |  mod_webhook    HTTP POST notifications on events        | |
 |  |  mod_scrambler  Frequency inversion voice scrambler      | |
-|  |  mod_sdr        RTL-SDR wideband GMRS/FRS monitor        | |
+|  |  mod_sdr        RTL-SDR single-channel GMRS/FRS monitor   | |
 |  +----------------------------------------------------------+ |
 +---------------------------------------------------------------+
 ```
@@ -614,23 +614,16 @@ Config section: `[scrambler]`. DTMF: `*97#` toggle, `*970#` off, `*971#`-`*978#`
 
 ### mod_sdr — SDR Channel Monitor
 
-Uses an RTL-SDR dongle (librtlsdr) to monitor all 30 GMRS/FRS channels. Dual-pass frequency hopping covers 462 MHz (simplex + repeater outputs) and 467 MHz (FRS-only + repeater inputs) bands. Per-channel FM demodulation, CTCSS/DCS/DTMF decoding via libplcode, RMS squelch, and CSV activity logging.
+Uses an RTL-SDR dongle (librtlsdr) to monitor a single GMRS/FRS channel. Tunes to the channel frequency at 240 kHz sample rate, FM demodulation with de-emphasis, CTCSS/DCS/DTMF decoding via libplcode, FM noise squelch, and CSV activity logging.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | on/off | `off` | Enable SDR monitor |
 | `device_index` | int | `0` | RTL-SDR device index |
-| `center_freq_a` | int | `462625000` | Band A center (Hz) |
-| `center_freq_b` | int | `467625000` | Band B center (Hz) |
-| `sample_rate` | int | `3200000` | Sample rate (Hz) |
-| `gain` | int | `0` | Tuner gain (0=AGC) |
-| `dwell_time` | int | `2000` | ms per band before hopping |
-| `settle_time` | int | `50` | ms to discard after retune |
-| `squelch_threshold` | int | `200` | RMS threshold for channel active |
-| `squelch_tail` | int | `500` | ms to hold active after signal drops |
+| `channel` | int | `1` | Channel number (1-22) |
 | `log_file` | string | `sdr_activity.csv` | Activity log file |
 
-Config section: `[sdr]`. CLI: `sdr`, `sdr channels`. Requires `librtlsdr-dev`.
+Config section: `[sdr]`. CLI: `sdr`. Requires `librtlsdr-dev`.
 
 ### mod_gpio — GPIO Relay Control
 

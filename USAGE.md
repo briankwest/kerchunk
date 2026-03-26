@@ -105,6 +105,9 @@ Here is the complete list of DTMF commands:
 | `*41`_pin_`#` | Turn on a GPIO device (e.g., `*4117#` turns on pin 17) |
 | `*40`_pin_`#` | Turn off a GPIO device (e.g., `*4017#` turns off pin 17) |
 | `*68`_code_`#` | OTP authentication (e.g., `*68123456#` for code 123456) |
+| `*97#` | Toggle voice scrambler on/off |
+| `*970#` | Disable voice scrambler |
+| `*971#`-`*978#` | Set scrambler code 1-8 |
 
 ### Weather and Time
 
@@ -228,14 +231,14 @@ sudo apt install build-essential pkg-config portaudio19-dev libcurl4-openssl-dev
 ```bash
 git clone --recurse-submodules https://github.com/briankwest/kerchunk.git
 cd kerchunk
-make            # Builds libplcode, daemon, CLI, and all 20 modules
-make test       # Runs the test suite (204 tests, all must pass)
+make            # Builds libplcode, daemon, CLI, and all 23 modules
+make test       # Runs the test suite (214 tests, all must pass)
 ```
 
 Build outputs:
 - `kerchunkd` -- the daemon
 - `kerchunk` -- the CLI tool
-- `modules/*.so` -- 20 loadable modules
+- `modules/*.so` -- 23 loadable modules
 - `test_kerchunk` -- test binary
 
 ### Linux Setup
@@ -336,7 +339,8 @@ The recommended module load order is:
 ```
 mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,
 mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,
-mod_txcode,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,mod_web
+mod_txcode,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,
+mod_web,mod_webhook,mod_scrambler,mod_sdr
 ```
 
 Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert announcements.
@@ -531,6 +535,38 @@ All GPIO pins are 3.3V logic. Use a relay board or transistor driver for loads t
 | `ptt_max_duration` | `30` | Maximum PTT transmission duration in seconds |
 | `ptt_priority` | `2` | Queue priority for PTT audio |
 | `registration_enabled` | `off` | Enable public user self-registration |
+
+#### `[webhook]` -- Webhook Notifications
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `off` | Enable webhook notifications |
+| `url` | (none) | Destination URL for HTTP POST |
+| `secret` | (none) | Shared secret (sent as `X-Webhook-Secret` header) |
+| `events` | (none) | Comma-separated event list to send |
+| `timeout_ms` | `5000` | HTTP request timeout in ms |
+| `retry_count` | `2` | Number of retries on failure |
+
+#### `[scrambler]` -- Voice Scrambler
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `off` | Enable frequency inversion scrambler |
+| `code` | `4` | Scrambler code 1-8 (carrier = 2600 + code*100 Hz) |
+| `frequency` | (none) | Optional explicit carrier frequency in Hz |
+
+DTMF: `*97#` toggle, `*970#` off, `*971#`-`*978#` set code. CW ID and emergency mode bypass scrambling.
+
+#### `[sdr]` -- SDR Channel Monitor
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `off` | Enable RTL-SDR channel monitor |
+| `device_index` | `0` | RTL-SDR device index |
+| `channel` | `1` | GMRS/FRS channel number (1-22) |
+| `log_file` | `sdr_activity.csv` | CSV activity log file |
+
+Requires `librtlsdr-dev`. Tunes to a single channel at 240 kHz, FM demod with CTCSS/DCS/DTMF decoding.
 
 ### FCC Compliance Settings
 
