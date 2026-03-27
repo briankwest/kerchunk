@@ -431,11 +431,13 @@ static int g_relay_drain;    /* Samples remaining in drain timer after COR drop 
 static int g_relay_drain_ms = 500; /* Configurable relay drain time */
 static int g_relay_was_active; /* Track COR transition for drain trigger */
 static int g_queue_ptt;      /* 1 while the queue holds a PTT ref */
+static uint64_t g_ptt_drop_us;  /* timestamp of last PTT release (any source) */
 static int g_queue_fired_drain; /* 1 after QUEUE_DRAIN event fired */
 static int g_tx_delay_ms;   /* silence after PTT assert before audio */
 static int g_tx_tail_ms;    /* silence after last audio before PTT release */
 static int g_tx_delay_rem;  /* remaining TX delay samples */
 static int g_tx_tail_rem;   /* remaining TX tail samples */
+static int g_ptt_hold_ticks; /* extra ticks after ring empty before PTT drop */
 
 /* Derive current TX state for the status API */
 static const char *get_tx_state(void)
@@ -573,7 +575,12 @@ static void *audio_thread_fn(void *arg)
         /* Relay when COR active OR drain timer running.
          * The drain timer gives captured audio time to flush through
          * the relay path after COR drops. Configurable via relay_drain. */
+        /* Don't relay while queue is transmitting — any COR during queue TX
+         * is feedback from our own transmission, not a real signal.  Without
+         * this guard the relay fills the playback ring with noise and the
+         * queue can never release PTT (playback_pending never reaches 0). */
         int do_relay = g_software_relay && kerchunk_core_get_ptt() &&
+                       !g_queue_ptt &&
                        (relay_active || g_relay_drain > 0);
 
         if (do_relay && nread > 0) {
@@ -606,9 +613,18 @@ static void *audio_thread_fn(void *arg)
                 };
                 kerchunk_core_dispatch_playback_taps(&relay_evt);
 
-                /* Count down drain timer after COR dropped */
-                if (!relay_active && g_relay_drain > 0)
+                /* Count down drain timer after COR dropped.
+                 * Early stop: if captured audio is below noise floor, speech
+                 * has ended — skip remaining drain so courtesy tone plays
+                 * immediately instead of waiting the full relay_drain period. */
+                if (!relay_active && g_relay_drain > 0) {
                     g_relay_drain -= nread;
+                    int64_t pwr = 0;
+                    for (int k = 0; k < nread; k++)
+                        pwr += (int64_t)frame[k] * frame[k];
+                    if (pwr / nread < 200 * 200)  /* ~200 RMS = noise floor */
+                        g_relay_drain = 0;
+                }
             }
         }
 
@@ -624,7 +640,11 @@ static void *audio_thread_fn(void *arg)
          * resumes after COR drops.
          */
 
-        int queue_paused = (g_software_relay &&
+        /* Pause queue drain for live relay — but NOT if the queue already
+         * holds PTT.  When queue is transmitting (g_queue_ptt=1), any COR
+         * is likely TX-to-RX feedback from our own transmission and must
+         * not stall the drain, or PTT gets stuck forever. */
+        int queue_paused = (g_software_relay && !g_queue_ptt &&
                             (kerchunk_core_get()->is_receiving() || g_relay_drain > 0));
 
         /* Start PTT + delay when queue has items and we're not already playing */
@@ -765,15 +785,21 @@ static void *audio_thread_fn(void *arg)
                 g_tx_tail_rem -= sn;
             }
 
-            /* Release PTT when tail is done AND playback ring is drained.
-             * Without this check, PTT drops while audio is still in the
-             * PortAudio buffer — the listener hears a click/cutoff. */
-            /* Release PTT when tail is done AND playback ring is drained */
+            /* Release PTT when tail is done AND playback ring is drained
+             * AND hardware has had time to flush its internal buffer.
+             * Hold PTT for 3 extra ticks (60ms) after the ring empties
+             * so PortAudio/ALSA can finish playing the CTCSS tail. */
             if (g_tx_tail_rem <= 0 &&
                 kerchunk_audio_playback_pending() == 0) {
-                g_queue_ptt = 0;
-                g_tx_tail_rem = -1;
-                kerchunk_core_get()->release_ptt("queue");
+                if (++g_ptt_hold_ticks >= 3) {
+                    g_queue_ptt = 0;
+                    g_ptt_drop_us = now_us();
+                    g_tx_tail_rem = -1;
+                    g_ptt_hold_ticks = 0;
+                    kerchunk_core_get()->release_ptt("queue");
+                }
+            } else {
+                g_ptt_hold_ticks = 0;
             }
         }
 
@@ -987,6 +1013,7 @@ int main(int argc, char **argv)
     KERCHUNK_LOG_I(LOG_MOD, "entering main loop (foreground=%d)", foreground);
 
     int prev_cor = 0;
+    int prev_ptt_for_cor = 0;  /* track PTT transitions for COR feedback */
 
     /* ── Main loop: 20ms tick — timers, socket, COR, config ── */
     while (g_running) {
@@ -1025,8 +1052,50 @@ int main(int argc, char **argv)
             kerchunk_core_unlock_config();
         }
 
-        /* COR polling */
+        /* COR polling.
+         * The RT97L ties its COS output to PTT state — whenever PTT is
+         * asserted (by us or anyone), COS goes active.  This creates a
+         * feedback loop: PTT → COS → COR assert → repeater stays in
+         * RECEIVING → PTT never drops.
+         *
+         * Fix: while PTT is physically active, suppress new COR asserts
+         * (they're feedback).  Also suppress for 500ms after PTT drops
+         * (radio takes time to fully stop transmitting).
+         *
+         * When PTT drops and prev_cor was high (feedback COR), synthesize
+         * a COR drop so the state machine can transition out of RECEIVING. */
+        int any_ptt = kerchunk_core_get_ptt();
+        /* Detect PTT drop from any source → start holdoff */
+        if (prev_ptt_for_cor && !any_ptt)
+            g_ptt_drop_us = tick_start;
+        prev_ptt_for_cor = any_ptt;
+        int in_holdoff = (g_ptt_drop_us > 0 &&
+                          tick_start - g_ptt_drop_us < 500000);
+
         int cor = kerchunk_hid_read_cor();
+        if (cor > 0 && (any_ptt || in_holdoff))
+            cor = -1;  /* discard feedback COR assert */
+
+        /* Force COR drop when PTT drops and we had feedback COR,
+         * OR when PTT is active and the raw HID COR has actually dropped
+         * (user unkeyed but we were suppressing reads). */
+        if (prev_cor && cor < 0) {
+            if (!any_ptt && !in_holdoff) {
+                /* PTT is off, holdoff expired — check if COR really dropped */
+                int raw_cor = kerchunk_hid_read_cor();
+                if (raw_cor <= 0)
+                    cor = 0;
+            } else if (any_ptt) {
+                /* PTT is active — peek at raw HID to see if user actually
+                 * unkeyed.  The RT97L may report COS=0 briefly between
+                 * the user's signal dropping and the PTT feedback kicking in.
+                 * If raw HID shows COR=0, the user unkeyed — force drop. */
+                int raw_cor = kerchunk_hid_read_cor();
+                if (raw_cor == 0)
+                    cor = 0;
+            }
+        }
+
         if (cor >= 0 && cor != prev_cor) {
             kerchunk_core_set_cor(cor);
             kerchevt_t cor_evt = {

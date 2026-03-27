@@ -321,7 +321,8 @@ static void on_state_change(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
     if (evt->state.new_state == 0 && g_pending && !is_quiet_hour()) {  /* 0 = RPT_IDLE */
-        g_core->request_ptt("cwid");
+        /* Don't assert PTT here — the queue handles its own PTT cycle.
+         * An extra ref here would never be released, leaking PTT forever. */
         send_cwid();
     }
 }

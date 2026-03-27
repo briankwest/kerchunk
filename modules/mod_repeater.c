@@ -55,6 +55,7 @@ static int g_tot_time_ms        = 180000;
 static int g_tot_warn_hz        = 440;
 static int g_cor_debounce_ms    = 150;
 static int g_require_id         = 0;
+static int g_software_relay     = 0;
 
 /* Caller tracking (for closed repeater) */
 static int g_caller_identified  = 0;
@@ -92,7 +93,8 @@ static void tail_expired(void *ud)
                                              tail_expired, NULL);
     } else if (g_state == RPT_HANG_WAIT) {
         g_hang_timer = -1;
-        g_core->release_ptt("repeater");
+        if (g_software_relay)
+            g_core->release_ptt("repeater");
         change_state(RPT_IDLE);
     }
 }
@@ -101,7 +103,10 @@ static void tot_expired(void *ud);
 
 static void start_receiving(void)
 {
-    g_core->request_ptt("repeater");
+    /* Only assert PTT for relay — when software_relay is off, the RT97L
+     * handles retransmission internally and external PTT causes COS feedback. */
+    if (g_software_relay)
+        g_core->request_ptt("repeater");
     change_state(RPT_RECEIVING);
 
     if (!kerchunk_core_get_emergency())
@@ -246,7 +251,8 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
         break;
 
     case RPT_TIMEOUT:
-        g_core->release_ptt("repeater");
+        if (g_software_relay)
+            g_core->release_ptt("repeater");
         change_state(RPT_IDLE);
         break;
 
@@ -313,6 +319,9 @@ static int repeater_configure(const kerchunk_config_t *cfg)
 
     const char *ri = kerchunk_config_get(cfg, "repeater", "require_identification");
     g_require_id = (ri && strcmp(ri, "on") == 0);
+
+    const char *sr = kerchunk_config_get(cfg, "repeater", "software_relay");
+    g_software_relay = (sr && strcmp(sr, "on") == 0);
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "tail=%dms hang=%dms tot=%dms debounce=%dms require_id=%s",
