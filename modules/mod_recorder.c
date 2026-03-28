@@ -183,11 +183,11 @@ static void rx_stop(void)
     g_rx_active = 0;
     g_core->audio_tap_unregister(rx_audio_tap);
 
-    /* Determine caller name */
+    /* Determine caller username for filename */
     const char *who = "unknown";
     if (g_rx_caller_id > 0) {
         const kerchunk_user_t *u = g_core->user_lookup_by_id(g_rx_caller_id);
-        if (u) who = u->name;
+        if (u) who = u->username;
     }
 
     save_recording("RX", g_rx_start_time, who, g_rx_buf, g_rx_len);

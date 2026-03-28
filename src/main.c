@@ -1005,7 +1005,14 @@ int main(int argc, char **argv)
     audio_thread_ctx_t audio_ctx = { NULL, NULL, NULL };
     plcode_ctcss_dec_create(&audio_ctx.ctcss_dec, sample_rate);
     plcode_dcs_dec_create(&audio_ctx.dcs_dec, sample_rate);
-    plcode_dtmf_dec_create(&audio_ctx.dtmf_dec, sample_rate);
+    /* DTMF decoder: tuned for hardware repeaters where the radio briefly
+     * drops COS during DTMF (CTCSS interrupted by tone).  Higher
+     * misses_to_end rides through the dropout without false digit-end.
+     * Higher min_off_frames prevents same-digit re-detection. */
+    plcode_dtmf_dec_opts_t dtmf_opts = {0};
+    dtmf_opts.misses_to_end = 10;   /* 200ms of silence to end digit (default 3 = 60ms) */
+    dtmf_opts.min_off_frames = 8;   /* 160ms cooldown for same digit (default 2 = 40ms) */
+    plcode_dtmf_dec_create_ex(&audio_ctx.dtmf_dec, sample_rate, &dtmf_opts);
 
     /* ── Start audio thread ── */
     pthread_t audio_tid;
@@ -1017,6 +1024,8 @@ int main(int argc, char **argv)
     KERCHUNK_LOG_I(LOG_MOD, "entering main loop (foreground=%d)", foreground);
 
     int prev_cor = 0;
+    int cor_drop_hold = 0;   /* ticks remaining before COR drop is accepted */
+    #define COR_DROP_HOLD_TICKS 15  /* 300ms at 20ms/tick — absorbs DTMF COS glitches */
 
     /* ── Main loop: 20ms tick — timers, socket, COR, config ── */
     while (g_running) {
@@ -1056,17 +1065,43 @@ int main(int argc, char **argv)
         }
 
         /* COR polling — read HID for carrier detect state changes.
-         * hidraw is event-driven: returns new state on change, -1 if no change. */
+         * hidraw is event-driven: returns new state on change, -1 if no change.
+         *
+         * COR drop is held for 300ms before being accepted.  DTMF tones
+         * cause the RT97L to briefly drop COS (DTMF interrupts CTCSS
+         * detection), which would otherwise tear down the session mid-DTMF.
+         * COR assert is processed immediately (no hold). */
         int cor = kerchunk_hid_read_cor();
-        if (cor >= 0 && cor != prev_cor) {
-            kerchunk_core_set_cor(cor);
+
+        if (cor == 1 && !prev_cor) {
+            /* COR assert — process immediately, cancel any pending drop */
+            cor_drop_hold = 0;
+            kerchunk_core_set_cor(1);
             kerchevt_t cor_evt = {
-                .type = cor ? KERCHEVT_COR_ASSERT : KERCHEVT_COR_DROP,
+                .type = KERCHEVT_COR_ASSERT,
                 .timestamp_us = tick_start,
-                .cor = { .active = cor },
+                .cor = { .active = 1 },
             };
             kerchevt_fire(&cor_evt);
-            prev_cor = cor;
+            prev_cor = 1;
+        } else if (cor == 0 && prev_cor) {
+            /* COR drop — start hold timer, don't fire yet */
+            cor_drop_hold = COR_DROP_HOLD_TICKS;
+        } else if (cor == 1 && prev_cor && cor_drop_hold > 0) {
+            /* COR reasserted during hold — cancel the pending drop */
+            cor_drop_hold = 0;
+        }
+
+        /* Count down and fire COR drop if hold timer expires */
+        if (cor_drop_hold > 0 && --cor_drop_hold == 0) {
+            kerchunk_core_set_cor(0);
+            kerchevt_t cor_evt = {
+                .type = KERCHEVT_COR_DROP,
+                .timestamp_us = tick_start,
+                .cor = { .active = 0 },
+            };
+            kerchevt_fire(&cor_evt);
+            prev_cor = 0;
         }
 
         /* Tick event */

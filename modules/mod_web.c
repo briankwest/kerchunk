@@ -177,12 +177,20 @@ static void ws_flush_ring(void)
     atomic_store_explicit(&g_ws_ring_r, r, memory_order_release);
 }
 
-/* ── Tap handlers (run on audio thread — zero syscalls) ── */
+/* ── Tap handlers (run on audio thread — zero syscalls) ──
+ *
+ * Only push frames when there's actual activity:
+ *   RX tap: only when COR is active (someone is transmitting to us)
+ *   TX tap: only when PTT is active (we are transmitting)
+ * This prevents streaming mic noise and playback silence to the browser
+ * when the repeater is idle. */
 
 static void ws_tx_playback_tap(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
     if (atomic_load(&g_ws_audio_count) <= 0 || !evt->audio.samples)
+        return;
+    if (!g_core->is_transmitting())
         return;
 
     const int16_t *src = evt->audio.samples;
@@ -200,20 +208,10 @@ static void ws_rx_audio_tap(const kerchevt_t *evt, void *ud)
     (void)ud;
     if (atomic_load(&g_ws_audio_count) <= 0 || !evt->audio.samples)
         return;
+    if (!g_core->is_receiving())
+        return;
 
     size_t n = evt->audio.n > 160 ? 160 : evt->audio.n;
-    int64_t sum_sq = 0;
-    for (size_t i = 0; i < n; i++) {
-        int32_t s = evt->audio.samples[i];
-        sum_sq += s * s;
-    }
-    int32_t rms = 0;
-    if (n > 0) {
-        int64_t avg = sum_sq / (int64_t)n;
-        while ((int64_t)rms * rms < avg) rms++;
-    }
-    if (rms < 100) return;
-
     ws_ring_push(evt->audio.samples, n, 0x00);
 }
 
@@ -1482,10 +1480,14 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
         }
     }
 
-    /* SSE event data from another thread via mg_wakeup() */
+    /* Cross-thread wakeup: SSE events or audio flush */
     if (ev == MG_EV_WAKEUP) {
         struct mg_str *data = (struct mg_str *)ev_data;
-        if (data->len > 0) {
+        if (data->len == 1 && data->buf[0] == 'A') {
+            /* Audio flush requested by audio_ws_thread */
+            ws_flush_ring();
+        } else if (data->len > 0) {
+            /* SSE event broadcast */
             for (struct mg_connection *t = c->mgr->conns; t != NULL; t = t->next) {
                 if (t->data[0] == 'E')
                     mg_printf(t, "data: %.*s\n\n", (int)data->len, data->buf);
@@ -1541,14 +1543,52 @@ static void web_event_handler(const kerchevt_t *evt, void *ud)
         mg_wakeup(&g_mgr, g_listener_id, json, (size_t)jlen);
 }
 
-/* ── Server thread ── */
+/* ── Server threads ── */
 
+/* Audio flush thread — wakes the mongoose thread on a tight 5ms cadence
+ * to flush the SPSC ring to WebSocket clients.  Decoupled from mongoose
+ * poll so TLS handshakes and HTTP processing can't stall audio delivery.
+ *
+ * mg_ws_send() is not thread-safe, so we use mg_wakeup() (which IS
+ * thread-safe) to wake the mongoose poll.  The mongoose event handler
+ * sees MG_EV_WAKEUP with data "A" and calls ws_flush_ring() on its
+ * own thread. */
+static pthread_t g_audio_ws_thread;
+static volatile int g_audio_ws_running;
+
+static void *audio_ws_thread(void *arg)
+{
+    (void)arg;
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+
+    while (g_audio_ws_running) {
+        deadline.tv_nsec += 5000000L;  /* 5ms cadence */
+        if (deadline.tv_nsec >= 1000000000L) {
+            deadline.tv_sec++;
+            deadline.tv_nsec -= 1000000000L;
+        }
+
+        /* Only wake mongoose when there are audio frames to flush */
+        if (atomic_load(&g_ws_audio_count) > 0) {
+            unsigned r = atomic_load_explicit(&g_ws_ring_r, memory_order_relaxed);
+            unsigned w = atomic_load_explicit(&g_ws_ring_w, memory_order_acquire);
+            if (r != w)
+                mg_wakeup(&g_mgr, g_listener_id, "A", 1);
+        }
+
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL);
+    }
+    return NULL;
+}
+
+/* HTTP/WebSocket thread — handles all mongoose I/O on a single thread.
+ * Audio flush is triggered by MG_EV_WAKEUP from the audio flush thread. */
 static void *web_thread(void *arg)
 {
     (void)arg;
     while (g_running) {
-        ws_flush_ring();           /* drain SPSC ring → WebSocket clients */
-        mg_mgr_poll(&g_mgr, 1);   /* process events + flush TCP output */
+        mg_mgr_poll(&g_mgr, 5);  /* 5ms poll timeout */
     }
     return NULL;
 }
@@ -1697,6 +1737,14 @@ static int web_configure(const kerchunk_config_t *cfg)
         return 0;
     }
 
+    /* Start audio flush thread — wakes mongoose for WebSocket audio */
+    g_audio_ws_running = 1;
+    if (pthread_create(&g_audio_ws_thread, NULL, audio_ws_thread, NULL) != 0) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "audio flush thread failed — WebSocket audio may stutter");
+        g_audio_ws_running = 0;
+    }
+
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "listening on %s://%s:%d%s",
                 g_tls_active ? "https" : "http",
@@ -1721,8 +1769,13 @@ static void web_unload(void)
     for (int i = 0; i <= 15; i++)
         g_core->unsubscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + i), web_event_handler);
 
-    /* Stop the web thread — mg_mgr_poll returns quickly (1ms timeout),
-     * so the thread exits within a few ms of g_running going to 0. */
+    /* Stop audio flush thread first (it wakes mongoose via mg_wakeup) */
+    if (g_audio_ws_running) {
+        g_audio_ws_running = 0;
+        pthread_join(g_audio_ws_thread, NULL);
+    }
+
+    /* Stop the web thread */
     if (g_running) {
         g_running = 0;
         pthread_join(g_web_thread, NULL);
