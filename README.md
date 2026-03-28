@@ -66,7 +66,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 |  |  mod_web        HTTP server + SSE + web dashboard        | |
 |  |  mod_webhook    HTTP POST notifications on events        | |
 |  |  mod_scrambler  Frequency inversion voice scrambler      | |
-|  |  mod_sdr        RTL-SDR single-channel GMRS/FRS monitor   | |
+|  |  mod_sdr        RTL-SDR single-channel GMRS/FRS monitor  | |
 |  +----------------------------------------------------------+ |
 +---------------------------------------------------------------+
 ```
