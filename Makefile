@@ -1,7 +1,7 @@
 CC       ?= cc
 AR       ?= ar
 CFLAGS    = -std=c11 -Wall -Wextra -Wpedantic -O2 \
-            -Iinclude -Ilibplcode/include -D_POSIX_C_SOURCE=200809L
+            -Iinclude -Ilibplcode/include -Icli -D_POSIX_C_SOURCE=200809L
 LDFLAGS   = -lm -ldl -lpthread
 
 # PortAudio (required)
@@ -43,7 +43,8 @@ endif
 DAEMON_SRC = src/main.c src/kerchunk_core.c src/kerchunk_events.c src/kerchunk_modules.c \
              src/kerchunk_queue.c src/kerchunk_audio.c src/kerchunk_hid.c src/kerchunk_socket.c \
              src/kerchunk_config.c src/kerchunk_log.c src/kerchunk_user.c src/kerchunk_wav.c \
-             src/kerchunk_timer.c src/kerchunk_resp.c src/kerchunk_evt_json.c
+             src/kerchunk_timer.c src/kerchunk_resp.c src/kerchunk_evt_json.c \
+             src/kerchunk_console.c
 DAEMON_OBJ = $(DAEMON_SRC:.c=.o)
 DAEMON_BIN = kerchunkd
 
@@ -115,8 +116,8 @@ ifeq ($(UNAME_S),Darwin)
   EXPORT_FLAGS = -Wl,-export_dynamic
 endif
 
-$(DAEMON_BIN): $(DAEMON_OBJ) $(PLCODE_LIB)
-	$(CC) $(CFLAGS) $(EXPORT_FLAGS) -o $@ $(DAEMON_OBJ) $(PLCODE_LIB) $(LDFLAGS)
+$(DAEMON_BIN): $(DAEMON_OBJ) cli/linenoise.o $(PLCODE_LIB)
+	$(CC) $(CFLAGS) $(EXPORT_FLAGS) -o $@ $(DAEMON_OBJ) cli/linenoise.o $(PLCODE_LIB) $(LDFLAGS)
 
 $(CLI_BIN): $(CLI_OBJ)
 	$(CC) $(CFLAGS) -o $@ $(CLI_OBJ) -lpthread

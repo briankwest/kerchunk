@@ -34,6 +34,9 @@ void kerchunk_log_msg(int level, const char *module, const char *fmt, ...);
 void kerchunk_log_tee_file(FILE *fp);
 void kerchunk_log_tee_remove(void);
 
+/* Enable/disable console log routing (embedded CLI interleave) */
+void kerchunk_log_set_console_active(int active);
+
 /* Convenience macros */
 #define KERCHUNK_LOG_E(mod, ...) kerchunk_log_msg(KERCHUNK_LOG_ERROR, mod, __VA_ARGS__)
 #define KERCHUNK_LOG_W(mod, ...) kerchunk_log_msg(KERCHUNK_LOG_WARN, mod, __VA_ARGS__)

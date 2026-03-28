@@ -100,3 +100,8 @@ kerchunk_scrambler_fn kerchunk_core_get_tx_scrambler(void **ctx)
 
 void kerchunk_core_lock_config(void) {}
 void kerchunk_core_unlock_config(void) {}
+
+void kerchunk_console_log_line(const char *line)
+{
+    (void)line;
+}

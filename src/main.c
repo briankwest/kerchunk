@@ -10,6 +10,7 @@
 
 #include "kerchunk.h"
 #include "kerchunk_log.h"
+#include "kerchunk_console.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,7 +44,7 @@ extern void kerchunk_socket_poll(void);
 
 #include "plcode.h"
 
-static volatile sig_atomic_t g_running = 1;
+volatile sig_atomic_t g_running = 1;  /* non-static: console thread sets to 0 */
 static volatile sig_atomic_t g_reload  = 0;
 static time_t g_start_time = 0;  /* Daemon start — never resets */
 
@@ -1033,6 +1034,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* Start embedded console if running in foreground with a terminal */
+    if (foreground && isatty(STDIN_FILENO))
+        kerchunk_console_init();
+
     KERCHUNK_LOG_I(LOG_MOD, "entering main loop (foreground=%d)", foreground);
 
     int prev_cor = 0;
@@ -1142,6 +1147,8 @@ int main(int argc, char **argv)
     }
 
     /* ── Shutdown ── */
+    kerchunk_console_shutdown();
+
     KERCHUNK_LOG_I(LOG_MOD, "shutting down...");
 
     kerchevt_t shutdown_evt = { .type = KERCHEVT_SHUTDOWN, .timestamp_us = now_us() };
