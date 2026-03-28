@@ -7,11 +7,42 @@ on:
     branches: [main]
 
 jobs:
-  build-test:
+  # Build and test libplcode
+  libplcode:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout with submodules
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build and test libplcode
+        run: |
+          cd libplcode
+          make
+          make test
+
+  # Build libnemo-normalize (requires OpenFst)
+  libnemo-normalize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install OpenFst
+        run: sudo apt-get update && sudo apt-get install -y libfst-dev g++
+
+      - name: Build libnemo-normalize
+        run: |
+          cd libnemo_normalize
+          make CONDA_PREFIX=/usr libnemo_normalize.so
+
+  # Build and test kerchunk (depends on both libs)
+  kerchunk:
+    needs: [libplcode, libnemo-normalize]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
