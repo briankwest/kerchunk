@@ -21,6 +21,7 @@ static kerchunk_core_t *g_core;
 /* Config: repeater-wide default TX tone */
 static uint16_t g_default_tx_ctcss;
 static uint16_t g_default_tx_dcs;
+static int16_t  g_ctcss_amplitude = 800;  /* CTCSS tone amplitude (configurable) */
 
 /* Current encoder */
 static void *g_enc;
@@ -46,8 +47,7 @@ static void create_encoder(uint16_t ctcss_freq_x10, uint16_t dcs_code)
 
     if (ctcss_freq_x10 > 0) {
         plcode_ctcss_enc_t *enc = NULL;
-        /* Amplitude ~5% of full scale for sub-audible tone */
-        if (plcode_ctcss_enc_create(&enc, RATE, ctcss_freq_x10, 1600) == PLCODE_OK) {
+        if (plcode_ctcss_enc_create(&enc, RATE, ctcss_freq_x10, g_ctcss_amplitude) == PLCODE_OK) {
             g_enc      = enc;
             g_enc_type = KERCHUNK_TX_ENC_CTCSS;
             kerchunk_core_set_tx_encoder(enc, KERCHUNK_TX_ENC_CTCSS);
@@ -108,10 +108,13 @@ static int txcode_configure(const kerchunk_config_t *cfg)
 {
     g_default_tx_ctcss = (uint16_t)kerchunk_config_get_int(cfg, "repeater", "tx_ctcss", 0);
     g_default_tx_dcs   = (uint16_t)kerchunk_config_get_int(cfg, "repeater", "tx_dcs", 0);
+    g_ctcss_amplitude  = (int16_t)kerchunk_config_get_int(cfg, "repeater", "ctcss_amplitude", 800);
+    if (g_ctcss_amplitude < 100)   g_ctcss_amplitude = 100;
+    if (g_ctcss_amplitude > 4000)  g_ctcss_amplitude = 4000;
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "default tx_ctcss=%u tx_dcs=%u",
-                g_default_tx_ctcss, g_default_tx_dcs);
+                "default tx_ctcss=%u tx_dcs=%u ctcss_amplitude=%d",
+                g_default_tx_ctcss, g_default_tx_dcs, g_ctcss_amplitude);
     return 0;
 }
 
