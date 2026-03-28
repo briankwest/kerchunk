@@ -181,9 +181,9 @@ static void on_cor_assert(const kerchevt_t *evt, void *ud)
 
     g_in_call = 1;
     g_call_start = time(NULL);
-    g_call_user_id = 0;
-    g_call_user_name[0] = '\0';
-    g_call_method[0] = '\0';
+    /* Don't reset caller ID here — CALLER_IDENTIFIED fires before
+     * COR_ASSERT (login session re-identifies during COR debounce).
+     * Resetting here wipes the identification. Reset in on_cor_drop. */
     g_call_recording[0] = '\0';
     g_call_emergency = kerchunk_core_get_emergency();
     g_sq_sum = 0;
@@ -206,6 +206,9 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
      */
     write_cdr();
     g_in_call = 0;
+    g_call_user_id = 0;
+    g_call_user_name[0] = '\0';
+    g_call_method[0] = '\0';
 }
 
 static void on_caller_identified(const kerchevt_t *evt, void *ud)
