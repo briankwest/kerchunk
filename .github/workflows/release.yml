@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-debs:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install build dependencies (amd64)
+        if: matrix.arch == 'amd64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config devscripts debhelper fakeroot lintian \
+            portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
+            libasound2-dev libfst-dev
+
+      - name: Build libplcode-dev .deb (amd64)
+        if: matrix.arch == 'amd64'
+        run: |
+          cd libplcode
+          scripts/generate-changelog.sh "0.1.0"
+          dpkg-buildpackage -us -uc -b
+          sudo dpkg -i ../libplcode-dev_*.deb
+
+      - name: Build libnemo-normalize .deb (amd64)
+        if: matrix.arch == 'amd64'
+        run: |
+          cd libnemo_normalize
+          scripts/generate-changelog.sh "0.1.0"
+          dpkg-buildpackage -us -uc -b
+          sudo dpkg -i ../libnemo-normalize*.deb
+
+      - name: Build kerchunk .deb (amd64)
+        if: matrix.arch == 'amd64'
+        run: |
+          scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
+          dpkg-buildpackage -us -uc -b
+
+      - name: Set up QEMU (arm64)
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build all .deb packages (arm64)
+        if: matrix.arch == 'arm64'
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: aarch64
+          distro: ubuntu24.04
+          githubToken: ${{ github.token }}
+          dockerRunArgs: --volume "${PWD}:/workspace"
+          run: |
+            cd /workspace
+            apt-get update
+            apt-get install -y \
+              build-essential pkg-config devscripts debhelper fakeroot \
+              portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
+              libasound2-dev libfst-dev
+
+            # Build and install libplcode
+            cd libplcode
+            scripts/generate-changelog.sh "0.1.0"
+            dpkg-buildpackage -us -uc -b
+            dpkg -i ../libplcode-dev_*.deb
+            cd ..
+
+            # Build and install libnemo-normalize
+            cd libnemo_normalize
+            scripts/generate-changelog.sh "0.1.0"
+            dpkg-buildpackage -us -uc -b
+            dpkg -i ../libnemo-normalize*.deb
+            cd ..
+
+            # Build kerchunk
+            scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
+            dpkg-buildpackage -us -uc -b
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp ../*.deb dist/ 2>/dev/null || true
+          cp *.deb dist/ 2>/dev/null || true
+          ls -lh dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs-${{ matrix.arch }}
+          path: dist/*.deb
+
+  create-release:
+    needs: build-debs
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate release notes
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+
+          cat > release_notes.md << 'HEADER'
+          ## kerchunkd ${{ github.ref_name }}
+
+          GMRS/Amateur repeater controller daemon.
+
+          ### Changes
+          HEADER
+
+          git log --pretty=format:"- %s (%h)" "${PREV_TAG}..HEAD" >> release_notes.md
+
+          cat >> release_notes.md << 'FOOTER'
+
+          ### Installation
+
+          ```bash
+          # Install dependencies first
+          sudo dpkg -i libplcode-dev_*.deb
+          sudo dpkg -i libnemo-normalize-data_*.deb libnemo-normalize_*.deb
+
+          # Install kerchunk
+          sudo dpkg -i kerchunk_*.deb
+          sudo apt-get -f install   # resolve any missing deps
+
+          # Configure and start
+          sudo vi /etc/kerchunk/kerchunk.conf
+          sudo systemctl start kerchunkd
+          ```
+
+          ### Packages
+          FOOTER
+
+          echo "" >> release_notes.md
+          echo "| File | Size |" >> release_notes.md
+          echo "|------|------|" >> release_notes.md
+          for f in dist/*.deb; do
+            name=$(basename "$f")
+            size=$(du -h "$f" | cut -f1)
+            echo "| \`${name}\` | ${size} |" >> release_notes.md
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          files: dist/*.deb
+          draft: false
+          prerelease: false
