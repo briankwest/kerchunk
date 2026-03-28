@@ -431,7 +431,6 @@ static int g_relay_drain;    /* Samples remaining in drain timer after COR drop 
 static int g_relay_drain_ms = 500; /* Configurable relay drain time */
 static int g_relay_was_active; /* Track COR transition for drain trigger */
 static int g_queue_ptt;      /* 1 while the queue holds a PTT ref */
-static uint64_t g_ptt_drop_us;  /* timestamp of last PTT release (any source) */
 static int g_queue_fired_drain; /* 1 after QUEUE_DRAIN event fired */
 static int g_tx_delay_ms;   /* silence after PTT assert before audio */
 static int g_tx_tail_ms;    /* silence after last audio before PTT release */
@@ -793,7 +792,6 @@ static void *audio_thread_fn(void *arg)
                 kerchunk_audio_playback_pending() == 0) {
                 if (++g_ptt_hold_ticks >= 3) {
                     g_queue_ptt = 0;
-                    g_ptt_drop_us = now_us();
                     g_tx_tail_rem = -1;
                     g_ptt_hold_ticks = 0;
                     kerchunk_core_get()->release_ptt("queue");
@@ -921,9 +919,15 @@ int main(int argc, char **argv)
         .hw_rate         = kerchunk_config_get_int(cfg, "audio", "hw_rate", 0),
         .preemphasis     = 0,
         .preemphasis_alpha = 0.95f,
+        .speaker_volume  = kerchunk_config_get_int(cfg, "audio", "speaker_volume", -1),
+        .mic_volume      = kerchunk_config_get_int(cfg, "audio", "mic_volume", -1),
+        .agc             = -1,
     };
     if (!audio_cfg.capture_device)  audio_cfg.capture_device  = "default";
     if (!audio_cfg.playback_device) audio_cfg.playback_device = "default";
+
+    const char *agc = kerchunk_config_get(cfg, "audio", "agc");
+    if (agc) audio_cfg.agc = (strcmp(agc, "on") == 0) ? 1 : 0;
 
     const char *pe = kerchunk_config_get(cfg, "audio", "preemphasis");
     if (pe && strcmp(pe, "on") == 0) {
@@ -1013,7 +1017,6 @@ int main(int argc, char **argv)
     KERCHUNK_LOG_I(LOG_MOD, "entering main loop (foreground=%d)", foreground);
 
     int prev_cor = 0;
-    int prev_ptt_for_cor = 0;  /* track PTT transitions for COR feedback */
 
     /* ── Main loop: 20ms tick — timers, socket, COR, config ── */
     while (g_running) {
@@ -1052,50 +1055,9 @@ int main(int argc, char **argv)
             kerchunk_core_unlock_config();
         }
 
-        /* COR polling.
-         * The RT97L ties its COS output to PTT state — whenever PTT is
-         * asserted (by us or anyone), COS goes active.  This creates a
-         * feedback loop: PTT → COS → COR assert → repeater stays in
-         * RECEIVING → PTT never drops.
-         *
-         * Fix: while PTT is physically active, suppress new COR asserts
-         * (they're feedback).  Also suppress for 500ms after PTT drops
-         * (radio takes time to fully stop transmitting).
-         *
-         * When PTT drops and prev_cor was high (feedback COR), synthesize
-         * a COR drop so the state machine can transition out of RECEIVING. */
-        int any_ptt = kerchunk_core_get_ptt();
-        /* Detect PTT drop from any source → start holdoff */
-        if (prev_ptt_for_cor && !any_ptt)
-            g_ptt_drop_us = tick_start;
-        prev_ptt_for_cor = any_ptt;
-        int in_holdoff = (g_ptt_drop_us > 0 &&
-                          tick_start - g_ptt_drop_us < 500000);
-
+        /* COR polling — read HID for carrier detect state changes.
+         * hidraw is event-driven: returns new state on change, -1 if no change. */
         int cor = kerchunk_hid_read_cor();
-        if (cor > 0 && (any_ptt || in_holdoff))
-            cor = -1;  /* discard feedback COR assert */
-
-        /* Force COR drop when PTT drops and we had feedback COR,
-         * OR when PTT is active and the raw HID COR has actually dropped
-         * (user unkeyed but we were suppressing reads). */
-        if (prev_cor && cor < 0) {
-            if (!any_ptt && !in_holdoff) {
-                /* PTT is off, holdoff expired — check if COR really dropped */
-                int raw_cor = kerchunk_hid_read_cor();
-                if (raw_cor <= 0)
-                    cor = 0;
-            } else if (any_ptt) {
-                /* PTT is active — peek at raw HID to see if user actually
-                 * unkeyed.  The RT97L may report COS=0 briefly between
-                 * the user's signal dropping and the PTT feedback kicking in.
-                 * If raw HID shows COR=0, the user unkeyed — force drop. */
-                int raw_cor = kerchunk_hid_read_cor();
-                if (raw_cor == 0)
-                    cor = 0;
-            }
-        }
-
         if (cor >= 0 && cor != prev_cor) {
             kerchunk_core_set_cor(cor);
             kerchevt_t cor_evt = {

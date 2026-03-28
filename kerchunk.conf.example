@@ -55,6 +55,13 @@ playback_device = default        ; PortAudio playback device name
 ;                                ; resampling at 48kHz gives clean results.
 preemphasis = off                ; on | off (RT-97L handles this in hardware)
 ; preemphasis_alpha = 0.95       ; Pre-emphasis filter coefficient (if enabled)
+;
+; ALSA mixer levels — set on startup to prevent USB re-enumeration resets.
+; CM119 (RIM-Lite) resets mixer to defaults every time USB reconnects.
+; Values: -1 or omit = don't touch, let ALSA defaults apply.
+speaker_volume = 150             ; Speaker playback volume (0-151, 150 ≈ -0.1 dB)
+mic_volume = 12                  ; Mic capture volume (0-16, 12 ≈ +18 dB)
+agc = off                        ; Auto Gain Control (off recommended — interferes with CTCSS)
 
 ; ----------------------------------------------------------------------------
 ; USB HID interface (RIM-Lite v2 / CM119)

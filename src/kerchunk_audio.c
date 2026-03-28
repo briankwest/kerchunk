@@ -20,6 +20,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#ifdef __linux__
+#include <alsa/asoundlib.h>
+#endif
+
 #define LOG_MOD "audio"
 
 /* ── Pre-emphasis filter state ── */
@@ -284,6 +288,68 @@ int kerchunk_audio_init(const kerchunk_audio_config_t *cfg)
 
     ring_init(&g_cap_ring);
     ring_init(&g_play_ring);
+
+#ifdef __linux__
+    /* Set ALSA mixer levels from config before opening the stream.
+     * USB audio devices (CM119) reset mixer state on every plug/enumeration,
+     * so we must configure volume/AGC at startup. */
+    {
+        snd_mixer_t *mixer = NULL;
+        if (snd_mixer_open(&mixer, 0) == 0) {
+            /* Find the card from the PortAudio device name.
+             * For USB devices, try hw:0 first (most common). */
+            if (snd_mixer_attach(mixer, "hw:0") == 0 &&
+                snd_mixer_selem_register(mixer, NULL, NULL) == 0 &&
+                snd_mixer_load(mixer) == 0) {
+
+                snd_mixer_elem_t *elem;
+                for (elem = snd_mixer_first_elem(mixer); elem;
+                     elem = snd_mixer_elem_next(elem)) {
+                    const char *name = snd_mixer_selem_get_name(elem);
+                    if (!name) continue;
+
+                    /* Speaker Playback Volume */
+                    if (cfg->speaker_volume >= 0 &&
+                        strcmp(name, "Speaker") == 0 &&
+                        snd_mixer_selem_has_playback_volume(elem)) {
+                        long min, max;
+                        snd_mixer_selem_get_playback_volume_range(elem, &min, &max);
+                        long vol = cfg->speaker_volume;
+                        if (vol > max) vol = max;
+                        snd_mixer_selem_set_playback_volume_all(elem, vol);
+                        KERCHUNK_LOG_I(LOG_MOD, "mixer: Speaker volume = %ld/%ld",
+                                       vol, max);
+                    }
+
+                    /* Mic Capture Volume */
+                    if (cfg->mic_volume >= 0 &&
+                        strcmp(name, "Mic") == 0 &&
+                        snd_mixer_selem_has_capture_volume(elem)) {
+                        long min, max;
+                        snd_mixer_selem_get_capture_volume_range(elem, &min, &max);
+                        long vol = cfg->mic_volume;
+                        if (vol > max) vol = max;
+                        snd_mixer_selem_set_capture_volume_all(elem, vol);
+                        KERCHUNK_LOG_I(LOG_MOD, "mixer: Mic Capture volume = %ld/%ld",
+                                       vol, max);
+                    }
+
+                    /* Auto Gain Control */
+                    if (cfg->agc >= 0 &&
+                        strcmp(name, "Auto Gain Control") == 0 &&
+                        snd_mixer_selem_has_playback_switch(elem)) {
+                        snd_mixer_selem_set_playback_switch_all(elem, cfg->agc);
+                        KERCHUNK_LOG_I(LOG_MOD, "mixer: AGC = %s",
+                                       cfg->agc ? "on" : "off");
+                    }
+                }
+            } else {
+                KERCHUNK_LOG_W(LOG_MOD, "mixer: could not attach to hw:0");
+            }
+            snd_mixer_close(mixer);
+        }
+    }
+#endif
 
     /* Suppress ALSA/JACK stderr noise during PortAudio init.
      * On headless Linux, Pa_Initialize() triggers ALSA's device

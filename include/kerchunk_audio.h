@@ -19,6 +19,9 @@ typedef struct {
     int hw_rate;                   /* Force hardware rate (0=auto, 48000=recommended for USB) */
     int preemphasis;
     float preemphasis_alpha;
+    int speaker_volume;            /* Speaker playback volume 0-151 (-1 = don't set) */
+    int mic_volume;                /* Mic capture volume 0-16 (-1 = don't set) */
+    int agc;                       /* Auto Gain Control: 0=off, 1=on, -1=don't set */
 } kerchunk_audio_config_t;
 
 /* Initialize audio engine. Returns 0 on success. */
