@@ -1,0 +1,31 @@
+[Unit]
+Description=kerchunkd GMRS Repeater Controller
+After=network.target sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/kerchunkd -c /etc/kerchunk/kerchunk.conf -f
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+User=kerchunk
+Group=kerchunk
+WorkingDirectory=/var/lib/kerchunk
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kerchunkd
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/kerchunk /var/log/kerchunk /etc/kerchunk /run/kerchunk
+ProtectHome=true
+
+# Allow access to USB HID and audio devices
+SupplementaryGroups=audio plugdev
+
+[Install]
+WantedBy=multi-user.target

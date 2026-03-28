@@ -1,0 +1,44 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create kerchunk system user and group
+        if ! getent group kerchunk >/dev/null 2>&1; then
+            addgroup --system kerchunk
+        fi
+        if ! getent passwd kerchunk >/dev/null 2>&1; then
+            adduser --system --ingroup kerchunk --home /var/lib/kerchunk \
+                    --no-create-home --gecos "kerchunkd daemon" kerchunk
+        fi
+
+        # Add kerchunk user to audio and plugdev groups for HID/sound access
+        usermod -a -G audio kerchunk 2>/dev/null || true
+        usermod -a -G plugdev kerchunk 2>/dev/null || true
+
+        # Create runtime directories
+        install -d -o kerchunk -g kerchunk -m 0755 /var/lib/kerchunk
+        install -d -o kerchunk -g kerchunk -m 0755 /var/lib/kerchunk/voicemail
+        install -d -o kerchunk -g kerchunk -m 0755 /var/lib/kerchunk/recordings
+        install -d -o kerchunk -g kerchunk -m 0755 /var/lib/kerchunk/cdr
+        install -d -o kerchunk -g kerchunk -m 0750 /var/log/kerchunk
+        install -d -o kerchunk -g kerchunk -m 0755 /run/kerchunk
+
+        # Create TTS cache directory
+        install -d -o kerchunk -g kerchunk -m 0755 /usr/share/kerchunk/sounds/cache
+        install -d -o kerchunk -g kerchunk -m 0755 /usr/share/kerchunk/sounds/cache/tts
+
+        # Ensure config directory is writable for users.conf updates from web UI
+        chown kerchunk:kerchunk /etc/kerchunk
+        chmod 0755 /etc/kerchunk
+
+        # Reload systemd to pick up the new service unit
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

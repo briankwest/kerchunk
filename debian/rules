@@ -1,0 +1,70 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# Use system-installed libplcode instead of the git submodule
+MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+SYSTEM_PLCODE_LIB := /usr/lib/$(MULTIARCH)/libplcode.a
+
+# libnemo_normalize: override submodule detection to use system package
+SYSTEM_NEMO_CFLAGS := -I/usr/include -DHAVE_NEMO_NORMALIZE
+SYSTEM_NEMO_LDFLAGS := -L/usr/lib/$(MULTIARCH) -lnemo_normalize
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(MAKE) all \
+		PLCODE_LIB=$(SYSTEM_PLCODE_LIB) \
+		PLCODE_DIR=/usr \
+		NEMO_CFLAGS="$(SYSTEM_NEMO_CFLAGS)" \
+		NEMO_LDFLAGS="$(SYSTEM_NEMO_LDFLAGS)" \
+		NEMO_DEP=""
+
+override_dh_auto_test:
+	$(MAKE) test \
+		PLCODE_LIB=$(SYSTEM_PLCODE_LIB) \
+		PLCODE_DIR=/usr \
+		NEMO_CFLAGS="$(SYSTEM_NEMO_CFLAGS)" \
+		NEMO_LDFLAGS="$(SYSTEM_NEMO_LDFLAGS)" \
+		NEMO_DEP=""
+
+override_dh_auto_install:
+	# Binaries
+	install -d debian/kerchunk/usr/bin
+	install -m 755 kerchunkd debian/kerchunk/usr/bin/
+	install -m 755 kerchunk debian/kerchunk/usr/bin/
+	# Modules
+	install -d debian/kerchunk/usr/lib/kerchunk
+	install -m 755 modules/*.so debian/kerchunk/usr/lib/kerchunk/
+	# Config
+	install -d debian/kerchunk/etc/kerchunk
+	install -m 644 kerchunk.conf.example debian/kerchunk/etc/kerchunk/kerchunk.conf
+	install -m 644 users.conf.example debian/kerchunk/etc/kerchunk/users.conf.example
+	# Sounds
+	install -d debian/kerchunk/usr/share/kerchunk/sounds
+	cp -r sounds/caller sounds/numbers sounds/system sounds/time \
+	      sounds/voicemail sounds/weather \
+	      debian/kerchunk/usr/share/kerchunk/sounds/
+	# Web dashboard
+	install -d debian/kerchunk/usr/share/kerchunk/web
+	install -m 644 web/*.html web/*.js web/*.json web/*.ico web/*.png \
+	      debian/kerchunk/usr/share/kerchunk/web/
+	# Documentation
+	install -d debian/kerchunk/usr/share/doc/kerchunk
+	install -m 644 README.md debian/kerchunk/usr/share/doc/kerchunk/
+	install -m 644 ARCHITECTURE.md debian/kerchunk/usr/share/doc/kerchunk/
+	install -m 644 USAGE.md debian/kerchunk/usr/share/doc/kerchunk/
+	install -m 644 FEATURES.md debian/kerchunk/usr/share/doc/kerchunk/
+	install -m 644 kerchunk.conf.example debian/kerchunk/usr/share/doc/kerchunk/
+
+override_dh_auto_clean:
+	$(MAKE) clean || true
+
+# Do not strip module shared objects (they have no debug symbols worth stripping)
+override_dh_strip:
+	dh_strip
+
+# Tell dh_installsystemd about our service unit name
+override_dh_installsystemd:
+	dh_installsystemd --name=kerchunkd

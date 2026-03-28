@@ -1,0 +1,39 @@
+Source: kerchunk
+Section: hamradio
+Priority: optional
+Maintainer: Brian West <brian@bkw.org>
+Build-Depends: debhelper-compat (= 13),
+               build-essential,
+               pkg-config,
+               portaudio19-dev,
+               libcurl4-openssl-dev,
+               libssl-dev,
+               librtlsdr-dev,
+               libplcode-dev,
+               libnemo-normalize
+Standards-Version: 4.6.2
+Homepage: https://github.com/briankwest/kerchunk
+Rules-Requires-Root: no
+
+Package: kerchunk
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         adduser
+Recommends: libnemo-normalize,
+            libnemo-normalize-data,
+            librtlsdr0 | librtlsdr2
+Description: GMRS repeater controller daemon with DSP and web dashboard
+ kerchunkd is a lightweight C11 repeater controller for GMRS radios using
+ USB HID interfaces (CM108/CM119/RIM-Lite). It provides real-time CTCSS/DCS/DTMF
+ decoding via libplcode, a priority audio queue with automatic PTT management,
+ and a modular event-driven architecture with 24 dynamically loaded modules.
+ .
+ Features include CW ID (FCC 95.1751 compliant), weather announcements,
+ NWS alert monitoring, text-to-speech via ElevenLabs, voicemail, call detail
+ records, transmission recording, voice scrambler, SDR channel monitoring,
+ FreeSWITCH autopatch, OTP authentication, and an embedded HTTPS web dashboard
+ with real-time audio streaming via WebSocket.
+ .
+ This package provides the kerchunkd daemon, the kerchunk CLI, all modules,
+ sound files, web dashboard, and systemd service.

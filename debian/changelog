@@ -1,0 +1,12 @@
+kerchunk (1.0.0) stable; urgency=medium
+
+  * Initial Debian package release
+  * kerchunkd GMRS repeater controller daemon
+  * kerchunk CLI for runtime control
+  * 24 dynamically loaded modules
+  * Embedded HTTPS web dashboard with WebSocket audio
+  * FCC 95.1751 compliant CW ID and voice identification
+  * NWS alert monitoring with TTS announcements
+  * Systemd service with security hardening
+
+ -- Brian West <brian@bkw.org>  Fri, 27 Mar 2026 12:00:00 -0500
