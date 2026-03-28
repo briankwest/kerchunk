@@ -261,7 +261,7 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-This grants `audio` group access to the C-Media CM119 HID interface (vendor `0d8c`, product `013a`).
+This grants `audio` group access to the C-Media CM119 HID interface (vendor `0d8c`, product `013a`) and creates a stable `SYMLINK+="rimlite"` device path at `/dev/rimlite`.
 
 Without the audio group membership, PortAudio will report 0 devices and the daemon will run without audio. Without the udev rule, HID access requires running as root.
 
@@ -361,6 +361,8 @@ Controls the IDLE/RECEIVING/TAIL_WAIT/HANG_WAIT/TIMEOUT RX state machine and clo
 | `tx_tail` | ms | `200` | Silence after audio before PTT release |
 | `software_relay` | on/off | `off` | Relay RX audio to TX in software |
 | `relay_drain` | ms | `500` | Continue relaying after COR drop (0-5000) |
+| `ctcss_amplitude` | int | `800` | CTCSS encoder amplitude (100-4000) |
+| `cor_drop_hold` | int | `1000` | COR drop hold time in ms (absorbs DTMF COS glitches) |
 | `require_identification` | on/off | `off` | Closed repeater: deny unless identified |
 | `tx_ctcss` | int | `0` | Default TX CTCSS (freq x10) |
 | `tx_dcs` | int | `0` | Default TX DCS code |
@@ -450,7 +452,7 @@ Config section: `[time]`
 
 ### mod_recorder — Transmission Recording
 
-Records RX (per COR cycle) and TX (per queue drain) to timestamped WAV files.
+Records RX (per COR cycle) and TX (per queue drain) to timestamped WAV files. Recording filenames use the username (not display name).
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -583,7 +585,7 @@ Public routes (`/api/status`, `/api/weather`, `/api/nws`, `/api/audio` WebSocket
 
 Config section: `[web]`
 
-API: `GET /api/status` (public), `GET /api/weather` (public), `GET /api/nws` (public), `/api/audio` WebSocket (public), `POST /api/register` (public), `GET /api/stats`, `GET /api/users`, `GET /api/groups`, `GET /api/config`, `GET /api/events` (SSE), `POST /api/cmd`, `POST /api/config/reload`, CRUD `POST/PUT/DELETE /api/users/{id}`, `POST/PUT/DELETE /api/groups/{id}`
+API: `GET /api/status` (public), `GET /api/weather` (public), `GET /api/nws` (public), `/api/audio` WebSocket (public), `POST /api/register` (public), `GET /api/stats`, `GET /api/users`, `GET /api/groups`, `GET /api/config`, `GET /api/commands`, `GET /api/events` (SSE), `POST /api/cmd`, `POST /api/config/reload`, CRUD `POST/PUT/DELETE /api/users/{id}`, `POST/PUT/DELETE /api/groups/{id}`
 
 ### mod_webhook — Webhook Notifications
 
@@ -694,6 +696,9 @@ Config section: `[general]`
 | `hw_rate` | int | `0` | Force hardware sample rate (0=auto, 48000 recommended for USB) |
 | `preemphasis` | on/off | `off` | Pre-emphasis filter |
 | `preemphasis_alpha` | float | `0.95` | Pre-emphasis filter coefficient |
+| `speaker_volume` | int | `-1` | ALSA speaker playback volume (0-151, -1=don't set) |
+| `mic_volume` | int | `-1` | ALSA mic capture volume (0-16, -1=don't set) |
+| `agc` | on/off | `off` | Auto Gain Control |
 
 Config section: `[audio]`
 
@@ -704,7 +709,7 @@ Config section: `[audio]`
 | `device` | string | `/dev/hidraw0` | HID device path |
 | `cor_bit` | int | `0` | GPIO bit for COR input (0-7) |
 | `cor_polarity` | string | `active_low` | `active_low` or `active_high` |
-| `ptt_bit` | int | `2` | GPIO bit for PTT output (0-7) |
+| `ptt_bit` | int | `2` | GPIO pin number for PTT (1-8, maps to bit N-1) |
 
 Config section: `[hid]`
 
@@ -720,6 +725,7 @@ tx_ctcss = 1000          # 100.0 Hz
 [user.1]
 username = bwest          # Lowercase, no spaces — login identity
 name = Brian West         # Display name
+callsign = KD0SBW        # Amateur/GMRS callsign
 email = brian@example.com
 dtmf_login = 101         # Or dial *101#
 ani = 5551

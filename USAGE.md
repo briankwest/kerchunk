@@ -85,6 +85,8 @@ All DTMF commands follow the same pattern:
 
 You have about 3 seconds between each key press before the command times out and resets.
 
+**Important:** DTMF commands are deferred until you release PTT (COR drops). The repeater acknowledges the command and waits for you to unkey before dispatching it, so the response announcement does not play while you are still transmitting.
+
 Here is the complete list of DTMF commands:
 
 | You Press | What It Does |
@@ -352,6 +354,9 @@ Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert
 | `capture_device` | `default` | PortAudio capture device name |
 | `playback_device` | `default` | PortAudio playback device name |
 | `hw_rate` | `0` (auto) | Force hardware sample rate; use `48000` for USB |
+| `speaker_volume` | `-1` | ALSA speaker volume (0-151, -1 = don't set) |
+| `mic_volume` | `-1` | ALSA mic volume (0-16, -1 = don't set) |
+| `agc` | (unset) | ALSA AGC switch (`on` or `off`, unset = don't change) |
 | `preemphasis` | `off` | Pre-emphasis filter (RT-97L handles this in hardware) |
 
 #### `[hid]` -- USB HID Interface
@@ -361,7 +366,7 @@ Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert
 | `device` | `/dev/hidraw0` | HID device path |
 | `cor_bit` | `0` | GPIO bit for COR input (0-7) |
 | `cor_polarity` | `active_low` | COR polarity: `active_low` or `active_high` |
-| `ptt_bit` | `2` | GPIO bit for PTT output (0-7) |
+| `ptt_bit` | `2` | GPIO pin number for PTT output (1-8) |
 
 #### `[repeater]` -- State Machine and Timers
 
@@ -382,6 +387,8 @@ Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert
 | `voice_id` | `on` | Announce frequency/PL via TTS after CW ID |
 | `tx_ctcss` | `0` | Default TX CTCSS tone (freq x 10, e.g., 1318 = 131.8 Hz) |
 | `tx_dcs` | `0` | Default TX DCS code |
+| `ctcss_amplitude` | `800` | CTCSS encoder amplitude (100-4000) |
+| `cor_drop_hold` | `1000` | COR drop hold for DTMF COS glitch absorption, in ms (0-5000) |
 
 #### `[caller]` -- Caller Identification
 
@@ -486,7 +493,7 @@ TTS responses are cached as WAV files. Use `tts cache-clear` via the CLI to flus
 | `directory` | `recordings` | Output directory for WAV files |
 | `max_duration` | `300` | Maximum recording length in seconds (5 min) |
 
-Recordings are saved as `recordings/YYYYMMDD_HHMMSS_RX_username.wav` (for received transmissions) and `recordings/YYYYMMDD_HHMMSS_TX_username.wav` (for transmitted audio). An activity log (`recordings/activity.log`) is maintained for FCC 95.1705 cooperative use record-keeping.
+Recordings are saved as `recordings/YYYYMMDD_HHMMSS_RX_username.wav` (for received transmissions) and `recordings/YYYYMMDD_HHMMSS_TX_username.wav` (for transmitted audio). Filenames use the user's `username` field (not the display `name`). An activity log (`recordings/activity.log`) is maintained for FCC 95.1705 cooperative use record-keeping.
 
 #### `[cdr]` -- Call Detail Records
 
@@ -595,6 +602,7 @@ Add a `[user.N]` section (where N is a unique integer starting from 1):
 username = charlie        ; Lowercase, no spaces — used for PTT login
 name = Charlie Smith      ; Display name
 email = charlie@example.com
+callsign = WRXYZ123       ; FCC callsign (optional, forced uppercase)
 ani = 5553                ; Identified by DTMF ANI
 dtmf_login = 103          ; Can also log in with *103#
 access = 1                ; 1 = basic access
@@ -681,6 +689,8 @@ Admin pages (require `auth_token`):
 - **Users** (`/users.html`) provides user and group CRUD with TOTP QR code management
 - **Config** (`/config.html`) provides a live configuration editor with reload
 - **Coverage** (`/coverage.html`) is a GMRS RF coverage planner with terrain analysis
+
+The `/api/commands` endpoint returns a JSON list of all available CLI/API commands with their names, usage, and descriptions. This is useful for building integrations or discovering available operations programmatically.
 
 If `auth_token` is set, admin pages prompt for the token on first access. For external access, set `bind = 0.0.0.0`. For HTTPS, provide `tls_cert` and `tls_key` paths pointing to PEM files.
 

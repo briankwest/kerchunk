@@ -73,7 +73,7 @@ agc = off                        ; Auto Gain Control (off recommended — interf
 device = /dev/hidraw0            ; HID device path
 cor_bit = 0                      ; GPIO bit for COR input (0-7)
 cor_polarity = active_low        ; active_low | active_high
-ptt_bit = 2                      ; GPIO bit for PTT output (0-7)
+ptt_bit = 2                      ; GPIO pin number (1-8)
 
 ; ----------------------------------------------------------------------------
 ; Repeater state machine
@@ -85,6 +85,8 @@ timeout_time = 180000            ; Time-Out Timer — max TX duration (ms, 3 min
 cor_debounce = 150               ; COR debounce / kerchunk filter (ms)
 tx_delay = 100                   ; Silence after PTT assert before audio (ms)
 tx_tail = 200                    ; Silence after audio before PTT release (ms)
+ctcss_amplitude = 800            ; CTCSS encoder amplitude (100-4000, lower = quieter sub-audible tone)
+cor_drop_hold = 1000             ; COR drop hold time in ms (absorbs DTMF COS glitches, 0-5000)
 
 ; Software relay: kerchunkd captures RX audio and retransmits it in software
 ; with TX CTCSS/DCS mixed in. Disable the radio's internal relay when using this.
@@ -128,7 +130,7 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; Web dashboard (embedded HTTP server)
 ;
 ; Public routes (no auth): /api/status, /api/weather, /api/nws, /api/audio,
-; POST /api/register. All other API routes require auth_token.
+; /api/commands, POST /api/register. All other API routes require auth_token.
 ;
 ; Pages: index.html (public dashboard), register.html, ptt.html,
 ;        admin.html (requires auth), users.html, config.html, coverage.html
