@@ -54,6 +54,8 @@ void test_integ_repeater(void)
 
     mod_repeater.load(&g_mock_core);
 
+    /* Enable software relay so PTT is asserted on COR (tests expect this) */
+    g_software_relay = 1;
     /* Disable debounce for legacy tests */
     g_cor_debounce_ms = 0;
 
@@ -213,6 +215,7 @@ void test_integ_repeater(void)
     kerchunk_config_t *cfg2 = kerchunk_config_create();
     kerchunk_config_set(cfg2, "repeater", "require_identification", "on");
     kerchunk_config_set(cfg2, "repeater", "cor_debounce", "100");
+    kerchunk_config_set(cfg2, "repeater", "software_relay", "on");
 
     mod_repeater.load(&g_mock_core);
     repeater_configure(cfg2);

@@ -189,6 +189,24 @@ max_duration = 60                ; Max recording duration (seconds)
 [dtmf]
 inter_digit_timeout = 3000       ; Timeout between digits before reset (ms)
 cor_gate_ms = 200                ; Suppress DTMF during squelch transients (ms, 0=disable)
+;
+; DTMF command pattern overrides (modules register defaults, override here)
+; voicemail_status = 87
+; voicemail_record = 86
+; voicemail_play = 85
+; voicemail_delete = 83
+; voicemail_list = 84
+; gpio_on = 41
+; gpio_off = 40
+; weather_report = 93
+; weather_forecast = 94
+; time_check = 95
+; emergency_on = 911
+; emergency_off = 910
+; parrot_echo = 88
+; nws_alerts = 96
+; otp_auth = 68
+; scrambler_toggle = 97
 
 ; ----------------------------------------------------------------------------
 ; GPIO relay control

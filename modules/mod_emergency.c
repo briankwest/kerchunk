@@ -38,11 +38,11 @@ static void emergency_off(void)
     }
 
     if (g_core->tts_speak)
-        g_core->tts_speak("Emergency mode deactivated.", 10);
+        g_core->tts_speak("Emergency mode deactivated.", KERCHUNK_PRI_CRITICAL);
     else {
         char path[512];
         snprintf(path, sizeof(path), "%s/system/system_emergency_off.wav", g_sounds_dir);
-        g_core->queue_audio_file(path, 10);
+        g_core->queue_audio_file(path, KERCHUNK_PRI_CRITICAL);
     }
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
@@ -78,11 +78,11 @@ static void on_emergency_on(const kerchevt_t *evt, void *ud)
     g_timer = g_core->timer_create(g_timeout_ms, 0, timeout_cb, NULL);
 
     if (g_core->tts_speak)
-        g_core->tts_speak("Emergency mode activated.", 10);
+        g_core->tts_speak("Emergency mode activated.", KERCHUNK_PRI_CRITICAL);
     else {
         char path[512];
         snprintf(path, sizeof(path), "%s/system/system_emergency_on.wav", g_sounds_dir);
-        g_core->queue_audio_file(path, 10);
+        g_core->queue_audio_file(path, KERCHUNK_PRI_CRITICAL);
     }
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
@@ -102,6 +102,12 @@ static void on_emergency_off(const kerchevt_t *evt, void *ud)
 static int emergency_load(kerchunk_core_t *core)
 {
     g_core = core;
+
+    if (core->dtmf_register) {
+        core->dtmf_register("911", 11, "Emergency on",  "emergency_on");
+        core->dtmf_register("910", 12, "Emergency off", "emergency_off");
+    }
+
     core->subscribe(DTMF_EVT_EMERGENCY_ON,  on_emergency_on, NULL);
     core->subscribe(DTMF_EVT_EMERGENCY_OFF, on_emergency_off, NULL);
     return 0;
@@ -120,6 +126,10 @@ static int emergency_configure(const kerchunk_config_t *cfg)
 
 static void emergency_unload(void)
 {
+    if (g_core->dtmf_unregister) {
+        g_core->dtmf_unregister("911");
+        g_core->dtmf_unregister("910");
+    }
     g_core->unsubscribe(DTMF_EVT_EMERGENCY_ON,  on_emergency_on);
     g_core->unsubscribe(DTMF_EVT_EMERGENCY_OFF, on_emergency_off);
     if (g_timer >= 0)

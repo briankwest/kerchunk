@@ -138,9 +138,9 @@ static void debounce_expired(void *ud)
                     "access denied — no identification");
 
         if (g_core->tts_speak)
-            g_core->tts_speak("Access denied.", 4);
+            g_core->tts_speak("Access denied.", KERCHUNK_PRI_HIGH);
         else
-            g_core->queue_tone(400, 500, 4000, 4);
+            g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_HIGH);
 
         return;  /* Stay in IDLE */
     }
@@ -154,7 +154,7 @@ static void tot_expired(void *ud)
     g_tot_timer = -1;
 
     g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "TOT fired!");
-    g_core->queue_tone(g_tot_warn_hz, 1000, 8000, 10);
+    g_core->queue_tone(g_tot_warn_hz, 1000, 8000, KERCHUNK_PRI_CRITICAL);
 
     kerchevt_t evt = { .type = KERCHEVT_TIMEOUT };
     g_core->fire_event(&evt);

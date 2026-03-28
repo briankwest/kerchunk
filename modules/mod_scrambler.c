@@ -203,7 +203,7 @@ static void on_scrambler_cmd(const kerchevt_t *evt, void *ud)
         g_enabled = 0;
         remove_hooks();
         if (g_core->tts_speak)
-            g_core->tts_speak("Scrambler disabled.", 3);
+            g_core->tts_speak("Scrambler disabled.", KERCHUNK_PRI_ELEVATED);
     } else if (arg >= 1 && arg <= 8) {
         /* *97N# — set code and enable */
         apply_code(arg);
@@ -211,7 +211,7 @@ static void on_scrambler_cmd(const kerchevt_t *evt, void *ud)
         install_hooks();
         char msg[64];
         snprintf(msg, sizeof(msg), "Scrambler code %d enabled.", g_code);
-        if (g_core->tts_speak) g_core->tts_speak(msg, 3);
+        if (g_core->tts_speak) g_core->tts_speak(msg, KERCHUNK_PRI_ELEVATED);
     } else {
         /* *97# — toggle */
         g_enabled = !g_enabled;
@@ -220,7 +220,7 @@ static void on_scrambler_cmd(const kerchevt_t *evt, void *ud)
         else
             remove_hooks();
         if (g_core->tts_speak)
-            g_core->tts_speak(g_enabled ? "Scrambler on." : "Scrambler off.", 3);
+            g_core->tts_speak(g_enabled ? "Scrambler on." : "Scrambler off.", KERCHUNK_PRI_ELEVATED);
     }
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "enabled=%d code=%d carrier=%d Hz",
@@ -251,6 +251,10 @@ static void on_queue_complete(const kerchevt_t *evt, void *ud)
 static int scrambler_load(kerchunk_core_t *core)
 {
     g_core = core;
+
+    if (core->dtmf_register)
+        core->dtmf_register("97", 16, "Scrambler toggle", "scrambler_toggle");
+
     core->subscribe(DTMF_EVT_SCRAMBLER,     on_scrambler_cmd, NULL);
     core->subscribe(KERCHEVT_ANNOUNCEMENT,  on_announcement, NULL);
     core->subscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete, NULL);
@@ -288,6 +292,8 @@ static int scrambler_configure(const kerchunk_config_t *cfg)
 static void scrambler_unload(void)
 {
     remove_hooks();
+    if (g_core->dtmf_unregister)
+        g_core->dtmf_unregister("97");
     g_core->unsubscribe(DTMF_EVT_SCRAMBLER,     on_scrambler_cmd);
     g_core->unsubscribe(KERCHEVT_ANNOUNCEMENT,  on_announcement);
     g_core->unsubscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete);

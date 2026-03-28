@@ -27,8 +27,8 @@ static int g_courtesy_pending;  /* 1 while our own tone is in the queue */
 
 static void queue_tone(const char *reason)
 {
-    g_core->queue_silence(50, 2);
-    g_core->queue_tone(g_default_freq, g_default_dur, g_default_amp, 2);
+    g_core->queue_silence(50, KERCHUNK_PRI_NORMAL);
+    g_core->queue_tone(g_default_freq, g_default_dur, g_default_amp, KERCHUNK_PRI_NORMAL);
     g_courtesy_pending = 1;
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "courtesy tone queued (%s)", reason);
 

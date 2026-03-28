@@ -225,7 +225,7 @@ static void session_expire_cb(void *ud)
     pthread_mutex_unlock(&g_otp_mutex);
 
     if (g_core->tts_speak)
-        g_core->tts_speak("Elevated session expired.", 3);
+        g_core->tts_speak("Elevated session expired.", KERCHUNK_PRI_ELEVATED);
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
         .announcement = { .source = "otp", .description = "session expired" } };
@@ -278,7 +278,7 @@ static void on_otp_command(const kerchevt_t *evt, void *ud)
 
     if (caller_id <= 0) {
         if (g_core->tts_speak)
-            g_core->tts_speak("Access denied. Please identify first.", 3);
+            g_core->tts_speak("Access denied. Please identify first.", KERCHUNK_PRI_ELEVATED);
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "OTP attempt with no caller ID");
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "otp", .description = "access denied" } };
@@ -289,7 +289,7 @@ static void on_otp_command(const kerchevt_t *evt, void *ud)
     const kerchunk_user_t *u = g_core->user_lookup_by_id(caller_id);
     if (!u || u->totp_secret[0] == '\0') {
         if (g_core->tts_speak)
-            g_core->tts_speak("OTP not configured for this user.", 3);
+            g_core->tts_speak("OTP not configured for this user.", KERCHUNK_PRI_ELEVATED);
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                     "OTP attempt by user %d with no TOTP secret", caller_id);
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
@@ -301,7 +301,7 @@ static void on_otp_command(const kerchevt_t *evt, void *ud)
     /* Extract code from event data */
     if (!evt->custom.data || evt->custom.len < 6) {
         if (g_core->tts_speak)
-            g_core->tts_speak("Invalid code.", 3);
+            g_core->tts_speak("Invalid code.", KERCHUNK_PRI_ELEVATED);
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "otp", .description = "invalid code" } };
         kerchevt_fire(&ae);
@@ -317,7 +317,7 @@ static void on_otp_command(const kerchevt_t *evt, void *ud)
     for (size_t i = 0; i < len; i++) {
         if (code[i] < '0' || code[i] > '9') {
             if (g_core->tts_speak)
-                g_core->tts_speak("Invalid code.", 3);
+                g_core->tts_speak("Invalid code.", KERCHUNK_PRI_ELEVATED);
             kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
                 .announcement = { .source = "otp", .description = "invalid code" } };
             kerchevt_fire(&ae);
@@ -330,8 +330,8 @@ static void on_otp_command(const kerchevt_t *evt, void *ud)
         session_start(caller_id);
         pthread_mutex_unlock(&g_otp_mutex);
         if (g_core->tts_speak)
-            g_core->tts_speak("Authentication successful. Elevated access granted.", 3);
-        g_core->queue_tone(800, 200, 4000, 3);
+            g_core->tts_speak("Authentication successful. Elevated access granted.", KERCHUNK_PRI_ELEVATED);
+        g_core->queue_tone(800, 200, 4000, KERCHUNK_PRI_ELEVATED);
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "otp", .description = "auth success" } };
         kerchevt_fire(&ae);
@@ -339,8 +339,8 @@ static void on_otp_command(const kerchevt_t *evt, void *ud)
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                     "OTP failed for %s (id=%d)", u->name, u->id);
         if (g_core->tts_speak)
-            g_core->tts_speak("Authentication failed.", 3);
-        g_core->queue_tone(400, 500, 4000, 3);
+            g_core->tts_speak("Authentication failed.", KERCHUNK_PRI_ELEVATED);
+        g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_ELEVATED);
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "otp", .description = "auth failed" } };
         kerchevt_fire(&ae);
@@ -371,6 +371,9 @@ static int otp_load(kerchunk_core_t *core)
     memset(g_sessions, 0, sizeof(g_sessions));
     for (int i = 0; i < MAX_OTP_SESSIONS; i++)
         g_sessions[i].timer_id = -1;
+
+    if (core->dtmf_register)
+        core->dtmf_register("68", 15, "OTP authenticate", "otp_auth");
 
     core->subscribe(DTMF_EVT_OTP_AUTH, on_otp_command, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
@@ -406,6 +409,8 @@ static void otp_unload(void)
             kerchunk_core_set_otp_elevated(g_sessions[i].user_id, 0);
         }
     }
+    if (g_core->dtmf_unregister)
+        g_core->dtmf_unregister("68");
     g_core->unsubscribe(DTMF_EVT_OTP_AUTH, on_otp_command);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
     g_core->unsubscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared);

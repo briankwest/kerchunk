@@ -81,7 +81,7 @@ static void on_gpio_on(const kerchevt_t *evt, void *ud)
 
     if (!is_allowed(pin)) {
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "pin %d not allowed", pin);
-        g_core->queue_tone(400, 500, 4000, 1);
+        g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_LOW);
         return;
     }
 
@@ -91,7 +91,7 @@ static void on_gpio_on(const kerchevt_t *evt, void *ud)
                 g_pin_state[i] = 1;
         }
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "GPIO %d ON", pin);
-        g_core->queue_tone(800, 200, 4000, 1);
+        g_core->queue_tone(800, 200, 4000, KERCHUNK_PRI_LOW);
     }
 }
 
@@ -103,7 +103,7 @@ static void on_gpio_off(const kerchevt_t *evt, void *ud)
 
     if (!is_allowed(pin)) {
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "pin %d not allowed", pin);
-        g_core->queue_tone(400, 500, 4000, 1);
+        g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_LOW);
         return;
     }
 
@@ -113,7 +113,7 @@ static void on_gpio_off(const kerchevt_t *evt, void *ud)
                 g_pin_state[i] = 0;
         }
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "GPIO %d OFF", pin);
-        g_core->queue_tone(600, 200, 4000, 1);
+        g_core->queue_tone(600, 200, 4000, KERCHUNK_PRI_LOW);
     }
 }
 
@@ -122,6 +122,11 @@ static int gpio_load(kerchunk_core_t *core)
     g_core = core;
     g_num_pins = 0;
     memset(g_pin_state, 0, sizeof(g_pin_state));
+
+    if (core->dtmf_register) {
+        core->dtmf_register("41", 5, "GPIO on",  "gpio_on");
+        core->dtmf_register("40", 6, "GPIO off", "gpio_off");
+    }
 
     core->subscribe(DTMF_EVT_GPIO_ON,  on_gpio_on, NULL);
     core->subscribe(DTMF_EVT_GPIO_OFF, on_gpio_off, NULL);
@@ -147,6 +152,10 @@ static int gpio_configure(const kerchunk_config_t *cfg)
 
 static void gpio_unload(void)
 {
+    if (g_core->dtmf_unregister) {
+        g_core->dtmf_unregister("41");
+        g_core->dtmf_unregister("40");
+    }
     g_core->unsubscribe(DTMF_EVT_GPIO_ON,  on_gpio_on);
     g_core->unsubscribe(DTMF_EVT_GPIO_OFF, on_gpio_off);
 }

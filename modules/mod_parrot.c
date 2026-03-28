@@ -127,8 +127,8 @@ static void stop_and_playback(void)
                     dur, g_len, (int)avg_rms, avg_pct,
                     (int)g_sq_peak_rms, peak_pct);
 
-        g_core->queue_silence(200, 2);
-        g_core->queue_audio_buffer(g_buf, g_len, 2);
+        g_core->queue_silence(200, KERCHUNK_PRI_NORMAL);
+        g_core->queue_audio_buffer(g_buf, g_len, KERCHUNK_PRI_NORMAL);
 
         /* Announce signal quality via TTS */
         if (g_core->tts_speak) {
@@ -137,7 +137,7 @@ static void stop_and_playback(void)
                      "Audio report. Duration %.1f seconds. "
                      "Average level %d percent. Peak level %d percent.",
                      dur, avg_pct, peak_pct);
-            g_core->tts_speak(msg, 2);
+            g_core->tts_speak(msg, KERCHUNK_PRI_NORMAL);
         }
 
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
@@ -163,9 +163,9 @@ static void on_parrot_cmd(const kerchevt_t *evt, void *ud)
     g_armed = 1;
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "armed — will record next transmission");
-    g_core->queue_tone(1000, 100, 4000, 2);
-    g_core->queue_silence(50, 2);
-    g_core->queue_tone(1000, 100, 4000, 2);
+    g_core->queue_tone(1000, 100, 4000, KERCHUNK_PRI_NORMAL);
+    g_core->queue_silence(50, KERCHUNK_PRI_NORMAL);
+    g_core->queue_tone(1000, 100, 4000, KERCHUNK_PRI_NORMAL);
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
         .announcement = { .source = "parrot", .description = "armed" } };
@@ -193,6 +193,10 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
 static int parrot_load(kerchunk_core_t *core)
 {
     g_core = core;
+
+    if (core->dtmf_register)
+        core->dtmf_register("88", 13, "Parrot echo", "parrot_echo");
+
     core->subscribe(DTMF_EVT_PARROT,    on_parrot_cmd, NULL);
     core->subscribe(KERCHEVT_COR_ASSERT,  on_cor_assert, NULL);
     core->subscribe(KERCHEVT_COR_DROP,    on_cor_drop, NULL);
@@ -226,6 +230,8 @@ static void parrot_unload(void)
     g_len = 0;
     g_cap = 0;
 
+    if (g_core->dtmf_unregister)
+        g_core->dtmf_unregister("88");
     g_core->unsubscribe(DTMF_EVT_PARROT,    on_parrot_cmd);
     g_core->unsubscribe(KERCHEVT_COR_ASSERT,  on_cor_assert);
     g_core->unsubscribe(KERCHEVT_COR_DROP,    on_cor_drop);

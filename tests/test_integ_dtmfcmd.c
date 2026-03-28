@@ -53,6 +53,16 @@ void test_integ_dtmfcmd(void)
 
     mod_dtmfcmd.load(&g_mock_core);
 
+    /* Register commands that consumer modules would normally register */
+    dtmf_register_cmd("87", DTMF_EVT_VOICEMAIL_STATUS, "Voicemail status", "voicemail_status");
+    dtmf_register_cmd("86", DTMF_EVT_VOICEMAIL_RECORD, "Voicemail record", "voicemail_record");
+    dtmf_register_cmd("85", DTMF_EVT_VOICEMAIL_PLAY,   "Voicemail play",   "voicemail_play");
+    dtmf_register_cmd("83", DTMF_EVT_VOICEMAIL_DELETE,  "Voicemail delete", "voicemail_delete");
+    dtmf_register_cmd("84", DTMF_EVT_VOICEMAIL_LIST,    "Voicemail list",   "voicemail_list");
+    dtmf_register_cmd("41", DTMF_EVT_GPIO_ON,           "GPIO on",          "gpio_on");
+    dtmf_register_cmd("40", DTMF_EVT_GPIO_OFF,          "GPIO off",         "gpio_off");
+    dtmf_register_cmd("93", 8,                           "Weather report",   "weather_report");
+
     /* 1. '*' begins accumulation */
     test_begin("dtmfcmd: * begins accumulation");
     mock_fire_dtmf('*');

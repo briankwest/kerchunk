@@ -256,7 +256,7 @@ static void announce_expired(tracked_alert_t *a)
     if (g_core->tts_speak) {
         char text[256];
         snprintf(text, sizeof(text), "The %s has expired.", a->event);
-        g_core->tts_speak(text, 2);
+        g_core->tts_speak(text, KERCHUNK_PRI_NORMAL);
     }
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
@@ -458,9 +458,9 @@ static void on_nws_dtmf(const kerchevt_t *evt, void *ud)
 
     if (g_alert_count == 0) {
         if (g_core->tts_speak)
-            g_core->tts_speak("No active weather alerts.", 4);
+            g_core->tts_speak("No active weather alerts.", KERCHUNK_PRI_HIGH);
         else
-            g_core->queue_tone(400, 500, 4000, 4);
+            g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_HIGH);
 
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "nws", .description = "no active alerts" } };
@@ -494,6 +494,10 @@ static void on_nws_dtmf(const kerchevt_t *evt, void *ud)
 static int nws_load(kerchunk_core_t *core)
 {
     g_core = core;
+
+    if (core->dtmf_register)
+        core->dtmf_register("96", 14, "NWS alerts", "nws_alerts");
+
     core->subscribe(DTMF_EVT_NWS, on_nws_dtmf, NULL);
     return 0;
 }
@@ -602,6 +606,8 @@ static void nws_unload(void)
         g_reannounce_timer = -1;
     }
 
+    if (g_core->dtmf_unregister)
+        g_core->dtmf_unregister("96");
     g_core->unsubscribe(DTMF_EVT_NWS, on_nws_dtmf);
     memset(g_alerts, 0, sizeof(g_alerts));
     g_alert_count = 0;

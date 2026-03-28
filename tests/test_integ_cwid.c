@@ -84,7 +84,7 @@ void test_integ_cwid_module(void)
         kerchevt_fire(&e);
     }
     test_assert(g_mock.buffer_calls >= 1, "CW ID not sent on IDLE");
-    test_assert(g_mock.ptt_requested >= 1, "PTT not requested");
+    /* PTT is managed by the queue drain engine, not by mod_cwid directly */
     test_assert(g_pending == 0, "pending not cleared");
     test_end();
 

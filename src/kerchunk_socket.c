@@ -478,6 +478,19 @@ void kerchunk_socket_set_core_commands(const core_cmd_t *cmds, int count)
     g_num_core_cmds = count;
 }
 
+void kerchunk_socket_iter_core_commands(
+    void (*cb)(const char *name, const char *usage, const char *desc, void *ud),
+    void *ud)
+{
+    if (!cb || !g_core_cmds) return;
+    for (int i = 0; i < g_num_core_cmds; i++) {
+        cb(g_core_cmds[i].name,
+           g_core_cmds[i].usage ? g_core_cmds[i].usage : g_core_cmds[i].name,
+           g_core_cmds[i].description ? g_core_cmds[i].description : "",
+           ud);
+    }
+}
+
 void kerchunk_socket_poll(void)
 {
     if (g_listen_fd < 0)

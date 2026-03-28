@@ -133,7 +133,7 @@ static void stop_recording(void)
     g_rec_len = 0;
     g_rec_cap = 0;
 
-    g_core->queue_tone(600, 200, 4000, 1);
+    g_core->queue_tone(600, 200, 4000, KERCHUNK_PRI_LOW);
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
         .announcement = { .source = "voicemail", .description = "recording saved" } };
@@ -198,15 +198,15 @@ static void on_vm_status(const kerchevt_t *evt, void *ud)
             snprintf(text, sizeof(text), "You have 1 voicemail message.");
         else
             snprintf(text, sizeof(text), "You have %d voicemail messages.", n);
-        g_core->tts_speak(text, 1);
+        g_core->tts_speak(text, KERCHUNK_PRI_LOW);
     } else {
         /* Tone fallback: N beeps = N messages, low tone = none */
         for (int i = 0; i < n && i < 9; i++) {
-            g_core->queue_tone(1000, 100, 4000, 1);
-            g_core->queue_silence(100, 1);
+            g_core->queue_tone(1000, 100, 4000, KERCHUNK_PRI_LOW);
+            g_core->queue_silence(100, KERCHUNK_PRI_LOW);
         }
         if (n == 0)
-            g_core->queue_tone(400, 500, 4000, 1);
+            g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_LOW);
     }
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
@@ -228,7 +228,7 @@ static void on_vm_record(const kerchevt_t *evt, void *ud)
     if (target_id <= 0) return;
 
     if (count_messages(target_id) >= g_max_messages) {
-        g_core->queue_tone(400, 1000, 4000, 1);  /* Error tone */
+        g_core->queue_tone(400, 1000, 4000, KERCHUNK_PRI_LOW);  /* Error tone */
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "voicemail", .description = "mailbox full" } };
         kerchevt_fire(&ae);
@@ -241,9 +241,9 @@ static void on_vm_record(const kerchevt_t *evt, void *ud)
         if (target && g_core->tts_speak) {
             char msg[128];
             snprintf(msg, sizeof(msg), "Recording message for %s.", target->name);
-            g_core->tts_speak(msg, 2);
+            g_core->tts_speak(msg, KERCHUNK_PRI_NORMAL);
         } else if (!target) {
-            g_core->queue_tone(400, 500, 4000, 1);  /* Error — user not found */
+            g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_LOW);  /* Error — user not found */
             g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "target user %d not found", target_id);
             return;
         }
@@ -272,7 +272,7 @@ static void on_vm_record(const kerchevt_t *evt, void *ud)
     }
 
     /* Beep to indicate recording started */
-    g_core->queue_tone(800, 200, 4000, 1);
+    g_core->queue_tone(800, 200, 4000, KERCHUNK_PRI_LOW);
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
         .announcement = { .source = "voicemail", .description = "recording started" } };
@@ -291,7 +291,7 @@ static void on_vm_play(const kerchevt_t *evt, void *ud)
     snprintf(path, sizeof(path), "%s/%d", g_vm_dir, g_current_caller_id);
     DIR *d = opendir(path);
     if (!d) {
-        g_core->queue_tone(400, 500, 4000, 1);
+        g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_LOW);
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "voicemail", .description = "no messages" } };
         kerchevt_fire(&ae);
@@ -303,7 +303,7 @@ static void on_vm_play(const kerchevt_t *evt, void *ud)
         if (strstr(ent->d_name, ".pcm")) {
             char fpath[768];
             snprintf(fpath, sizeof(fpath), "%s/%s", path, ent->d_name);
-            g_core->queue_audio_file(fpath, 1);
+            g_core->queue_audio_file(fpath, KERCHUNK_PRI_LOW);
             g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "playing: %s", fpath);
 
             kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
@@ -332,7 +332,7 @@ static void on_vm_delete(const kerchevt_t *evt, void *ud)
             snprintf(fpath, sizeof(fpath), "%s/%s", dirpath, ent->d_name);
             remove(fpath);
             g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "deleted: %s", fpath);
-            g_core->queue_tone(600, 200, 4000, 1);  /* Confirm */
+            g_core->queue_tone(600, 200, 4000, KERCHUNK_PRI_LOW);  /* Confirm */
 
             kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
                 .announcement = { .source = "voicemail", .description = "deleted" } };
@@ -374,6 +374,14 @@ static int voicemail_load(kerchunk_core_t *core)
 {
     g_core = core;
 
+    if (core->dtmf_register) {
+        core->dtmf_register("87", 0, "Voicemail status", "voicemail_status");
+        core->dtmf_register("86", 1, "Voicemail record", "voicemail_record");
+        core->dtmf_register("85", 2, "Voicemail play",   "voicemail_play");
+        core->dtmf_register("83", 3, "Voicemail delete", "voicemail_delete");
+        core->dtmf_register("84", 4, "Voicemail list",   "voicemail_list");
+    }
+
     core->subscribe(DTMF_EVT_VOICEMAIL_STATUS, on_vm_status, NULL);
     core->subscribe(DTMF_EVT_VOICEMAIL_RECORD, on_vm_record, NULL);
     core->subscribe(DTMF_EVT_VOICEMAIL_PLAY,   on_vm_play, NULL);
@@ -410,6 +418,14 @@ static int voicemail_configure(const kerchunk_config_t *cfg)
 
 static void voicemail_unload(void)
 {
+    if (g_core->dtmf_unregister) {
+        g_core->dtmf_unregister("87");
+        g_core->dtmf_unregister("86");
+        g_core->dtmf_unregister("85");
+        g_core->dtmf_unregister("83");
+        g_core->dtmf_unregister("84");
+    }
+
     g_core->unsubscribe(DTMF_EVT_VOICEMAIL_STATUS, on_vm_status);
     g_core->unsubscribe(DTMF_EVT_VOICEMAIL_RECORD, on_vm_record);
     g_core->unsubscribe(DTMF_EVT_VOICEMAIL_PLAY,   on_vm_play);

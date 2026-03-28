@@ -467,7 +467,7 @@ static int cli_tts(int argc, const char **argv, kerchunk_resp_t *r)
             if (i > 2) strncat(text, " ", sizeof(text) - strlen(text) - 1);
             strncat(text, argv[i], sizeof(text) - strlen(text) - 1);
         }
-        if (tts_speak_impl(text, 2) == 0) {
+        if (tts_speak_impl(text, KERCHUNK_PRI_NORMAL) == 0) {
             resp_bool(r, "ok", 1);
             resp_str(r, "text", text);
         } else {

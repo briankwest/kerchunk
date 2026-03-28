@@ -67,7 +67,7 @@ static int g_registration_enabled = 0;
 /* PTT config */
 static int g_ptt_enabled        = 0;   /* [web] ptt_enabled */
 static int g_ptt_max_duration_s = 30;  /* [web] ptt_max_duration */
-static int g_ptt_priority       = 2;   /* [web] ptt_priority */
+static int g_ptt_priority       = KERCHUNK_PRI_NORMAL;   /* [web] ptt_priority */
 
 /* Mongoose state */
 static struct mg_mgr g_mgr;
@@ -439,57 +439,114 @@ static int check_auth(struct mg_http_message *hm)
 
 /* ── API dispatch ── */
 
-/* Map URL path to CLI command */
+/* Public API paths (no auth required for GET) */
+static const char *g_public_apis[] = {
+    "/api/status", "/api/weather", "/api/nws", NULL
+};
+
+/* Special routes where the URL name doesn't map 1:1 to a CLI command */
 typedef struct {
     const char *path;
     const char *cmd;
     const char *arg;
-} api_route_t;
+} api_special_route_t;
 
-static const api_route_t g_routes[] = {
-    { "/api/status",    "status",    NULL },
-    { "/api/stats",     "stats",     NULL },
-    { "/api/nws",       "nws",       NULL },
-    { "/api/cdr",       "cdr",       NULL },
-    { "/api/cwid",      "cwid",      NULL },
-    { "/api/parrot",    "parrot",    NULL },
-    { "/api/recorder",  "recorder",  NULL },
-    { "/api/emergency", "emergency", NULL },
-    { "/api/weather",   "weather",   NULL },
-    { "/api/time",      "time",      NULL },
-    { "/api/tts",       "tts",       "status" },
-    { "/api/modules",   "module",    "list" },
-    { "/api/dtmfcmd",   "dtmfcmd",   NULL },
-    { "/api/txcode",    "txcode",    NULL },
+static const api_special_route_t g_special_routes[] = {
+    { "/api/tts",     "tts",    "status" },
+    { "/api/modules", "module", "list" },
     { NULL, NULL, NULL }
 };
 
-/* Core command handler lookup (set by main.c) */
-typedef int (*core_handler_t)(int argc, const char **argv, kerchunk_resp_t *r);
+/* Core command iteration (provided by kerchunk_socket.c) */
+extern void kerchunk_socket_iter_core_commands(
+    void (*cb)(const char *name, const char *usage, const char *desc, void *ud),
+    void *ud);
+
+/* ── /api/commands — list all available API commands ── */
 
 typedef struct {
-    const char    *name;
-    core_handler_t handler;
-} core_cmd_lookup_t;
+    char *buf;
+    int   off;
+    int   max;
+    int   first;
+} cmd_list_ctx_t;
 
-extern void kerchunk_socket_set_core_commands(const void *cmds, int count);
+static void cmd_list_cb(const char *name, const char *usage,
+                         const char *desc, void *ud)
+{
+    cmd_list_ctx_t *ctx = (cmd_list_ctx_t *)ud;
+    if (ctx->off >= ctx->max - 128) return;
+    if (!ctx->first) ctx->buf[ctx->off++] = ',';
+    ctx->first = 0;
+    ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
+        "{\"name\":\"%s\",\"usage\":\"%s\",\"description\":\"%s\"}",
+        name, usage ? usage : name, desc ? desc : "");
+}
+
+static void handle_api_commands(struct mg_connection *c)
+{
+    char buf[RESP_MAX];
+    int off = snprintf(buf, sizeof(buf), "{\"commands\":[");
+    cmd_list_ctx_t ctx = { buf, off, (int)sizeof(buf), 1 };
+
+    kerchunk_socket_iter_core_commands(cmd_list_cb, &ctx);
+    kerchunk_module_iter_cli_commands(cmd_list_cb, &ctx);
+
+    ctx.off += snprintf(buf + ctx.off, sizeof(buf) - ctx.off, "]}");
+    (void)ctx.off;
+    mg_http_reply(c, 200, API_HEADERS, "%s", buf);
+}
+
+/* ── Dynamic API GET dispatch ── */
 
 static void handle_api_get(struct mg_connection *c, struct mg_http_message *hm)
 {
-    for (int i = 0; g_routes[i].path; i++) {
-        if (!mg_match(hm->uri, mg_str(g_routes[i].path), NULL)) continue;
+    /* Check special routes first (where URL doesn't map 1:1 to command) */
+    for (int i = 0; g_special_routes[i].path; i++) {
+        if (!mg_match(hm->uri, mg_str(g_special_routes[i].path), NULL)) continue;
 
         kerchunk_resp_t resp;
         resp_init(&resp);
 
-        const char *argv[3] = { g_routes[i].cmd, g_routes[i].arg, NULL };
-        int argc = g_routes[i].arg ? 2 : 1;
+        const char *argv[3] = { g_special_routes[i].cmd,
+                                 g_special_routes[i].arg, NULL };
+        int argc = g_special_routes[i].arg ? 2 : 1;
 
         kerchunk_dispatch_command(argc, argv, &resp);
         resp_finish(&resp);
 
         mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
         return;
+    }
+
+    /* /api/commands — list all available commands */
+    if (mg_match(hm->uri, mg_str("/api/commands"), NULL)) {
+        handle_api_commands(c);
+        return;
+    }
+
+    /* Dynamic dispatch: extract command name from /api/{name} */
+    if (hm->uri.len > 5 && memcmp(hm->uri.buf, "/api/", 5) == 0) {
+        char cmd_name[64];
+        size_t name_len = hm->uri.len - 5;
+        if (name_len >= sizeof(cmd_name)) name_len = sizeof(cmd_name) - 1;
+        memcpy(cmd_name, hm->uri.buf + 5, name_len);
+        cmd_name[name_len] = '\0';
+
+        /* Reject names with slashes (sub-paths like /api/config/reload) */
+        if (!strchr(cmd_name, '/')) {
+            kerchunk_resp_t resp;
+            resp_init(&resp);
+
+            const char *argv[2] = { cmd_name, NULL };
+            int rc = kerchunk_dispatch_command(1, argv, &resp);
+            resp_finish(&resp);
+
+            if (rc == 0) {
+                mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
+                return;
+            }
+        }
     }
 
     mg_http_reply(c, 404, API_HEADERS, "{\"error\":\"Unknown API endpoint\"}");
@@ -1257,11 +1314,11 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
 
             /* ── Public routes (no auth required) ── */
             if (mg_match(hm->method, mg_str("GET"), NULL)) {
-                if (mg_match(hm->uri, mg_str("/api/status"), NULL) ||
-                    mg_match(hm->uri, mg_str("/api/weather"), NULL) ||
-                    mg_match(hm->uri, mg_str("/api/nws"), NULL)) {
-                    handle_api_get(c, hm);
-                    return;
+                for (int i = 0; g_public_apis[i]; i++) {
+                    if (mg_match(hm->uri, mg_str(g_public_apis[i]), NULL)) {
+                        handle_api_get(c, hm);
+                        return;
+                    }
                 }
             }
 
@@ -1535,7 +1592,7 @@ static int web_configure(const kerchunk_config_t *cfg)
     g_ptt_enabled = (v && strcmp(v, "on") == 0);
 
     g_ptt_max_duration_s = kerchunk_config_get_int(cfg, "web", "ptt_max_duration", 30);
-    g_ptt_priority = kerchunk_config_get_int(cfg, "web", "ptt_priority", 2);
+    g_ptt_priority = kerchunk_config_get_int(cfg, "web", "ptt_priority", KERCHUNK_PRI_NORMAL);
 
     /* Redirect mongoose logs through our logger */
     mg_log_set_fn(mg_log_cb, NULL);

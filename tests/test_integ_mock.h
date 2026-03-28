@@ -220,6 +220,9 @@ static void mock_log(int lvl, const char *mod, const char *fmt, ...)
     va_end(ap);
 }
 
+static int mock_dtmf_register(const char *p, int off, const char *d, const char *k) { (void)p;(void)off;(void)d;(void)k; return 0; }
+static int mock_dtmf_unregister(const char *p) { (void)p; return 0; }
+
 static int mock_timer_create(int ms, int repeat, void (*cb)(void *), void *ud)
 {
     if (!cb || ms <= 0)
@@ -329,6 +332,8 @@ static void mock_init_core(void)
         .config_get_int      = mock_config_get_int,
         .log                 = mock_log,
         .tts_speak           = NULL,
+        .dtmf_register       = mock_dtmf_register,
+        .dtmf_unregister     = mock_dtmf_unregister,
         .timer_create        = mock_timer_create,
         .timer_cancel        = mock_timer_cancel,
         .user_lookup_by_id   = kerchunk_user_lookup_by_id,

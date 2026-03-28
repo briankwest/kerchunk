@@ -55,6 +55,14 @@ void resp_finish(kerchunk_resp_t *r);
 #define KERCHUNK_FRAME_MS      20
 #define KERCHUNK_SAMPLE_RATE   8000
 
+/* Queue priority levels (higher = plays sooner when queue is idle) */
+#define KERCHUNK_PRI_LOW          1   /* Voicemail playback, GPIO confirms */
+#define KERCHUNK_PRI_NORMAL       2   /* Time, parrot, courtesy tones, web PTT */
+#define KERCHUNK_PRI_ELEVATED     3   /* Weather, OTP, TTS announcements */
+#define KERCHUNK_PRI_HIGH         4   /* Repeater system tones, NWS errors */
+#define KERCHUNK_PRI_IDENT        5   /* Station identification (CW ID) */
+#define KERCHUNK_PRI_CRITICAL    10   /* Emergency, timeout warning */
+
 /* Core API passed to modules */
 typedef struct kerchunk_core kerchunk_core_t;
 
@@ -99,6 +107,11 @@ struct kerchunk_core {
 
     /* TTS (set by mod_tts if loaded, NULL otherwise) */
     int  (*tts_speak)(const char *text, int priority);
+
+    /* DTMF command registration (provided by mod_dtmfcmd when loaded) */
+    int  (*dtmf_register)(const char *default_pattern, int event_offset,
+                          const char *description, const char *config_key);
+    int  (*dtmf_unregister)(const char *pattern);
 
     /* User database */
     const kerchunk_user_t *(*user_lookup_by_id)(int user_id);

@@ -21,6 +21,7 @@ typedef struct {
     char    pattern[MAX_CMD_LEN];  /* e.g., "VS", "VM", "G1" */
     int     custom_event_id;       /* KERCHEVT_CUSTOM + N */
     char    description[64];
+    char    config_key[32];        /* key for [dtmf] config override */
 } dtmf_cmd_entry_t;
 
 static kerchunk_core_t *g_core;
@@ -41,15 +42,37 @@ static int  g_cor_gate_ms = 200;
 static dtmf_cmd_entry_t g_cmds[MAX_COMMANDS];
 static int g_cmd_count;
 
-/* Register a command pattern → custom event mapping */
-static void register_cmd(const char *pattern, int event_offset, const char *desc)
+/* Register a command pattern → custom event mapping.
+ * Matches the dtmf_register vtable signature so modules can self-register. */
+static int dtmf_register_cmd(const char *default_pattern, int event_offset,
+                              const char *description, const char *config_key)
 {
     if (g_cmd_count >= MAX_COMMANDS)
-        return;
+        return -1;
     dtmf_cmd_entry_t *c = &g_cmds[g_cmd_count++];
-    snprintf(c->pattern, sizeof(c->pattern), "%s", pattern);
+    snprintf(c->pattern, sizeof(c->pattern), "%s", default_pattern);
     c->custom_event_id = KERCHEVT_CUSTOM + event_offset;
-    snprintf(c->description, sizeof(c->description), "%s", desc);
+    snprintf(c->description, sizeof(c->description), "%s", description);
+    if (config_key)
+        snprintf(c->config_key, sizeof(c->config_key), "%s", config_key);
+    else
+        c->config_key[0] = '\0';
+    return 0;
+}
+
+/* Unregister a command by pattern */
+static int dtmf_unregister_cmd(const char *pattern)
+{
+    for (int i = 0; i < g_cmd_count; i++) {
+        if (strcmp(g_cmds[i].pattern, pattern) == 0) {
+            /* Shift remaining entries down */
+            for (int j = i; j < g_cmd_count - 1; j++)
+                g_cmds[j] = g_cmds[j + 1];
+            g_cmd_count--;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 /* Built-in DTMF command event offsets */
@@ -195,44 +218,10 @@ static int dtmfcmd_load(kerchunk_core_t *core)
     g_cmd_count = 0;
     reset_cmd();
 
-    /* Register built-in commands using raw DTMF digit sequences.
-     * Users dial e.g., *87# for VS (V=8, S=7 on phone keypad)
-     * But we keep it simple: patterns match raw digit strings.
-     * Actual mapping configured via config or documented for users. */
-
-    /* Voicemail commands: *8<subcmd># where 8='V' group */
-    register_cmd("87",  DTMF_EVT_VOICEMAIL_STATUS, "Voicemail status");
-    register_cmd("86",  DTMF_EVT_VOICEMAIL_RECORD, "Voicemail record");
-    register_cmd("85",  DTMF_EVT_VOICEMAIL_PLAY,   "Voicemail play");
-    register_cmd("83",  DTMF_EVT_VOICEMAIL_DELETE, "Voicemail delete");
-    register_cmd("84",  DTMF_EVT_VOICEMAIL_LIST,   "Voicemail list");
-
-    /* GPIO: *41<pin># = on, *40<pin># = off (4='G' group) */
-    register_cmd("41",  DTMF_EVT_GPIO_ON,  "GPIO on");
-    register_cmd("40",  DTMF_EVT_GPIO_OFF, "GPIO off");
-
-    /* Weather: *93# current, *94# forecast (9='W' group) */
-    register_cmd("93",  8, "Weather report");
-    register_cmd("94",  9, "Weather forecast");
-
-    /* Time: *95# */
-    register_cmd("95", 10, "Time check");
-
-    /* Emergency: *911# on, *910# off */
-    register_cmd("911", 11, "Emergency on");
-    register_cmd("910", 12, "Emergency off");
-
-    /* Parrot/echo */
-    register_cmd("88", 13, "Parrot echo");
-
-    /* NWS alerts */
-    register_cmd("96", 14, "NWS alerts");
-
-    /* Scrambler */
-    register_cmd("97", 16, "Scrambler");
-
-    /* OTP authentication */
-    register_cmd("68", 15, "OTP authenticate");
+    /* Expose registration API via core vtable so consumer modules
+     * can register their own DTMF commands during load(). */
+    core->dtmf_register   = dtmf_register_cmd;
+    core->dtmf_unregister = dtmf_unregister_cmd;
 
     core->subscribe(KERCHEVT_DTMF_DIGIT, on_dtmf_digit, NULL);
     core->subscribe(KERCHEVT_COR_ASSERT, on_cor_event, NULL);
@@ -244,6 +233,20 @@ static int dtmfcmd_configure(const kerchunk_config_t *cfg)
 {
     g_timeout_ms = kerchunk_config_get_int(cfg, "dtmf", "inter_digit_timeout", 3000);
     g_cor_gate_ms = kerchunk_config_get_int(cfg, "dtmf", "cor_gate_ms", 200);
+
+    /* Check for pattern overrides from [dtmf] config section */
+    for (int i = 0; i < g_cmd_count; i++) {
+        if (g_cmds[i].config_key[0] == '\0')
+            continue;
+        const char *override = kerchunk_config_get(cfg, "dtmf", g_cmds[i].config_key);
+        if (override && override[0] != '\0') {
+            g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                        "override: %s pattern '%s' -> '%s'",
+                        g_cmds[i].config_key, g_cmds[i].pattern, override);
+            snprintf(g_cmds[i].pattern, sizeof(g_cmds[i].pattern), "%s", override);
+        }
+    }
+
     return 0;
 }
 
@@ -257,6 +260,8 @@ static void dtmfcmd_unload(void)
         g_core->timer_cancel(g_cor_gate_timer);
         g_cor_gate_timer = -1;
     }
+    g_core->dtmf_register   = NULL;
+    g_core->dtmf_unregister = NULL;
 }
 
 /* CLI */
@@ -268,7 +273,7 @@ static int cli_dtmfcmd(int argc, const char **argv, kerchunk_resp_t *r)
     resp_json_raw(r, "\"commands\":[");
     for (int i = 0; i < g_cmd_count; i++) {
         if (i > 0) resp_json_raw(r, ",");
-        char frag[5440];
+        char frag[8192];
         snprintf(frag, sizeof(frag),
                  "{\"pattern\":\"*%s#\",\"description\":\"%s\"}",
                  g_cmds[i].pattern, g_cmds[i].description);
@@ -281,7 +286,7 @@ static int cli_dtmfcmd(int argc, const char **argv, kerchunk_resp_t *r)
     /* Text */
     resp_text_raw(r, "DTMF Commands:\n");
     for (int i = 0; i < g_cmd_count; i++) {
-        char line[5440];
+        char line[8192];
         snprintf(line, sizeof(line), "  *%s# -> %s\n",
                  g_cmds[i].pattern, g_cmds[i].description);
         resp_text_raw(r, line);

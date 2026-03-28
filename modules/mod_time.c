@@ -68,7 +68,7 @@ static void speak_wav(const char *name)
 {
     char path[512];
     snprintf(path, sizeof(path), "%s/%s.wav", g_sounds_dir, name);
-    g_core->queue_audio_file(path, 2);   /* pri 2: below weather/tones */
+    g_core->queue_audio_file(path, KERCHUNK_PRI_NORMAL);   /* below weather/tones */
 }
 
 static void speak_number(int n)
@@ -125,7 +125,7 @@ static void time_announce(void)
                      hour, min, pm ? "PM" : "AM",
                      g_timezone[0] ? " " : "",
                      g_timezone[0] ? g_timezone : "");
-        g_core->tts_speak(text, 2);
+        g_core->tts_speak(text, KERCHUNK_PRI_NORMAL);
     } else {
         /* WAV fallback */
         speak_wav("time/tm_the_time_is");
@@ -191,6 +191,10 @@ static void on_dtmf_time(const kerchevt_t *evt, void *ud)
 static int time_load(kerchunk_core_t *core)
 {
     g_core = core;
+
+    if (core->dtmf_register)
+        core->dtmf_register("95", 10, "Time check", "time_check");
+
     core->subscribe(DTMF_EVT_TIME, on_dtmf_time, NULL);
     return 0;
 }
@@ -237,6 +241,8 @@ static int time_configure(const kerchunk_config_t *cfg)
 
 static void time_unload(void)
 {
+    if (g_core->dtmf_unregister)
+        g_core->dtmf_unregister("95");
     g_core->unsubscribe(DTMF_EVT_TIME, on_dtmf_time);
     if (g_timer >= 0)
         g_core->timer_cancel(g_timer);

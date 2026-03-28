@@ -234,7 +234,7 @@ static void speak_wav(const char *name)
 {
     char path[512];
     snprintf(path, sizeof(path), "%s/%s.wav", g_sounds_dir, name);
-    g_core->queue_audio_file(path, 3);
+    g_core->queue_audio_file(path, KERCHUNK_PRI_ELEVATED);
 }
 
 /*
@@ -355,7 +355,7 @@ static void weather_announce(void)
                                 (int)roundf(g_wind_mph));
         }
         (void)off;
-        g_core->tts_speak(text, 3);
+        g_core->tts_speak(text, KERCHUNK_PRI_ELEVATED);
     } else {
         /* WAV fallback */
         speak_wav("weather/wx_current_weather");
@@ -411,7 +411,7 @@ static void forecast_announce(void)
         off += snprintf(text + off, sizeof(text) - off,
                         " Humidity %d percent.", g_fc_humidity);
         (void)off;
-        g_core->tts_speak(text, 3);
+        g_core->tts_speak(text, KERCHUNK_PRI_ELEVATED);
     } else {
         /* WAV fallback */
         speak_wav("weather/wx_forecast");
@@ -483,6 +483,12 @@ static int weather_load(kerchunk_core_t *core)
     g_valid = 0;
     g_fc_valid = 0;
     curl_global_init(CURL_GLOBAL_DEFAULT);
+
+    if (core->dtmf_register) {
+        core->dtmf_register("93", 8, "Weather report",   "weather_report");
+        core->dtmf_register("94", 9, "Weather forecast", "weather_forecast");
+    }
+
     core->subscribe(DTMF_EVT_WEATHER,  on_dtmf_weather, NULL);
     core->subscribe(DTMF_EVT_FORECAST, on_dtmf_forecast, NULL);
     return 0;
@@ -541,6 +547,10 @@ static int weather_configure(const kerchunk_config_t *cfg)
 
 static void weather_unload(void)
 {
+    if (g_core->dtmf_unregister) {
+        g_core->dtmf_unregister("93");
+        g_core->dtmf_unregister("94");
+    }
     g_core->unsubscribe(DTMF_EVT_WEATHER,  on_dtmf_weather);
     g_core->unsubscribe(DTMF_EVT_FORECAST, on_dtmf_forecast);
     if (g_timer >= 0)
