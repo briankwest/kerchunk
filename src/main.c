@@ -489,6 +489,11 @@ static void *audio_thread_fn(void *arg)
         plcode_ctcss_result_t ctcss_res;
         plcode_ctcss_dec_process(ctx->ctcss_dec, frame, (size_t)nread, &ctcss_res);
         if (ctcss_res.detected != prev_ctcss) {
+            if (ctcss_res.detected && ctcss_res.tone_freq_x10 > 0)
+                KERCHUNK_LOG_I(LOG_MOD, "CTCSS: %.1f Hz",
+                               ctcss_res.tone_freq_x10 / 10.0f);
+            else if (!ctcss_res.detected && prev_ctcss)
+                KERCHUNK_LOG_I(LOG_MOD, "CTCSS: off");
             kerchevt_t evt = {
                 .type = KERCHEVT_CTCSS_DETECT,
                 .timestamp_us = t0,
@@ -502,6 +507,12 @@ static void *audio_thread_fn(void *arg)
         plcode_dcs_result_t dcs_res;
         plcode_dcs_dec_process(ctx->dcs_dec, frame, (size_t)nread, &dcs_res);
         if (dcs_res.detected != prev_dcs) {
+            if (dcs_res.detected)
+                KERCHUNK_LOG_I(LOG_MOD, "DCS: %03d%s",
+                               dcs_res.code_number,
+                               dcs_res.inverted ? " (inv)" : "");
+            else if (!dcs_res.detected && prev_dcs)
+                KERCHUNK_LOG_I(LOG_MOD, "DCS: off");
             kerchevt_t evt = {
                 .type = KERCHEVT_DCS_DETECT,
                 .timestamp_us = t0,
@@ -536,6 +547,7 @@ static void *audio_thread_fn(void *arg)
         plcode_dtmf_result_t dtmf_res;
         plcode_dtmf_dec_process(ctx->dtmf_dec, frame, (size_t)nread, &dtmf_res);
         if (dtmf_res.detected && !prev_dtmf) {
+            KERCHUNK_LOG_I(LOG_MOD, "DTMF: %c", dtmf_res.digit);
             kerchevt_t evt = {
                 .type = KERCHEVT_DTMF_DIGIT,
                 .timestamp_us = t0,
@@ -1025,7 +1037,10 @@ int main(int argc, char **argv)
 
     int prev_cor = 0;
     int cor_drop_hold = 0;   /* ticks remaining before COR drop is accepted */
-    #define COR_DROP_HOLD_TICKS 15  /* 300ms at 20ms/tick — absorbs DTMF COS glitches */
+    int cor_drop_hold_ms = kerchunk_config_get_int(cfg, "repeater", "cor_drop_hold", 1000);
+    if (cor_drop_hold_ms < 0) cor_drop_hold_ms = 0;
+    if (cor_drop_hold_ms > 5000) cor_drop_hold_ms = 5000;
+    int cor_drop_hold_ticks = cor_drop_hold_ms / 20;  /* convert ms to 20ms ticks */
 
     /* ── Main loop: 20ms tick — timers, socket, COR, config ── */
     while (g_running) {
@@ -1086,7 +1101,7 @@ int main(int argc, char **argv)
             prev_cor = 1;
         } else if (cor == 0 && prev_cor) {
             /* COR drop — start hold timer, don't fire yet */
-            cor_drop_hold = COR_DROP_HOLD_TICKS;
+            cor_drop_hold = cor_drop_hold_ticks;
         } else if (cor == 1 && prev_cor && cor_drop_hold > 0) {
             /* COR reasserted during hold — cancel the pending drop */
             cor_drop_hold = 0;

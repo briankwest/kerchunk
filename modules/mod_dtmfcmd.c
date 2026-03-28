@@ -38,6 +38,9 @@ static int  g_cor_gate_active;
 static int  g_cor_gate_timer = -1;
 static int  g_cor_gate_ms = 200;
 
+/* Deferred command: wait for COR drop before dispatching */
+static int  g_pending_dispatch;
+
 /* Command table */
 static dtmf_cmd_entry_t g_cmds[MAX_COMMANDS];
 static int g_cmd_count;
@@ -156,7 +159,7 @@ static void cor_gate_expired(void *ud)
     g_cor_gate_active = 0;
 }
 
-static void on_cor_event(const kerchevt_t *evt, void *ud)
+static void on_cor_assert(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
     if (g_cor_gate_ms <= 0) return;
@@ -164,6 +167,25 @@ static void on_cor_event(const kerchevt_t *evt, void *ud)
     if (g_cor_gate_timer >= 0)
         g_core->timer_cancel(g_cor_gate_timer);
     g_cor_gate_timer = g_core->timer_create(g_cor_gate_ms, 0, cor_gate_expired, NULL);
+}
+
+static void on_cor_drop(const kerchevt_t *evt, void *ud)
+{
+    (void)evt; (void)ud;
+    /* COR gate on drop too (some radios send spurious DTMF on squelch close) */
+    if (g_cor_gate_ms > 0) {
+        g_cor_gate_active = 1;
+        if (g_cor_gate_timer >= 0)
+            g_core->timer_cancel(g_cor_gate_timer);
+        g_cor_gate_timer = g_core->timer_create(g_cor_gate_ms, 0, cor_gate_expired, NULL);
+    }
+
+    /* Dispatch deferred command now that user unkeyed */
+    if (g_pending_dispatch) {
+        g_pending_dispatch = 0;
+        dispatch_command();
+        reset_cmd();
+    }
 }
 
 static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
@@ -188,10 +210,17 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
         return;
 
     if (d == '#') {
-        /* End of command */
+        /* End of command — defer dispatch until COR drops so the
+         * announcement doesn't play while the user is still keyed up. */
         cancel_timeout();
-        dispatch_command();
-        reset_cmd();
+        if (g_core->is_receiving()) {
+            g_pending_dispatch = 1;
+            g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                        "command *%s# ready, waiting for COR drop", g_buf);
+        } else {
+            dispatch_command();
+            reset_cmd();
+        }
         return;
     }
 
@@ -224,8 +253,8 @@ static int dtmfcmd_load(kerchunk_core_t *core)
     core->dtmf_unregister = dtmf_unregister_cmd;
 
     core->subscribe(KERCHEVT_DTMF_DIGIT, on_dtmf_digit, NULL);
-    core->subscribe(KERCHEVT_COR_ASSERT, on_cor_event, NULL);
-    core->subscribe(KERCHEVT_COR_DROP, on_cor_event, NULL);
+    core->subscribe(KERCHEVT_COR_ASSERT, on_cor_assert, NULL);
+    core->subscribe(KERCHEVT_COR_DROP, on_cor_drop, NULL);
     return 0;
 }
 
@@ -253,8 +282,8 @@ static int dtmfcmd_configure(const kerchunk_config_t *cfg)
 static void dtmfcmd_unload(void)
 {
     g_core->unsubscribe(KERCHEVT_DTMF_DIGIT, on_dtmf_digit);
-    g_core->unsubscribe(KERCHEVT_COR_ASSERT, on_cor_event);
-    g_core->unsubscribe(KERCHEVT_COR_DROP, on_cor_event);
+    g_core->unsubscribe(KERCHEVT_COR_ASSERT, on_cor_assert);
+    g_core->unsubscribe(KERCHEVT_COR_DROP, on_cor_drop);
     cancel_timeout();
     if (g_cor_gate_timer >= 0) {
         g_core->timer_cancel(g_cor_gate_timer);
