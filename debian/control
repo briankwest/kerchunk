@@ -23,7 +23,7 @@ Depends: ${shlibs:Depends},
 Recommends: libnemo-normalize,
             libnemo-normalize-data,
             librtlsdr0 | librtlsdr2
-Description: GMRS repeater controller daemon with DSP and web dashboard
+Description: GMRS/HAM repeater controller daemon with DSP and web dashboard
  kerchunkd is a lightweight C11 repeater controller for GMRS radios using
  USB HID interfaces (CM108/CM119/RIM-Lite). It provides real-time CTCSS/DCS/DTMF
  decoding via libplcode, a priority audio queue with automatic PTT management,

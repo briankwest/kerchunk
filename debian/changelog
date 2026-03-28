@@ -1,7 +1,7 @@
 kerchunk (1.0.0) stable; urgency=medium
 
   * Initial Debian package release
-  * kerchunkd GMRS repeater controller daemon
+  * kerchunkd GMRS/HAM repeater controller daemon
   * kerchunk CLI for runtime control
   * 24 dynamically loaded modules
   * Embedded HTTPS web dashboard with WebSocket audio

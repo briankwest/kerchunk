@@ -1,6 +1,6 @@
 # kerchunkd Architecture
 
-Complete technical architecture of the kerchunkd GMRS repeater controller.
+Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
 
 ---
 
