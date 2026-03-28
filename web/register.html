@@ -83,6 +83,10 @@ header h1 { font-size: 20px; }
     <input type="email" id="reg-email" class="form-input" placeholder="Email (optional)"
            autocomplete="email">
   </div>
+  <div class="form-group">
+    <input type="text" id="reg-callsign" class="form-input" placeholder="Callsign (optional)"
+           oninput="this.value=this.value.toUpperCase()" maxlength="15" autocapitalize="characters">
+  </div>
   <button id="reg-btn" class="submit-btn">Register</button>
   <div id="reg-error" class="error"></div>
 </div>
@@ -97,6 +101,10 @@ header h1 { font-size: 20px; }
   <div class="cred-row">
     <span class="cred-label">Display Name</span>
     <span class="cred-val" id="res-name"></span>
+  </div>
+  <div class="cred-row" id="res-callsign-row" style="display:none">
+    <span class="cred-label">Callsign</span>
+    <span class="cred-val" id="res-callsign"></span>
   </div>
   <div class="cred-row">
     <span class="cred-label">DTMF Login PIN</span>
@@ -128,7 +136,7 @@ $('reg-username').addEventListener('input', function() {
 });
 
 /* Submit on Enter from any input */
-['reg-username', 'reg-name', 'reg-email'].forEach(function(id) {
+['reg-username', 'reg-name', 'reg-email', 'reg-callsign'].forEach(function(id) {
   $(id).addEventListener('keydown', function(e) {
     if (e.key === 'Enter') $('reg-btn').click();
   });
@@ -139,6 +147,7 @@ $('reg-btn').addEventListener('click', async function() {
   const username = $('reg-username').value.trim();
   const name = $('reg-name').value.trim();
   const email = $('reg-email').value.trim();
+  const callsign = $('reg-callsign').value.trim().toUpperCase();
 
   $('reg-error').textContent = '';
 
@@ -161,6 +170,7 @@ $('reg-btn').addEventListener('click', async function() {
     const body = { username: username };
     if (name) body.name = name;
     if (email) body.email = email;
+    if (callsign) body.callsign = callsign;
 
     const resp = await fetch('/api/register', {
       method: 'POST',
@@ -189,6 +199,10 @@ $('reg-btn').addEventListener('click', async function() {
     const data = await resp.json();
     $('res-username').textContent = data.username;
     $('res-name').textContent = data.name || data.username;
+    if (data.callsign) {
+      $('res-callsign').textContent = data.callsign;
+      $('res-callsign-row').style.display = '';
+    }
     $('res-pin').textContent = data.dtmf_login;
     $('res-ani').textContent = data.ani;
 

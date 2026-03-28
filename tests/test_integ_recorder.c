@@ -92,6 +92,7 @@ void test_integ_recorder(void)
 
     /* Set up user DB */
     kerchunk_config_t *cfg = kerchunk_config_create();
+    kerchunk_config_set(cfg, "user.1", "username", "brian");
     kerchunk_config_set(cfg, "user.1", "name",    "Brian");
     kerchunk_config_set(cfg, "user.1", "access",  "2");
     kerchunk_config_set(cfg, "recording", "enabled",   "on");
@@ -121,15 +122,15 @@ void test_integ_recorder(void)
     }
     mock_fire_simple(KERCHEVT_COR_DROP);
     test_assert(g_rx_active == 0, "recording not stopped");
-    test_assert(count_files(test_dir, "RX_Brian") == 1, "RX WAV not found");
+    test_assert(count_files(test_dir, "RX_brian") == 1, "RX WAV not found");
     test_end();
 
     /* 2. Filename contains caller name */
     test_begin("recorder: filename has caller name");
     char found[512];
-    test_assert(find_file(test_dir, "RX_Brian", found, sizeof(found)) == 0,
+    test_assert(find_file(test_dir, "RX_brian", found, sizeof(found)) == 0,
                 "file not found");
-    test_assert(strstr(found, "RX_Brian.wav") != NULL, "wrong filename");
+    test_assert(strstr(found, "RX_brian.wav") != NULL, "wrong filename");
     test_end();
 
     /* 3. WAV file has non-zero size */

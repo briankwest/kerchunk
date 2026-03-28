@@ -431,6 +431,7 @@ tx_ctcss = 1318
 username = bwest                 ; Lowercase, no spaces — used for PTT login
 name = Brian West                ; Display name
 email = brian@example.com        ; Contact email
+callsign = WRDP519              ; FCC callsign (optional, forced uppercase)
 ani = 5551                       ; DTMF ANI sequence (auto-sent by radio)
 dtmf_login = 101                 ; DTMF login code (*101#)
 access = 2                       ; 2 = admin

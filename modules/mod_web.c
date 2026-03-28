@@ -644,12 +644,12 @@ static void handle_api_users(struct mg_connection *c)
         if (i > 0) buf[off++] = ',';
         off += snprintf(buf + off, RESP_MAX - off,
             "{\"id\":%d,\"username\":\"%s\",\"name\":\"%s\","
-            "\"email\":\"%s\","
+            "\"email\":\"%s\",\"callsign\":\"%s\","
             "\"dtmf_login\":\"%s\",\"ani\":\"%s\",\"access\":%d,"
             "\"voicemail\":%d,\"group\":%d,"
             "\"totp_secret\":\"%s\"}",
             u->id, u->username, u->name,
-            u->email,
+            u->email, u->callsign,
             u->dtmf_login, u->ani, u->access,
             u->voicemail, u->group,
             u->totp_secret);
@@ -732,6 +732,13 @@ static void handle_api_user_create(struct mg_connection *c,
     s = mg_json_get_str(hm->body, "$.email");
     if (s) { kerchunk_config_set(cfg, section, "email", s); free(s); }
 
+    s = mg_json_get_str(hm->body, "$.callsign");
+    if (s) {
+        for (char *p = s; *p; p++) *p = toupper((unsigned char)*p);
+        kerchunk_config_set(cfg, section, "callsign", s);
+        free(s);
+    }
+
     s = mg_json_get_str(hm->body, "$.dtmf_login");
     kerchunk_config_set(cfg, section, "dtmf_login", s ? s : "");
     free(s);
@@ -794,6 +801,13 @@ static void handle_api_user_update(struct mg_connection *c,
 
     s = mg_json_get_str(hm->body, "$.email");
     if (s) { kerchunk_config_set(cfg, section, "email", s); free(s); }
+
+    s = mg_json_get_str(hm->body, "$.callsign");
+    if (s) {
+        for (char *p = s; *p; p++) *p = toupper((unsigned char)*p);
+        kerchunk_config_set(cfg, section, "callsign", s);
+        free(s);
+    }
 
     s = mg_json_get_str(hm->body, "$.dtmf_login");
     if (s) { kerchunk_config_set(cfg, section, "dtmf_login", s); free(s); }
@@ -1170,10 +1184,15 @@ static void handle_api_register(struct mg_connection *c,
 
     char *name_str = mg_json_get_str(hm->body, "$.name");
     char *email_str = mg_json_get_str(hm->body, "$.email");
+    char *callsign_str = mg_json_get_str(hm->body, "$.callsign");
+    /* Force callsign uppercase */
+    if (callsign_str) {
+        for (char *p = callsign_str; *p; p++) *p = toupper((unsigned char)*p);
+    }
 
     kerchunk_config_t *cfg = kerchunk_core_get_users_config();
     if (!cfg) {
-        free(username); free(name_str); free(email_str);
+        free(username); free(name_str); free(email_str); free(callsign_str);
         mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"No config\"}");
         return;
     }
@@ -1187,7 +1206,7 @@ static void handle_api_register(struct mg_connection *c,
     }
     if (new_id < 0) {
         kerchunk_core_unlock_config();
-        free(username); free(name_str); free(email_str);
+        free(username); free(name_str); free(email_str); free(callsign_str);
         mg_http_reply(c, 503, API_HEADERS,
                       "{\"error\":\"No user slots available\"}");
         return;
@@ -1214,7 +1233,7 @@ static void handle_api_register(struct mg_connection *c,
     }
     if (attempts >= 100) {
         kerchunk_core_unlock_config();
-        free(username); free(name_str); free(email_str);
+        free(username); free(name_str); free(email_str); free(callsign_str);
         mg_http_reply(c, 503, API_HEADERS,
                       "{\"error\":\"Could not generate unique DTMF login\"}");
         return;
@@ -1231,7 +1250,7 @@ static void handle_api_register(struct mg_connection *c,
     }
     if (attempts >= 100) {
         kerchunk_core_unlock_config();
-        free(username); free(name_str); free(email_str);
+        free(username); free(name_str); free(email_str); free(callsign_str);
         mg_http_reply(c, 503, API_HEADERS,
                       "{\"error\":\"Could not generate unique ANI\"}");
         return;
@@ -1245,6 +1264,8 @@ static void handle_api_register(struct mg_connection *c,
                         (name_str && name_str[0]) ? name_str : username);
     if (email_str && email_str[0])
         kerchunk_config_set(cfg, section, "email", email_str);
+    if (callsign_str && callsign_str[0])
+        kerchunk_config_set(cfg, section, "callsign", callsign_str);
     kerchunk_config_set(cfg, section, "dtmf_login", dtmf_login);
     kerchunk_config_set(cfg, section, "ani", ani);
     kerchunk_config_set(cfg, section, "access", "1");
@@ -1263,10 +1284,12 @@ static void handle_api_register(struct mg_connection *c,
 
     mg_http_reply(c, 200, API_HEADERS,
         "{\"ok\":true,\"id\":%d,\"username\":\"%s\",\"name\":\"%s\","
-        "\"dtmf_login\":\"%s\",\"ani\":\"%s\"}",
-        new_id, username, display_name, dtmf_login, ani);
+        "\"callsign\":\"%s\",\"dtmf_login\":\"%s\",\"ani\":\"%s\"}",
+        new_id, username, display_name,
+        (callsign_str && callsign_str[0]) ? callsign_str : "",
+        dtmf_login, ani);
 
-    free(username); free(name_str); free(email_str);
+    free(username); free(name_str); free(email_str); free(callsign_str);
 }
 
 /* ── Mongoose event handler ── */

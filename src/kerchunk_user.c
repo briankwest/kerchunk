@@ -123,6 +123,15 @@ int kerchunk_user_init(const kerchunk_config_t *cfg)
         else
             u->email[0] = '\0';
 
+        /* Load callsign (force uppercase) */
+        const char *cs = kerchunk_config_get(cfg, section, "callsign");
+        if (cs) {
+            snprintf(u->callsign, sizeof(u->callsign), "%s", cs);
+            for (char *p = u->callsign; *p; p++) *p = toupper(*p);
+        } else {
+            u->callsign[0] = '\0';
+        }
+
         u->access             = kerchunk_config_get_int(cfg, section, "access", 1);
         u->voicemail          = kerchunk_config_get_int(cfg, section, "voicemail", 0);
         u->group              = kerchunk_config_get_int(cfg, section, "group", 0);

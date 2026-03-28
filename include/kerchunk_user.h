@@ -26,6 +26,7 @@ typedef struct {
     char     username[32];      /* lowercase, no spaces — login identity */
     char     name[32];          /* display name */
     char     email[128];        /* email address */
+    char     callsign[16];      /* FCC callsign, uppercase, "" = none */
     char     dtmf_login[8];     /* DTMF login code, "" = none */
     char     ani[16];           /* ANI code, "" = none */
     int      access;            /* Access level */

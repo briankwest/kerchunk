@@ -96,11 +96,12 @@ table tr:hover td { background: rgba(88,166,255,0.04); }
   .card { overflow: hidden; }
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
-  /* Users table: hide ID, Email, ANI, TOTP on mobile — keep Username, Name, DTMF, Access, Group, Actions */
+  /* Users table: hide ID, Email, Callsign, ANI, TOTP on mobile — keep Username, Name, DTMF, Access, Group, Actions */
   #users-table th:nth-child(1), #users-table td:nth-child(1),
   #users-table th:nth-child(4), #users-table td:nth-child(4),
-  #users-table th:nth-child(6), #users-table td:nth-child(6),
-  #users-table th:nth-child(9), #users-table td:nth-child(9) { display: none; }
+  #users-table th:nth-child(5), #users-table td:nth-child(5),
+  #users-table th:nth-child(7), #users-table td:nth-child(7),
+  #users-table th:nth-child(10), #users-table td:nth-child(10) { display: none; }
 
   /* Groups table: hide ID on mobile (col 1) */
   #groups-table th:nth-child(1), #groups-table td:nth-child(1) { display: none; }
@@ -149,8 +150,8 @@ table tr:hover td { background: rgba(88,166,255,0.04); }
     <button class="btn btn-green btn-sm" onclick="openUserModal()" style="margin-bottom:10px">+ Add User</button>
     <div class="table-wrap">
       <table id="users-table">
-        <thead><tr><th>ID</th><th>Username</th><th>Name</th><th>Email</th><th>DTMF</th><th>ANI</th><th>Access</th><th>Group</th><th>TOTP</th><th>Actions</th></tr></thead>
-        <tbody id="users-body"><tr><td colspan="10" class="empty-msg">Loading...</td></tr></tbody>
+        <thead><tr><th>ID</th><th>Username</th><th>Name</th><th>Email</th><th>Callsign</th><th>DTMF</th><th>ANI</th><th>Access</th><th>Group</th><th>TOTP</th><th>Actions</th></tr></thead>
+        <tbody id="users-body"><tr><td colspan="11" class="empty-msg">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -197,9 +198,15 @@ table tr:hover td { background: rgba(88,166,255,0.04); }
         <input type="text" id="usr-name" placeholder="Display name">
       </div>
     </div>
-    <div class="form-group">
-      <label>Email</label>
-      <input type="email" id="usr-email" placeholder="email@example.com">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="usr-email" placeholder="email@example.com">
+      </div>
+      <div class="form-group">
+        <label>Callsign</label>
+        <input type="text" id="usr-callsign" placeholder="e.g. WRDP519" oninput="this.value=this.value.toUpperCase()" maxlength="15">
+      </div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -392,7 +399,7 @@ async function loadUsers() {
     renderUsers();
   } catch (e) {
     document.getElementById('users-body').innerHTML =
-      '<tr><td colspan="8" class="empty-msg">Failed to load users</td></tr>';
+      '<tr><td colspan="11" class="empty-msg">Failed to load users</td></tr>';
   }
 }
 
@@ -431,7 +438,7 @@ function groupName(gid) {
 function renderUsers() {
   const tbody = document.getElementById('users-body');
   if (!users.length) {
-    tbody.innerHTML = '<tr><td colspan="10" class="empty-msg">No users defined</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="empty-msg">No users defined</td></tr>';
     return;
   }
   tbody.innerHTML = users.map(u => {
@@ -442,6 +449,7 @@ function renderUsers() {
       '<td>' + esc(u.username || '') + '</td>' +
       '<td>' + esc(u.name || '') + '</td>' +
       '<td>' + esc(u.email || '-') + '</td>' +
+      '<td>' + esc(u.callsign || '-') + '</td>' +
       '<td>' + esc(u.dtmf_login || '-') + '</td>' +
       '<td>' + esc(u.ani || '-') + '</td>' +
       '<td>' + accessLabel(u.access) + '</td>' +
@@ -539,6 +547,7 @@ function openUserModal(u) {
   document.getElementById('usr-username').value = u ? (u.username || '') : '';
   document.getElementById('usr-name').value = u ? (u.name || '') : '';
   document.getElementById('usr-email').value = u ? (u.email || '') : '';
+  document.getElementById('usr-callsign').value = u ? (u.callsign || '') : '';
   document.getElementById('usr-dtmf-login').value = u ? (u.dtmf_login || '') : '';
   document.getElementById('usr-ani').value = u ? (u.ani || '') : '';
   document.getElementById('usr-access').value = u ? (u.access || 0) : 0;
@@ -565,6 +574,7 @@ async function saveUser() {
     username: document.getElementById('usr-username').value.trim(),
     name: document.getElementById('usr-name').value.trim(),
     email: document.getElementById('usr-email').value.trim(),
+    callsign: document.getElementById('usr-callsign').value.trim().toUpperCase(),
     dtmf_login: document.getElementById('usr-dtmf-login').value.trim(),
     ani: document.getElementById('usr-ani').value.trim(),
     access: parseInt(document.getElementById('usr-access').value) || 0,
