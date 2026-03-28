@@ -39,6 +39,8 @@ static pthread_t       g_console_tid;
 static pthread_mutex_t g_console_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int             g_console_running;
 static char            g_hist_path[512];
+static struct linenoiseState g_ls;    /* shared with log callback for hide/show */
+static volatile int    g_in_edit;     /* 1 while linenoiseEditStart is active */
 
 /* Command name table for tab completion */
 static char g_cmd_names[MAX_CMDS][64];
@@ -160,101 +162,101 @@ static void show_help(const char *topic)
 
 /* ── Console thread ────────────────────────────────────────────────── */
 
+/* Process a completed line (command dispatch, help, exit, etc.)
+ * Returns 1 if the daemon should shut down, 0 to continue. */
+static int console_handle_line(const char *line)
+{
+    if (!line || line[0] == '\0')
+        return 0;
+
+    if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0 ||
+        strcmp(line, "/quit") == 0) {
+        g_running = 0;
+        return 1;
+    }
+
+    if (strcmp(line, "help") == 0 || strcmp(line, "?") == 0) {
+        show_help(NULL);
+        return 0;
+    }
+    if (strncmp(line, "help ", 5) == 0) {
+        show_help(line + 5);
+        return 0;
+    }
+
+    if (strcmp(line, "show") == 0) {
+        kerchunk_resp_t resp;
+        resp_init(&resp);
+        const char *argv[] = { "status" };
+        kerchunk_dispatch_command(1, argv, &resp);
+        resp_finish(&resp);
+        if (resp.text[0]) fputs(resp.text, stdout);
+        return 0;
+    }
+
+    /* Dispatch command */
+    char cmd_copy[1024];
+    snprintf(cmd_copy, sizeof(cmd_copy), "%s", line);
+    const char *argv[MAX_ARGV];
+    int argc = console_parse_cmd(cmd_copy, argv, MAX_ARGV);
+    if (argc > 0) {
+        kerchunk_resp_t resp;
+        resp_init(&resp);
+        kerchunk_dispatch_command(argc, argv, &resp);
+        resp_finish(&resp);
+        if (resp.text[0]) fputs(resp.text, stdout);
+    }
+
+    load_command_names();
+    return 0;
+}
+
 static void *console_thread_fn(void *arg)
 {
     (void)arg;
 
     KERCHUNK_LOG_I(LOG_MOD, "interactive console started (Ctrl-D to shutdown)");
 
-    /* Load command names for tab completion */
     load_command_names();
-
     linenoiseSetCompletionCallback(completion_callback);
     linenoiseHistoryLoad(g_hist_path);
     linenoiseHistorySetMaxLen(200);
 
+    char buf[1024];
+
     while (g_running && g_console_running) {
-        char *line = linenoise("kerchunkd> ");
+        /* Start a new edit session — sets terminal to raw mode */
+        buf[0] = '\0';
+        linenoiseEditStart(&g_ls, STDIN_FILENO, STDOUT_FILENO,
+                           buf, sizeof(buf), "kerchunkd> ");
+        g_in_edit = 1;
+
+        char *line = NULL;
+        while (g_running && g_console_running) {
+            /* Non-blocking feed: returns linenoiseEditMore if incomplete,
+             * a line pointer on Enter, or NULL on Ctrl-C/Ctrl-D */
+            line = linenoiseEditFeed(&g_ls);
+            if (line != linenoiseEditMore)
+                break;
+            /* No complete line yet — sleep briefly to avoid busy-wait */
+            usleep(5000);  /* 5ms */
+        }
+
+        g_in_edit = 0;
+        linenoiseEditStop(&g_ls);
+
         if (!line) {
-            /* Ctrl-D (EOF) or Ctrl-C with errno=EAGAIN */
-            if (errno == EAGAIN) {
-                /* Ctrl-C — just continue */
-                continue;
-            }
-            /* Ctrl-D — shutdown */
+            if (errno == EAGAIN) continue;  /* Ctrl-C */
             printf("\n");
             g_running = 0;
             break;
         }
 
-        /* Empty line */
-        if (line[0] == '\0') {
-            linenoiseFree(line);
-            continue;
-        }
-
-        /* Exit/quit commands */
-        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0 ||
-            strcmp(line, "/quit") == 0) {
+        if (line[0] != '\0')
             linenoiseHistoryAdd(line);
-            linenoiseFree(line);
-            g_running = 0;
+
+        if (console_handle_line(line))
             break;
-        }
-
-        /* Help */
-        if (strcmp(line, "help") == 0 || strcmp(line, "?") == 0) {
-            show_help(NULL);
-            linenoiseHistoryAdd(line);
-            linenoiseFree(line);
-            continue;
-        }
-        if (strncmp(line, "help ", 5) == 0) {
-            show_help(line + 5);
-            linenoiseHistoryAdd(line);
-            linenoiseFree(line);
-            continue;
-        }
-
-        /* "show" alias for "status" */
-        if (strcmp(line, "show") == 0) {
-            linenoiseHistoryAdd(line);
-            linenoiseFree(line);
-
-            kerchunk_resp_t resp;
-            resp_init(&resp);
-            const char *argv[] = { "status" };
-            kerchunk_dispatch_command(1, argv, &resp);
-            resp_finish(&resp);
-            if (resp.text[0])
-                fputs(resp.text, stdout);
-            continue;
-        }
-
-        /* Dispatch command */
-        {
-            /* Make a mutable copy for tokenizer */
-            char cmd_copy[1024];
-            snprintf(cmd_copy, sizeof(cmd_copy), "%s", line);
-
-            const char *argv[MAX_ARGV];
-            int argc = console_parse_cmd(cmd_copy, argv, MAX_ARGV);
-
-            if (argc > 0) {
-                kerchunk_resp_t resp;
-                resp_init(&resp);
-                kerchunk_dispatch_command(argc, argv, &resp);
-                resp_finish(&resp);
-                if (resp.text[0])
-                    fputs(resp.text, stdout);
-            }
-        }
-
-        linenoiseHistoryAdd(line);
-        linenoiseFree(line);
-
-        /* Refresh command list (modules may have been loaded/unloaded) */
-        load_command_names();
     }
 
     linenoiseHistorySave(g_hist_path);
@@ -267,8 +269,13 @@ static void *console_thread_fn(void *arg)
 void kerchunk_console_log_line(const char *line)
 {
     pthread_mutex_lock(&g_console_mutex);
-    /* Erase current prompt line, print log, let linenoise redraw on next input */
-    fprintf(stderr, "\r\033[K%s\n", line);
+    if (g_in_edit) {
+        linenoiseHide(&g_ls);
+        fprintf(stderr, "%s\n", line);
+        linenoiseShow(&g_ls);
+    } else {
+        fprintf(stderr, "%s\n", line);
+    }
     pthread_mutex_unlock(&g_console_mutex);
 }
 
