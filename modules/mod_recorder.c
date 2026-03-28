@@ -173,7 +173,10 @@ static void rx_start(void)
     g_rx_buf = malloc(g_rx_cap * sizeof(int16_t));
     if (!g_rx_buf) { g_rx_active = 0; return; }
     fmt_timestamp(g_rx_start_time, sizeof(g_rx_start_time));
-    g_rx_caller_id = 0;
+    /* Don't reset g_rx_caller_id here — CALLER_IDENTIFIED fires before
+     * COR_ASSERT (login session re-identifies during COR debounce).
+     * Resetting here would wipe the identification. It's reset in rx_stop()
+     * after the recording is saved. */
     g_core->audio_tap_register(rx_audio_tap, NULL);
 }
 
@@ -194,6 +197,7 @@ static void rx_stop(void)
     free(g_rx_buf);
     g_rx_buf = NULL;
     g_rx_len = 0;
+    g_rx_caller_id = 0;  /* reset for next transmission */
     g_rx_cap = 0;
 }
 
