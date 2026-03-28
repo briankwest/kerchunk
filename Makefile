@@ -60,7 +60,8 @@ MOD_SRC = modules/mod_repeater.c modules/mod_cwid.c modules/mod_courtesy.c \
           modules/mod_emergency.c modules/mod_parrot.c modules/mod_cdr.c \
           modules/mod_tts.c modules/mod_nws.c modules/mod_stats.c \
           modules/mod_web.c modules/mod_otp.c modules/mod_webhook.c \
-          modules/mod_scrambler.c modules/mod_sdr.c
+          modules/mod_scrambler.c modules/mod_sdr.c \
+          modules/mod_freeswitch.c
 MOD_SO  = $(MOD_SRC:.c=.so)
 
 MOD_LDFLAGS = -shared -fPIC -lm
@@ -80,6 +81,7 @@ TEST_SRC  = tests/test_main.c tests/test_events.c tests/test_config.c tests/test
             tests/test_integ_parrot.c tests/test_integ_cdr.c \
             tests/test_integ_cwid.c tests/test_integ_stats.c \
             tests/test_integ_otp.c tests/test_integ_scrambler.c \
+            tests/test_integ_freeswitch.c \
             tests/test_stubs.c
 TEST_CORE = src/kerchunk_events.o src/kerchunk_config.o src/kerchunk_log.o \
             src/kerchunk_queue.o src/kerchunk_wav.o src/kerchunk_timer.o src/kerchunk_user.o \

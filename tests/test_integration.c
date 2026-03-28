@@ -19,6 +19,7 @@ extern void test_integ_cwid_module(void);
 extern void test_integ_stats(void);
 extern void test_integ_otp(void);
 extern void test_integ_scrambler(void);
+extern void test_integ_freeswitch(void);
 
 void test_integration(void)
 {
@@ -39,4 +40,5 @@ void test_integration(void)
     test_integ_stats();
     test_integ_otp();
     test_integ_scrambler();
+    test_integ_freeswitch();
 }

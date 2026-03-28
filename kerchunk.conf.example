@@ -216,6 +216,7 @@ cor_gate_ms = 200                ; Suppress DTMF during squelch transients (ms, 
 ; nws_alerts = 96
 ; otp_auth = 68
 ; scrambler_toggle = 97
+; autopatch = 0
 
 ; ----------------------------------------------------------------------------
 ; GPIO relay control
@@ -388,6 +389,29 @@ time_skew = 1                    ; Accept +/- N time steps (each 30s)
 ;                                ; 1=2700, 2=2800, 3=2900, 4=3000,
 ;                                ; 5=3100, 6=3200, 7=3300, 8=3400 Hz
 ; frequency = 3000               ; Optional: explicit carrier Hz (overrides code)
+
+; ----------------------------------------------------------------------------
+; FreeSWITCH AutoPatch (telephone interconnect)
+;
+; Connects radio users to phone calls via FreeSWITCH.
+; Dial: *0<digits># to call, *0# to hang up.
+; Requires FreeSWITCH with ESL enabled and a SIP trunk configured.
+; ----------------------------------------------------------------------------
+[freeswitch]
+; enabled = off
+; freeswitch_host = 127.0.0.1
+; esl_port = 8021
+; esl_password = ClueCon
+; sip_gateway = voip_provider
+; udp_base_port = 16000
+; dial_prefix = 1
+; dial_whitelist =
+; max_call_duration = 180
+; dial_timeout = 30
+; inactivity_timeout = 60
+; vad_threshold = 800
+; vad_hold_ms = 500
+; admin_only = off
 
 ; ----------------------------------------------------------------------------
 ; SDR GMRS/FRS channel monitor
