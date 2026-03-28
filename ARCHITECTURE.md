@@ -8,36 +8,36 @@ Complete technical architecture of the kerchunkd GMRS repeater controller.
 
 ```
                           ┌─────────────────────────────────────────┐
-                          │            kerchunkd daemon              │
+                          │            kerchunkd daemon             │
                           │                                         │
-  ┌──────────┐  USB HID   │  ┌─────────┐  ┌──────────┐  ┌───────┐  │  ┌──────────┐
-  │ RIM-Lite ├────────────┼──┤ HID     │  │ Event    │  │Module │  │  │ kerchunk │
-  │ CM119    │  COR/PTT   │  │ Driver  │  │ Bus      │  │Loader │  │  │ CLI      │
-  │          ├────────────┼──┤ GPIO    │  │ pub/sub  │  │dlopen │  │  └────┬─────┘
-  └──────────┘  Audio     │  └────┬────┘  └────┬─────┘  └───┬───┘  │       │
-  ┌──────────┐  I/O       │       │            │             │      │  Unix socket
-  │PortAudio ├────────────┼──┐    │            │             │      │       │
-  │ ALSA     │            │  │    │            │             │      │  ┌────┴─────┐
-  └──────────┘            │  │  ┌─┴────────────┴─────────────┴──┐   │  │ Control  │
-                          │  │  │        Core vtable             │   │  │ Socket   │
-                          │  │  │  (kerchunk_core_t)             │   │  └──────────┘
-                          │  │  │                                │   │
-                          │  │  │  subscribe/fire  queue_audio   │   │
-                          │  │  │  request/release_ptt           │   │
-                          │  │  │  timer_create/cancel           │   │
-                          │  │  │  dtmf_register/unregister      │   │
-                          │  │  │  tts_speak  user_lookup        │   │
-                          │  │  └────────────────────────────────┘   │
-                          │  │                                       │
-                          │  │  ┌────────────────────────────────┐   │
-                          │  └──┤      Audio Engine              │   │
-                          │     │  capture ring ◄── PortAudio    │   │
-                          │     │  playback ring ──► PortAudio   │   │
-                          │     │  ALSA mixer init on startup    │   │
-                          │     └────────────────────────────────┘   │
+  ┌──────────┐  USB HID   │  ┌─────────┐  ┌──────────┐  ┌───────┐   │  ┌──────────┐
+  │ RIM-Lite ├────────────┼──┤ HID     │  │ Event    │  │Module │   │  │ kerchunk │
+  │ CM119    │  COR/PTT   │  │ Driver  │  │ Bus      │  │Loader │   │  │ CLI      │
+  │          ├────────────┼──┤ GPIO    │  │ pub/sub  │  │dlopen │   │  └────┬─────┘
+  └──────────┘  Audio     │  └────┬────┘  └────┬─────┘  └───┬───┘   │       │
+  ┌──────────┐  I/O       │       │            │            │       │  Unix socket
+  │PortAudio ├────────────┼──┐    │            │            │       │       │
+  │ ALSA     │            │  │    │            │            │       │  ┌────┴─────┐
+  └──────────┘            │  │  ┌─┴────────────┴────────────┴────┐  │  │ Control  │
+                          │  │  │        Core vtable             │  │  │ Socket   │
+                          │  │  │  (kerchunk_core_t)             │  │  └──────────┘
+                          │  │  │                                │  │
+                          │  │  │  subscribe/fire  queue_audio   │  │
+                          │  │  │  request/release_ptt           │  │
+                          │  │  │  timer_create/cancel           │  │
+                          │  │  │  dtmf_register/unregister      │  │
+                          │  │  │  tts_speak  user_lookup        │  │
+                          │  │  └────────────────────────────────┘  │
+                          │  │                                      │
+                          │  │  ┌────────────────────────────────┐  │
+                          │  └──┤      Audio Engine              │  │
+                          │     │  capture ring ◄── PortAudio    │  │
+                          │     │  playback ring ──► PortAudio   │  │
+                          │     │  ALSA mixer init on startup    │  │
+                          │     └────────────────────────────────┘  │
                           │                                         │
-                          │  ┌────────────────────────────────────┐  │
-                          │  │         23 Loaded Modules          │  │
+                          │  ┌───────────────────────────────────┐  │
+                          │  │         23 Loaded Modules         │  │
                           │  │  repeater  cwid      courtesy     │  │
                           │  │  caller    dtmfcmd   otp          │  │
                           │  │  voicemail gpio      logger       │  │
@@ -46,7 +46,7 @@ Complete technical architecture of the kerchunkd GMRS repeater controller.
                           │  │  cdr       tts       nws          │  │
                           │  │  stats     web       webhook      │  │
                           │  │  scrambler sdr                    │  │
-                          │  └────────────────────────────────────┘  │
+                          │  └───────────────────────────────────┘  │
                           └─────────────────────────────────────────┘
 ```
 
@@ -127,7 +127,7 @@ Complete technical architecture of the kerchunkd GMRS repeater controller.
   Main loop ─────┼────────►│ kerchevt_fire│
                  │         │              │──► handler_1(evt, ud)
   Modules ───────┤         │  1. Lock     │──► handler_2(evt, ud)
-                 │         │  2. Snapshot  │──► handler_3(evt, ud)
+                 │         │  2. Snapshot │──► handler_3(evt, ud)
   Timers ────────┘         │  3. Unlock   │       ...
                            │  4. Dispatch │──► handler_N(evt, ud)
                            └──────────────┘
@@ -174,7 +174,7 @@ Complete technical architecture of the kerchunkd GMRS repeater controller.
                      (lock-free)          │
                                           ▼
                                     ┌───────────┐
-                                    │ Raw Frame  │ 160 samples, 8kHz mono
+                                    │ Raw Frame │ 160 samples, 8kHz mono
                                     └─────┬─────┘
                                           │
                           ┌───────────────┼───────────────┐
@@ -187,7 +187,7 @@ Complete technical architecture of the kerchunkd GMRS repeater controller.
                                           │
                                           ▼
                                    ┌─────────────┐
-                                   │ Descrambler  │ (if enabled)
+                                   │ Descrambler │ (if enabled)
                                    └──────┬──────┘
                                           │
                           ┌───────────────┼───────────────┐
@@ -249,10 +249,10 @@ Complete technical architecture of the kerchunkd GMRS repeater controller.
           ┌──────┐──────►┌──────────────┐
           │ IDLE │       │  RECEIVING   │◄──┐ COR re-assert (rekey)
           └──────┘       └──────┬───────┘   │
-             ▲                  │            │
+             ▲                  │           │
              │              COR drop        │
-             │                  │            │
-             │                  ▼            │
+             │                  │           │
+             │                  ▼           │
              │           ┌──────────────┐   │
              │           │  TAIL_WAIT   │───┘ COR re-assert
              │           └──────┬───────┘
@@ -263,15 +263,15 @@ Complete technical architecture of the kerchunkd GMRS repeater controller.
              │           ┌──────────────┐
              │           │  HANG_WAIT   │───┐ COR re-assert
              │           └──────┬───────┘   │
-             │                  │            │
-             │           hang timer expires  │
-             │                  │            │
-             └──────────────────┘            │
-                                             │
-          TIMEOUT: fires after timeout_time  │
-          in RECEIVING → releases PTT        │
-                                             │
-  Notes:                                     │
+             │                  │           │
+             │           hang timer expires │
+             │                  │           │
+             └──────────────────┘           │
+                                            │
+          TIMEOUT: fires after timeout_time │
+          in RECEIVING → releases PTT       │
+                                            │
+  Notes:                                    │
   - software_relay=on: PTT asserted during RECEIVING
   - software_relay=off: no PTT on COR (RT97L relays internally)
   - COR drop hold: configurable delay before accepting COR drop
@@ -463,8 +463,8 @@ Complete technical architecture of the kerchunkd GMRS repeater controller.
   callsign = WRDP519
   email = brian@bkw.org       TX Tone Resolution:
   dtmf_login = 101            ┌──────────────────────┐
-  ani = 5551                  │ 1. User's group tone  │
-  access = 2                  │ 2. Repeater default   │
+  ani = 5551                  │ 1. User's group tone │
+  access = 2                  │ 2. Repeater default  │
   group = 1                   └──────────────────────┘
   totp_secret = JBSWY...
 
