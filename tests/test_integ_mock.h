@@ -16,9 +16,10 @@
 #include <stdio.h>
 
 /* Suppress module export — included .c files stay static.
- * The typedef absorbs the trailing ';' in module source files. */
+ * Reference the module def to avoid -Wunused-variable warnings. */
 #undef KERCHUNK_MODULE_DEFINE
-#define KERCHUNK_MODULE_DEFINE(mod) typedef int _kerchunk_test_##mod
+#define KERCHUNK_MODULE_DEFINE(mod) \
+    __attribute__((unused)) static const void *_test_ref_##mod = &(mod)
 
 /* Test harness (from test_main.c) */
 extern void test_begin(const char *name);
