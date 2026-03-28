@@ -1664,11 +1664,33 @@ static void web_unload(void)
     for (int i = 0; i <= 15; i++)
         g_core->unsubscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + i), web_event_handler);
 
+    /* Stop the web thread — mg_mgr_poll returns quickly (1ms timeout),
+     * so the thread exits within a few ms of g_running going to 0. */
     if (g_running) {
         g_running = 0;
         pthread_join(g_web_thread, NULL);
     }
 
+    /* Release any WebSocket PTT that was held during shutdown */
+    if (g_ptt_holder) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "shutdown: releasing orphaned WS PTT (user=%s)",
+                    g_ptt_holder->user_name);
+        g_ptt_holder->ptt_held = 0;
+        g_ptt_holder = NULL;
+    }
+
+    /* Unregister audio taps explicitly in case WS close handlers
+     * didn't fire cleanly during mg_mgr_free */
+    if (atomic_load(&g_ws_audio_count) > 0) {
+        g_core->audio_tap_unregister(ws_rx_audio_tap);
+        g_core->playback_tap_unregister(ws_tx_playback_tap);
+        atomic_store(&g_ws_audio_count, 0);
+    }
+
+    /* Close all connections and free the manager.
+     * mg_mgr_free fires MG_EV_CLOSE for each connection, which frees
+     * per-connection ws_conn_state_t allocations. */
     mg_mgr_free(&g_mgr);
 
     if (g_cert_data.buf) { free(g_cert_data.buf); g_cert_data.buf = NULL; }
