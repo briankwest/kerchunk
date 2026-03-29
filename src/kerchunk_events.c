@@ -64,6 +64,15 @@ int kerchevt_subscribe(kerchevt_type_t type, kerchevt_handler_t handler, void *u
     if (idx < 0) { pthread_mutex_unlock(&g_mutex); return -1; }
 
     sub_list_t *sl = &g_subs[idx];
+
+    /* Reject duplicate: same handler already subscribed to this event */
+    for (int i = 0; i < sl->count; i++) {
+        if (sl->subs[i].handler == handler) {
+            pthread_mutex_unlock(&g_mutex);
+            return 0;  /* Already subscribed — not an error */
+        }
+    }
+
     if (sl->count >= KERCHEVT_MAX_SUBS) {
         pthread_mutex_unlock(&g_mutex);
         KERCHUNK_LOG_E(LOG_MOD, "max subscribers for event %d", type);
