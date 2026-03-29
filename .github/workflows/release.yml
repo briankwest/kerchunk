@@ -146,12 +146,10 @@ jobs:
 
               git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
               cd /tmp/libplcode && autoreconf -fi && ./configure && make -j4
-              scripts/generate-changelog.sh "1.0.0"
               dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode*.deb
 
               git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
               cd /tmp/libnemo_normalize && autoreconf -fi && ./configure && make -j4
-              scripts/generate-changelog.sh "1.0.0"
               dpkg-buildpackage -us -uc -b
               dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
 
@@ -190,18 +188,16 @@ jobs:
           git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
           cd /tmp/libplcode
           autoreconf -fi && ./configure && make -j4
-          scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
-          sudo dpkg -i ../libplcode-dev_*.deb
+          sudo dpkg -i ../libplcode*.deb
 
       - name: Build and install libnemo-normalize
         run: |
           git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
           cd /tmp/libnemo_normalize
           autoreconf -fi && ./configure && make -j4
-          scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
-          sudo dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
+          sudo dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
 
       - name: Build kerchunk .deb
         run: |
@@ -246,18 +242,16 @@ jobs:
           git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
           cd /tmp/libplcode
           autoreconf -fi && ./configure && make -j4
-          scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
-          dpkg -i ../libplcode-dev_*.deb
+          dpkg -i ../libplcode*.deb
 
       - name: Build and install libnemo-normalize
         run: |
           git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
           cd /tmp/libnemo_normalize
           autoreconf -fi && ./configure && make -j4
-          scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
-          dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
+          dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
 
       - name: Build kerchunk .deb
         run: |
@@ -302,18 +296,16 @@ jobs:
           git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
           cd /tmp/libplcode
           autoreconf -fi && ./configure && make -j4
-          scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
-          dpkg -i ../libplcode-dev_*.deb
+          dpkg -i ../libplcode*.deb
 
       - name: Build and install libnemo-normalize
         run: |
           git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
           cd /tmp/libnemo_normalize
           autoreconf -fi && ./configure && make -j4
-          scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
-          dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
+          dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
 
       - name: Build kerchunk .deb
         run: |
@@ -379,8 +371,8 @@ jobs:
           ### Installation (Raspberry Pi / arm64)
 
           ```bash
-          sudo dpkg -i libplcode-dev_*~arm64-ubuntu.deb
-          sudo dpkg -i libnemo-normalize-data_*~arm64-ubuntu.deb libnemo-normalize_*~arm64-ubuntu.deb
+          sudo dpkg -i libplcode*~arm64-ubuntu.deb
+          sudo dpkg -i libnemo-normalize*~arm64-ubuntu.deb
           sudo dpkg -i kerchunk_*~arm64-ubuntu.deb
           sudo apt-get -f install
           sudo vi /etc/kerchunk/kerchunk.conf
