@@ -2,9 +2,9 @@
   <img src="web/logo.png" alt="kerchunkd logo" width="400">
 </p>
 
-# kerchunkd — GMRS/Amateur Repeater Controller Daemon
+# kerchunkd — GMRS / Amateur / Part 90 Repeater Controller Daemon
 
-A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode).
+A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode). Supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) operation.
 
 **24 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs), parrot/echo, CDR, statistics, recording, TX encoding, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch.
 
@@ -72,33 +72,33 @@ A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 f
 
 ## GMRS vs Amateur (Ham) Feature Matrix
 
-kerchunkd supports both GMRS (Part 95E) and Amateur (Part 97) repeater operation. Some features have regulatory restrictions depending on the service type. The operator is responsible for compliance.
+kerchunkd supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) repeater operation. Some features have regulatory restrictions depending on the service type. The operator is responsible for compliance.
 
-| Feature | GMRS | Amateur | Notes |
-|---------|:----:|:-------:|-------|
-| Repeater state machine | Y | Y | Core functionality |
-| CW ID | Y | Y | FCC-required station identification |
-| Voice ID (TTS) | Y | Y | Speaks frequency and PL tone |
-| CTCSS/DCS encode/decode | Y | Y | Tone squelch |
-| DTMF commands | Y | Y | Remote control via radio keypad |
-| Caller identification | Y | Y | ANI and DTMF login |
-| Courtesy tones | Y | Y | |
-| Time/weather announcements | Y | Y | On-demand via DTMF |
-| NWS severe weather alerts | Y | Y | Emergency public information |
-| Emergency mode (*911#) | Y | Y | Extended TX, suppress TOT |
-| Voicemail | Y | Y | |
-| Parrot/echo test | Y | Y | Audio quality check |
-| Transmission recording | Y | Y | FCC 95.1705 activity logging |
-| Call detail records | Y | Y | |
-| Statistics and metrics | Y | Y | |
-| GPIO relay control | Y | Y | |
-| Web dashboard (listen) | Y | Y | Public status, audio monitor |
-| Webhook notifications | Y | Y | |
-| SDR channel monitor | Y | Y | |
-| OTP authentication | Y | Y | |
-| **Web PTT (transmit)** | **N** | Y | GMRS: no remote/internet TX |
-| **Voice scrambler** | **N** | Y | GMRS: no encryption (FCC 95.333) |
-| **AutoPatch (FreeSWITCH)** | **N** | Y | GMRS: interconnection ambiguous |
+| Feature | GMRS | Amateur | Part 90 | Notes |
+|---------|:----:|:-------:|:-------:|-------|
+| Repeater state machine | Y | Y | Y | Core functionality |
+| CW ID | Y | Y | Y | FCC-required station identification |
+| Voice ID (TTS) | Y | Y | Y | Speaks frequency and PL tone |
+| CTCSS/DCS encode/decode | Y | Y | Y | Tone squelch |
+| DTMF commands | Y | Y | Y | Remote control via radio keypad |
+| Caller identification | Y | Y | Y | ANI and DTMF login |
+| Courtesy tones | Y | Y | Y | |
+| Time/weather announcements | Y | Y | Y | On-demand via DTMF |
+| NWS severe weather alerts | Y | Y | Y | Emergency public information |
+| Emergency mode (*911#) | Y | Y | Y | Extended TX, suppress TOT |
+| Voicemail | Y | Y | Y | |
+| Parrot/echo test | Y | Y | Y | Audio quality check |
+| Transmission recording | Y | Y | Y | FCC 95.1705 activity logging |
+| Call detail records | Y | Y | Y | |
+| Statistics and metrics | Y | Y | Y | |
+| GPIO relay control | Y | Y | Y | |
+| Web dashboard (listen) | Y | Y | Y | Public status, audio monitor |
+| Webhook notifications | Y | Y | Y | |
+| SDR channel monitor | Y | Y | Y | |
+| OTP authentication | Y | Y | Y | |
+| **Web PTT (transmit)** | **N** | Y | Y | GMRS: no remote/internet TX |
+| **Voice scrambler** | **N** | **N** | **Y** | Part 90 only — prohibited on GMRS (FCC 95.333) and Amateur (FCC 97.113(a)(4)) |
+| **AutoPatch (FreeSWITCH)** | **N** | Y | Y | GMRS: interconnection ambiguous |
 
 ### Regulatory Notes
 
@@ -112,17 +112,24 @@ kerchunkd supports both GMRS (Part 95E) and Amateur (Part 97) repeater operation
 **Amateur (Part 97):**
 - Station identification per 97.119 (CW ID handles this)
 - Autopatch permitted (97.113) — no business calls, third-party rules apply
-- Scrambling/encryption prohibited on most bands (97.113(a)(4)) — but frequency inversion is technically not encryption (it's trivially reversible). Use at your own discretion and consult local regulations.
+- Scrambling/encryption prohibited (97.113(a)(4)) — this includes frequency inversion; do not use mod_scrambler on Amateur frequencies
 - Internet linking and remote control permitted with proper identification
 - Web PTT permitted with control operator oversight
 
+**Business/Industrial (Part 90):**
+- Encryption and scrambling are permitted — mod_scrambler is legal for Part 90 operation
+- Station identification per 90.425 (CW ID or voice announcement)
+- Remote control and interconnection (autopatch) permitted
+- Web PTT permitted
+- No prohibition on one-way transmissions — auto-announce features may be enabled
+
 ### Configuring for Service Type
 
-For GMRS operation, ensure these modules are **not loaded** in `[modules]`:
+**GMRS** — ensure these modules are **not loaded** in `[modules]`:
 
 ```ini
 ; Remove from load list for GMRS:
-; mod_scrambler    — no encryption/scrambling on GMRS
+; mod_scrambler    — no encryption/scrambling on GMRS (FCC 95.333)
 ; mod_freeswitch   — no autopatch on GMRS
 ```
 
@@ -131,6 +138,24 @@ And disable Web PTT:
 ```ini
 [web]
 ptt_enabled = off    ; no remote TX on GMRS
+```
+
+**Amateur** — same as GMRS, except Web PTT and autopatch are permitted:
+
+```ini
+; Remove from load list for Amateur:
+; mod_scrambler    — no encryption/scrambling on Amateur (FCC 97.113(a)(4))
+```
+
+**Part 90 (Business/Industrial)** — all modules may be loaded, including mod_scrambler:
+
+```ini
+[modules]
+load = mod_scrambler    ; encryption permitted on Part 90
+load = mod_freeswitch   ; interconnection permitted on Part 90
+
+[web]
+ptt_enabled = on        ; remote control permitted on Part 90
 ```
 
 ## Architecture
@@ -742,7 +767,7 @@ Config section: `[webhook]`
 
 ### mod_scrambler — Voice Scrambler
 
-Frequency inversion voice scrambler. Self-inverse: same operation scrambles and descrambles. 8 codes mapping to carrier frequencies 2700-3400 Hz (100 Hz steps). CW ID and emergency mode bypass scrambling.
+Frequency inversion voice scrambler for **Part 90 (Business/Industrial) operation only**. Prohibited on GMRS (FCC 95.333) and Amateur (FCC 97.113(a)(4)). Self-inverse: same operation scrambles and descrambles. 8 codes mapping to carrier frequencies 2700-3400 Hz (100 Hz steps). CW ID and emergency mode bypass scrambling.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -911,14 +936,22 @@ The public dashboard (`index.html`) includes a GMRS coverage map. The full cover
 
 ## FCC Compliance
 
-- **CW ID** — interval capped at 15 min max (FCC 95.1751)
+**Part 95E (GMRS) and Part 97 (Amateur):**
+- **CW ID** — interval capped at 15 min max (FCC 95.1751 / 97.119)
 - **Voice ID** — speaks frequency and PL tone after CW ID
-- **Auto-announce** — weather/time default off (FCC 95.1733)
+- **Auto-announce** — weather/time default off (FCC 95.1733 — no unsolicited one-way TX)
 - **Kerchunk filter** — COR debounce prevents brief key-ups
 - **TOT** — time-out timer prevents stuck transmissions
 - **Emergency mode** — suppresses TOT and auto-announcements
 - **Recording** — activity log for FCC 95.1705 cooperative use
 - **CDR** — structured transmission logging for compliance
+- **Scrambler disabled by default** — encryption prohibited on GMRS (FCC 95.333) and Amateur (FCC 97.113(a)(4))
+
+**Part 90 (Business/Industrial):**
+- **Scrambler permitted** — frequency inversion encryption is legal on Part 90 frequencies
+- **Station ID** — CW ID or voice announcement per FCC 90.425
+- **Auto-announce permitted** — no one-way transmission restriction
+- All other compliance features (TOT, recording, CDR) apply equally
 
 ## Testing
 
