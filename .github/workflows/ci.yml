@@ -42,10 +42,6 @@ jobs:
           make
           sudo make install
           sudo ldconfig
-          # Fix: libfst-dev doesn't ship fst.pc, so nemo_normalize.pc's
-          # "Requires: fst" breaks pkg-config. Inline the -lfst link flag.
-          sudo sed -i '/^Requires: fst$/d' /usr/local/lib/pkgconfig/nemo_normalize.pc
-          sudo sed -i 's/-lnemo_normalize/-lnemo_normalize -lfst/' /usr/local/lib/pkgconfig/nemo_normalize.pc
 
       - name: Build kerchunk
         run: |

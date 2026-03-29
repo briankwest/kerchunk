@@ -43,17 +43,14 @@ jobs:
 
             git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
             cd /tmp/libplcode && autoreconf -fi && ./configure && make -j4
-            scripts/generate-changelog.sh "1.0.0"
+            scripts/generate-changelog.sh "1.0.1"
             dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode*.deb
 
             git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
             cd /tmp/libnemo_normalize && autoreconf -fi && ./configure && make -j4
-            scripts/generate-changelog.sh "1.0.0"
+            scripts/generate-changelog.sh "1.0.1"
             dpkg-buildpackage -us -uc -b
             dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
-            # Fix: libfst-dev has no fst.pc — inline the link flag
-            find /usr -name nemo_normalize.pc -exec sed -i '/^Requires: fst$/d' {} \;
-            find /usr -name nemo_normalize.pc -exec sed -i 's/-lnemo_normalize/-lnemo_normalize -lfst/' {} \;
 
             cd /workspace
             dpkg-buildpackage -us -uc -b
@@ -101,17 +98,14 @@ jobs:
 
             git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
             cd /tmp/libplcode && autoreconf -fi && ./configure && make -j4
-            scripts/generate-changelog.sh "1.0.0"
+            scripts/generate-changelog.sh "1.0.1"
             dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode*.deb
 
             git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
             cd /tmp/libnemo_normalize && autoreconf -fi && ./configure && make -j4
-            scripts/generate-changelog.sh "1.0.0"
+            scripts/generate-changelog.sh "1.0.1"
             dpkg-buildpackage -us -uc -b
             dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
-            # Fix: libfst-dev has no fst.pc — inline the link flag
-            find /usr -name nemo_normalize.pc -exec sed -i '/^Requires: fst$/d' {} \;
-            find /usr -name nemo_normalize.pc -exec sed -i 's/-lnemo_normalize/-lnemo_normalize -lfst/' {} \;
 
             cd /workspace
             dpkg-buildpackage -us -uc -b
@@ -164,9 +158,6 @@ jobs:
               scripts/generate-changelog.sh "1.0.0"
               dpkg-buildpackage -us -uc -b
               dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
-            # Fix: libfst-dev has no fst.pc — inline the link flag
-            find /usr -name nemo_normalize.pc -exec sed -i '/^Requires: fst$/d' {} \;
-            find /usr -name nemo_normalize.pc -exec sed -i 's/-lnemo_normalize/-lnemo_normalize -lfst/' {} \;
 
               cd /workspace
               dpkg-buildpackage -us -uc -b
