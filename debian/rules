@@ -1,7 +1,13 @@
 #!/usr/bin/make -f
+
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
 %:
-	dh $@
+	dh $@ --with autoreconf
+
+override_dh_auto_clean:
+	dh_autoreconf || true
+	dh_auto_clean || true
 
 override_dh_auto_test:
-	dh_auto_test || true
+	$(MAKE) check || true
