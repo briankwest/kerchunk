@@ -334,9 +334,9 @@ Both state machines are visible in the web dashboard and reported via `/api/stat
 ## Hardware
 
 ```
-RT97L DB9 <──> RIM-Lite v2 (CM119 USB) <──> Raspberry Pi / Linux / Mac
-                                             ├── PortAudio: audio I/O
-                                             └── HID: COR input / PTT output
+RT97L DB9 <──> RIM-Lite v2 (CM108AH USB) <──> Raspberry Pi / Linux / Mac
+                                               ├── PortAudio: audio I/O
+                                               └── HID (hidraw): COR input / PTT output
 ```
 
 | RIM-Lite | Signal | RT-97S | Notes |
@@ -346,6 +346,40 @@ RT97L DB9 <──> RIM-Lite v2 (CM119 USB) <──> Raspberry Pi / Linux / Mac
 | 5 | PTT -> | 9 | Active Low |
 | 6 | <- RX Audio | 5 | De-emph. discriminator |
 | 8,9 | Ground | 7 | |
+
+### RIM-Lite HID GPIO Mapping
+
+The RIM-Lite v2 uses a C-Media CM108AH chip (vendor `0d8c`, product `013a`).
+COR and PTT are controlled via GPIO pins exposed through the Linux `hidraw` interface.
+
+| GPIO | Bit | CM108 HID Usage | RIM-Lite Function |
+|------|-----|-----------------|-------------------|
+| GPIO0 | 0 | Volume Up | (unused) |
+| GPIO1 | 1 | Volume Down | **COR input** |
+| GPIO2 | 2 | Mute | **PTT output** |
+| GPIO3 | 3 | (reserved) | (unused) |
+
+Config values use 0-based GPIO/bit numbers directly — no conversion needed.
+
+**COR polarity note:** The CM108 internally inverts GPIO inputs (active-low GPIO pin
+= bit HIGH in the HID report). Use `cor_polarity = active_high` in the config because
+the CM108 has already performed the inversion. Using `active_low` will double-invert
+and COR drops will never be detected.
+
+```ini
+[hid]
+device = /dev/rimlite      ; udev symlink (see udev rule below)
+cor_bit = 1                ; GPIO1 = COR
+cor_polarity = active_high ; CM108 inverts internally, do not double-invert
+ptt_bit = 2               ; GPIO2 = PTT
+```
+
+The udev rule in `debian/kerchunk.udev` creates the `/dev/rimlite` symlink automatically:
+
+```
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="013a", \
+  GROUP="audio", MODE="0660", SYMLINK+="rimlite"
+```
 
 ## Dependencies
 
@@ -869,12 +903,15 @@ Config section: `[audio]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `device` | string | `/dev/rimlite` | HID device path |
-| `cor_bit` | int | `0` | GPIO bit for COR input (0-7) |
-| `cor_polarity` | string | `active_low` | `active_low` or `active_high` |
-| `ptt_bit` | int | `2` | GPIO pin number for PTT (1-8, maps to bit N-1) |
+| `device` | string | `/dev/rimlite` | HID device path (udev symlink) |
+| `cor_bit` | int | `1` | GPIO number for COR input (0-7) |
+| `cor_polarity` | string | `active_high` | `active_high` (CM108 inverts internally) |
+| `ptt_bit` | int | `2` | GPIO number for PTT output (0-7) |
 
 Config section: `[hid]`
+
+Use `kerchunk-diag -C` to dump raw HID reports and verify which GPIO bit
+corresponds to COR on your interface. Use `kerchunk-diag -T` to test PTT.
 
 ## User and Group Database
 

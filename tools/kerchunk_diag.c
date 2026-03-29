@@ -9,7 +9,7 @@
  * Usage:
  *   kerchunk-diag [options]
  *     -d <hidraw>    HID device (default: /dev/rimlite)
- *     -p <pin>       PTT GPIO pin 1-8 (default: 2)
+ *     -p <pin>       PTT GPIO number 0-7 (default: 2)
  *     -a <device>    Audio device name or index (default: system default)
  *     -r <rate>      Hardware sample rate (default: 48000)
  *     -f <freq>      Test tone frequency in Hz (default: 1000)
@@ -18,7 +18,7 @@
  *     -T             PTT-only test (no audio)
  *     -A             Audio-only test (no PTT)
  *     -C             COR read test (poll COR state)
- *     -b <bit>       COR bit (default: 0)
+ *     -b <bit>       COR GPIO number 0-7 (default: 3)
  *     -l             Invert COR polarity (active low)
  *     -L             List audio devices and exit
  *     -h             Help
@@ -68,10 +68,9 @@ static int hid_open(const char *device)
 
 static int hid_set_ptt(int fd, int ptt_pin, int active)
 {
-    int pin_bit = ptt_pin - 1;
     unsigned char io[5] = {0};
-    io[2] = active ? (unsigned char)(1 << pin_bit) : 0;
-    io[3] = (unsigned char)(1 << pin_bit);
+    io[2] = active ? (unsigned char)(1 << ptt_pin) : 0;
+    io[3] = (unsigned char)(1 << ptt_pin);
 
     ssize_t n = write(fd, io, sizeof(io));
     if (n < 0) {
@@ -173,7 +172,7 @@ static void usage(const char *prog)
     fprintf(stderr,
         "Usage: %s [options]\n"
         "  -d <hidraw>   HID device (default: /dev/rimlite)\n"
-        "  -p <pin>      PTT GPIO pin 1-8 (default: 2)\n"
+        "  -p <pin>      PTT GPIO number 0-7 (default: 2)\n"
         "  -a <device>   Audio device name or index\n"
         "  -r <rate>     Hardware sample rate (default: 48000)\n"
         "  -f <freq>     Tone frequency Hz (default: 1000)\n"
@@ -182,7 +181,7 @@ static void usage(const char *prog)
         "  -T            PTT-only test (no audio)\n"
         "  -A            Audio-only test (no PTT)\n"
         "  -C            COR read test (poll and display)\n"
-        "  -b <bit>      COR bit (default: 0)\n"
+        "  -b <bit>      COR GPIO number 0-7 (default: 3)\n"
         "  -l            COR active low\n"
         "  -L            List audio devices\n"
         "  -h            Help\n", prog);
@@ -191,7 +190,7 @@ static void usage(const char *prog)
 int main(int argc, char *argv[])
 {
     const char *hid_device = "/dev/rimlite";
-    int ptt_pin = 2;
+    int ptt_pin = 2;  /* GPIO2 = PTT on CM119/RIM-Lite */
     const char *audio_device = NULL;
     int hw_rate = 48000;
     int tone_freq = 1000;
@@ -200,7 +199,7 @@ int main(int argc, char *argv[])
     int ptt_only = 0;
     int audio_only = 0;
     int cor_test = 0;
-    int cor_bit = 0;
+    int cor_bit = 3;
     int cor_active_low = 0;
     int list_only = 0;
 
@@ -225,8 +224,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (ptt_pin < 1 || ptt_pin > 8) {
-        fprintf(stderr, "ERROR: PTT pin must be 1-8\n");
+    if (ptt_pin < 0 || ptt_pin > 7) {
+        fprintf(stderr, "ERROR: PTT GPIO must be 0-7\n");
         return 1;
     }
     if (volume < 0) volume = 0;
@@ -240,15 +239,24 @@ int main(int argc, char *argv[])
         int fd = hid_open(hid_device);
         if (fd < 0) return 1;
 
-        printf("COR test: reading bit %d (%s) from %s — Ctrl+C to stop\n",
-               cor_bit, cor_active_low ? "active_low" : "active_high", hid_device);
+        printf("COR test: dumping raw HID reports from %s — Ctrl+C to stop\n",
+               hid_device);
+        printf("  Key your radio and watch which bits change.\n\n");
 
-        int prev = -1;
         while (g_running) {
-            int cor = hid_read_cor(fd, cor_bit, cor_active_low);
-            if (cor >= 0 && cor != prev) {
-                printf("  COR: %s\n", cor ? "ACTIVE (carrier detected)" : "INACTIVE");
-                prev = cor;
+            unsigned char buf[8] = {0};
+            ssize_t n = read(fd, buf, sizeof(buf));
+            if (n > 0) {
+                printf("  HID [%zd bytes]:", n);
+                for (ssize_t i = 0; i < n; i++)
+                    printf(" %02x", buf[i]);
+                printf("  | byte0 bits: ");
+                for (int b = 7; b >= 0; b--)
+                    printf("%d", (buf[0] >> b) & 1);
+                printf("  | GPIO0=%d GPIO1=%d GPIO2=%d GPIO3=%d",
+                       buf[0] & 1, (buf[0] >> 1) & 1,
+                       (buf[0] >> 2) & 1, (buf[0] >> 3) & 1);
+                printf("\n");
             }
             usleep(20000);
         }
@@ -297,7 +305,7 @@ int main(int argc, char *argv[])
     /* ── Audio + PTT test ── */
     printf("=== kerchunk diagnostic ===\n");
     printf("  HID device:  %s\n", hid_device);
-    printf("  PTT pin:     GPIO%d (bit %d)\n", ptt_pin, ptt_pin - 1);
+    printf("  PTT:         GPIO%d\n", ptt_pin);
     printf("  Tone:        %d Hz, %d%% volume, %d seconds\n",
            tone_freq, volume, duration);
     printf("  Sample rate: %d Hz\n", hw_rate);

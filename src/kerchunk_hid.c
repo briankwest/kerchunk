@@ -32,7 +32,7 @@ static int  g_available;
  *   [2] = GPIO data  (pin values: 1=high, 0=low)
  *   [3] = GPIO mask  (direction: 1=output for each bit)
  *   [4] = 0x00       (SPDIF)
- * GPIO pin N maps to bit (N-1): GPIO3 → bit 2, GPIO4 → bit 3, etc.
+ * GPIO number = bit position: GPIO2 → bit 2, GPIO3 → bit 3, etc.
  * MUST be 5 bytes — 4 bytes causes EPIPE on CM108/CM119. */
 static int hid_write_gpio(int fd, int pin_bit, int state)
 {
@@ -68,16 +68,16 @@ int kerchunk_hid_init(const kerchunk_hid_config_t *cfg)
     struct hidraw_devinfo info;
     if (ioctl(g_fd, HIDIOCGRAWINFO, &info) == 0) {
         KERCHUNK_LOG_I(LOG_MOD, "hid init: device=%s vendor=%04x product=%04x "
-                     "cor_bit=%d ptt_pin=GPIO%d (bit %d)",
+                     "ptt=GPIO%d cor=GPIO%d",
                      g_device, info.vendor, info.product,
-                     g_cor_bit, g_ptt_bit, g_ptt_bit - 1);
+                     g_ptt_bit, g_cor_bit);
     } else {
-        KERCHUNK_LOG_I(LOG_MOD, "hid init: device=%s cor_bit=%d ptt_pin=GPIO%d",
-                     g_device, g_cor_bit, g_ptt_bit);
+        KERCHUNK_LOG_I(LOG_MOD, "hid init: device=%s ptt=GPIO%d cor=GPIO%d",
+                     g_device, g_ptt_bit, g_cor_bit);
     }
 
     /* Probe: write PTT off to verify device is responsive */
-    if (hid_write_gpio(g_fd, g_ptt_bit - 1, 0) < 0)
+    if (hid_write_gpio(g_fd, g_ptt_bit, 0) < 0)
         KERCHUNK_LOG_W(LOG_MOD, "GPIO probe write failed: %s "
                        "(PTT may not work)", strerror(errno));
     else
@@ -115,19 +115,42 @@ int kerchunk_hid_read_cor(void)
     if (g_fd < 0)
         return -1;
 
-    unsigned char buf[4] = {0};
-    ssize_t n = read(g_fd, buf, sizeof(buf));
-    if (n < 0 && (errno == EPIPE || errno == ENODEV || errno == EIO)) {
-        KERCHUNK_LOG_W(LOG_MOD, "cor read: %s, reconnecting", strerror(errno));
-        if (hid_reconnect() < 0)
-            return -1;
-        n = read(g_fd, buf, sizeof(buf));
-    }
-    if (n < 1)
-        return -1;  /* No data available (non-blocking) */
+    /* Read all queued HID reports, log each one for debugging. */
+    unsigned char last[4] = {0};
+    int got_any = 0;
+    int report_count = 0;
 
-    int bit = (buf[0] >> g_cor_bit) & 1;
-    return g_cor_active_low ? !bit : bit;
+    for (;;) {
+        unsigned char buf[4] = {0};
+        ssize_t n = read(g_fd, buf, sizeof(buf));
+        if (n < 0 && (errno == EPIPE || errno == ENODEV || errno == EIO)) {
+            KERCHUNK_LOG_W(LOG_MOD, "cor read: %s, reconnecting", strerror(errno));
+            if (hid_reconnect() < 0)
+                return -1;
+            n = read(g_fd, buf, sizeof(buf));
+        }
+        if (n < 1)
+            break;
+        report_count++;
+        KERCHUNK_LOG_D(LOG_MOD, "hid report #%d: %02x %02x %02x %02x "
+                     "(cor_bit=%d raw_bit=%d)",
+                     report_count, buf[0], buf[1], buf[2], buf[3],
+                     g_cor_bit, (buf[0] >> g_cor_bit) & 1);
+        memcpy(last, buf, sizeof(last));
+        got_any = 1;
+    }
+
+    if (!got_any)
+        return -1;
+
+    int bit = (last[0] >> g_cor_bit) & 1;
+    int result = g_cor_active_low ? !bit : bit;
+
+    KERCHUNK_LOG_D(LOG_MOD, "cor result: raw_bit=%d active_low=%d -> %s "
+                 "(%d reports drained)",
+                 bit, g_cor_active_low,
+                 result ? "ACTIVE" : "INACTIVE", report_count);
+    return result;
 }
 
 int kerchunk_hid_set_ptt(int active)
@@ -135,8 +158,7 @@ int kerchunk_hid_set_ptt(int active)
     if (g_fd < 0)
         return -1;
 
-    /* GPIO pin N maps to bit (N-1) in the CM108/CM119 HID report */
-    int pin_bit = g_ptt_bit - 1;
+    int pin_bit = g_ptt_bit;
 
     int rc = hid_write_gpio(g_fd, pin_bit, active);
     if (rc < 0 && (errno == EPIPE || errno == ENODEV || errno == EIO)) {

@@ -1050,6 +1050,7 @@ int main(int argc, char **argv)
     if (cor_drop_hold_ms > 5000) cor_drop_hold_ms = 5000;
     int cor_drop_hold_ticks = cor_drop_hold_ms / 20;  /* convert ms to 20ms ticks */
 
+
     /* ── Main loop: 20ms tick — timers, socket, COR, config ── */
     while (g_running) {
         uint64_t tick_start = now_us();
@@ -1090,14 +1091,15 @@ int main(int argc, char **argv)
         /* COR polling — read HID for carrier detect state changes.
          * hidraw is event-driven: returns new state on change, -1 if no change.
          *
-         * COR drop is held for 300ms before being accepted.  DTMF tones
-         * cause the RT97L to briefly drop COS (DTMF interrupts CTCSS
-         * detection), which would otherwise tear down the session mid-DTMF.
-         * COR assert is processed immediately (no hold). */
+         * COR drop is held for cor_drop_hold_ms before being accepted.
+         * DTMF tones cause the RT97L to briefly drop COS (DTMF interrupts
+         * CTCSS detection), which would otherwise tear down the session
+         * mid-DTMF.  COR assert is processed immediately (no hold). */
         int cor = kerchunk_hid_read_cor();
 
         if (cor == 1 && !prev_cor) {
-            /* COR assert — process immediately, cancel any pending drop */
+            KERCHUNK_LOG_I(LOG_MOD, "COR: assert (cor=%d prev=%d hold=%d)",
+                          cor, prev_cor, cor_drop_hold);
             cor_drop_hold = 0;
             kerchunk_core_set_cor(1);
             kerchevt_t cor_evt = {
@@ -1108,15 +1110,21 @@ int main(int argc, char **argv)
             kerchevt_fire(&cor_evt);
             prev_cor = 1;
         } else if (cor == 0 && prev_cor) {
-            /* COR drop — start hold timer, don't fire yet */
+            KERCHUNK_LOG_I(LOG_MOD, "COR: drop seen, starting hold timer "
+                          "(cor=%d prev=%d hold_ticks=%d)",
+                          cor, prev_cor, cor_drop_hold_ticks);
             cor_drop_hold = cor_drop_hold_ticks;
         } else if (cor == 1 && prev_cor && cor_drop_hold > 0) {
-            /* COR reasserted during hold — cancel the pending drop */
+            KERCHUNK_LOG_I(LOG_MOD, "COR: reassert during hold, canceling "
+                          "(cor=%d hold_remaining=%d)",
+                          cor, cor_drop_hold);
             cor_drop_hold = 0;
         }
 
         /* Count down and fire COR drop if hold timer expires */
         if (cor_drop_hold > 0 && --cor_drop_hold == 0) {
+            KERCHUNK_LOG_I(LOG_MOD, "COR: hold timer expired, firing drop "
+                          "(prev=%d)", prev_cor);
             kerchunk_core_set_cor(0);
             kerchevt_t cor_evt = {
                 .type = KERCHEVT_COR_DROP,

@@ -71,9 +71,9 @@ agc = off                        ; Auto Gain Control (off recommended — interf
 ; ----------------------------------------------------------------------------
 [hid]
 device = /dev/rimlite            ; HID device path (udev symlink for CM119)
-cor_bit = 0                      ; GPIO bit for COR input (0-7)
-cor_polarity = active_low        ; active_low | active_high
-ptt_bit = 3                      ; GPIO pin number (1-8), CM119 GPIO3 = PTT
+cor_bit = 3                      ; GPIO number (0-7), CM119 GPIO3 = COR
+cor_polarity = active_high       ; active_high (CM108 inverts internally)
+ptt_bit = 2                      ; GPIO number (0-7), CM119 GPIO2 = PTT
 
 ; ----------------------------------------------------------------------------
 ; Repeater state machine
