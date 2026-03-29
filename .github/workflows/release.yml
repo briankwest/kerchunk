@@ -157,37 +157,20 @@ jobs:
           platforms: arm64
 
       - name: Build .deb packages (arm64 Debian 13)
-        uses: uraimo/run-on-arch-action@v3
-        with:
-          arch: aarch64
-          distro: trixie
-          githubToken: ${{ github.token }}
-          dockerRunArgs: --volume "${{ github.workspace }}:/workspace"
-          run: |
-            cd /workspace
-            apt-get update
-            apt-get install -y \
-              build-essential pkg-config devscripts debhelper fakeroot \
-              autoconf automake libtool autoconf-archive \
-              portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
-              libasound2-dev libfst-dev g++
-
-            cd libplcode
-            autoreconf -fi && ./configure && make
-            scripts/generate-changelog.sh "1.0.0"
-            dpkg-buildpackage -us -uc -b
-            dpkg -i ../libplcode-dev_*.deb
-            cd ..
-
-            cd libnemo_normalize
-            autoreconf -fi && ./configure && make
-            scripts/generate-changelog.sh "1.0.0"
-            dpkg-buildpackage -us -uc -b
-            dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
-            cd ..
-
-            scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
-            dpkg-buildpackage -us -uc -b
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            debian:trixie bash -c '
+              apt-get update &&
+              apt-get install -y build-essential pkg-config devscripts debhelper fakeroot autoconf automake libtool autoconf-archive portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev libasound2-dev libfst-dev g++ &&
+              cd libplcode && autoreconf -fi && ./configure && make -j4 && scripts/generate-changelog.sh 1.0.0 && dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb && cd .. &&
+              cd libnemo_normalize && autoreconf -fi && ./configure && make -j4 && scripts/generate-changelog.sh 1.0.0 && dpkg-buildpackage -us -uc -b && dpkg -i ../libnemo-normalize*.deb && cd .. &&
+              scripts/generate-changelog.sh "'"$VERSION"'" &&
+              dpkg-buildpackage -us -uc -b
+            '
 
       - name: Collect artifacts
         run: |
