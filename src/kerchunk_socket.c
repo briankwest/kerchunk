@@ -14,6 +14,9 @@
  * Socket restricted to owner (chmod 0600) with peer UID verification.
  */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
@@ -520,7 +523,8 @@ void kerchunk_socket_poll(void)
             pthread_mutex_unlock(&g_client_mutex);
 
             if (slot >= 0) {
-                const char *welcome = ". kerchunkd v1.0.0 connected\n";
+                char welcome[64];
+                snprintf(welcome, sizeof(welcome), ". kerchunkd v%s connected\n", PACKAGE_VERSION);
                 write_all(client, welcome, strlen(welcome));
             } else {
                 const char *busy = "Server busy\n";

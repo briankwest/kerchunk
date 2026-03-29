@@ -47,8 +47,8 @@ void resp_finish(kerchunk_resp_t *r);
 /* Version */
 #define KERCHUNK_VERSION_MAJOR 1
 #define KERCHUNK_VERSION_MINOR 0
-#define KERCHUNK_VERSION_PATCH 0
-#define KERCHUNK_VERSION_STRING "1.0.0"
+#define KERCHUNK_VERSION_PATCH 1
+#define KERCHUNK_VERSION_STRING "1.0.1"
 
 /* Frame size: 20ms at 8 kHz = 160 samples */
 #define KERCHUNK_FRAME_SAMPLES 160

@@ -178,7 +178,7 @@ amplitude = 4000                 ; Tone amplitude (0-32767)
 ; ----------------------------------------------------------------------------
 [caller]
 methods = dtmf_ani,dtmf_login
-ani_window = 1000                ; Window after COR to capture ANI digits (ms)
+ani_window = 1500                ; Window to capture ANI digits (ms, starts on first digit)
 login_timeout = 1800000          ; DTMF login session timeout (ms, 30 min)
 
 ; ----------------------------------------------------------------------------

@@ -170,11 +170,15 @@ static void on_cor_assert(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
 
-    /* Start ANI capture window */
-    g_ani_active = 1;
-    g_ani_pos    = 0;
-    g_ani_buf[0] = '\0';
-    g_ani_timer  = g_core->timer_create(g_ani_window_ms, 0, ani_timeout, NULL);
+    /* Arm ANI capture — but don't reset if already collecting digits.
+     * COR can briefly drop during DTMF (RT97L drops COS when CTCSS is
+     * interrupted by DTMF tones), causing a COR reassert that would
+     * otherwise wipe out digits already captured. */
+    if (!g_ani_active) {
+        g_ani_active = 1;
+        g_ani_pos    = 0;
+        g_ani_buf[0] = '\0';
+    }
 
     /* If there's an active login session, re-identify on key-up */
     if (g_session_user_id > 0) {
@@ -216,6 +220,10 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
 
     /* ANI capture (during window) */
     if (g_ani_active && g_ani_pos < MAX_ANI_LEN) {
+        /* Start timer on first digit — gives the full window for the
+         * complete ANI sequence regardless of COR-to-DTMF delay */
+        if (g_ani_pos == 0 && g_ani_timer < 0)
+            g_ani_timer = g_core->timer_create(g_ani_window_ms, 0, ani_timeout, NULL);
         g_ani_buf[g_ani_pos++] = d;
         return;
     }
