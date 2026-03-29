@@ -137,6 +137,8 @@ Here is the complete list of DTMF commands:
 | `*97#` | Toggle voice scrambler on/off |
 | `*970#` | Disable voice scrambler |
 | `*971#`-`*978#` | Set scrambler code 1-8 |
+| `*0`_digits_`#` | AutoPatch -- dial a phone number (e.g., `*05551234567#`) |
+| `*0#` | AutoPatch -- hang up current call |
 
 ### Weather and Time
 
@@ -213,6 +215,23 @@ Some repeater commands or features may require elevated access. OTP (One-Time Pa
 5. If the code is wrong, the repeater announces "Authentication failed" and plays an error tone
 
 **Session duration:** Your elevated access lasts for 2 minutes (configurable by the administrator). After that, the repeater announces "Elevated session expired" and you return to normal access. You can re-authenticate at any time by entering a new code.
+
+### AutoPatch (FreeSWITCH)
+
+AutoPatch lets you make and receive phone calls through the repeater using a FreeSWITCH telephony server. This feature is typically enabled only on Amateur (HAM) and Part 90 Business repeaters due to FCC regulations around GMRS interconnection.
+
+**Making a call** (`*0<digits>#`): Key up and press `*0` followed by the phone number, then `#`. For example, `*05551234567#` dials 555-123-4567. The repeater announces "Dialing" and you will hear the call progress (ringing, busy, etc.) through the repeater.
+
+**Hanging up** (`*0#`): Key up and press `*0#` to end the current call. The repeater announces "Call ended."
+
+**During a call:**
+
+- When you key up, your voice is sent to the phone caller
+- When the phone caller speaks, their voice is transmitted through the repeater
+- Voice Activity Detection (VAD) automatically keys the repeater when the phone caller is speaking
+- The call automatically ends after the configured maximum duration (default 3 minutes) or after a period of inactivity (default 60 seconds)
+
+**Access control:** The administrator may restrict autopatch to authenticated users only (`admin_only = true`), require a dial prefix, or limit dialing to a whitelist of allowed numbers.
 
 ### What You Will Hear
 
@@ -371,7 +390,7 @@ The recommended module load order is:
 mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,
 mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,
 mod_txcode,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,
-mod_web,mod_webhook,mod_scrambler,mod_sdr
+mod_web,mod_webhook,mod_scrambler,mod_sdr,mod_freeswitch
 ```
 
 Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert announcements.
@@ -592,6 +611,27 @@ All GPIO pins are 3.3V logic. Use a relay board or transistor driver for loads t
 | `frequency` | (none) | Optional explicit carrier frequency in Hz |
 
 DTMF: `*97#` toggle, `*970#` off, `*971#`-`*978#` set code. CW ID and emergency mode bypass scrambling.
+
+#### `[freeswitch]` -- AutoPatch (FreeSWITCH)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `off` | Enable FreeSWITCH autopatch |
+| `freeswitch_host` | `127.0.0.1` | FreeSWITCH ESL host |
+| `esl_port` | `8021` | ESL port |
+| `esl_password` | `ClueCon` | ESL password |
+| `sip_gateway` | (none) | SIP gateway name for outbound calls |
+| `udp_base_port` | `16000` | Base UDP port for audio streams |
+| `max_call_duration` | `180` | Maximum call duration in seconds |
+| `dial_timeout` | `30` | Dial timeout in seconds |
+| `inactivity_timeout` | `60` | Hang up after this many seconds of silence |
+| `vad_threshold` | `200` | Voice Activity Detection threshold |
+| `vad_hold_ms` | `300` | VAD hold time in ms |
+| `admin_only` | `false` | Restrict autopatch to authenticated users |
+| `dial_prefix` | (none) | Prefix prepended to all dialed numbers |
+| `dial_whitelist` | (none) | Comma-separated list of allowed number patterns |
+
+DTMF: `*0<digits>#` to dial, `*0#` to hang up. See [FREESWITCH.md](FREESWITCH.md) for FreeSWITCH server configuration and architecture details.
 
 #### `[sdr]` -- SDR Channel Monitor
 

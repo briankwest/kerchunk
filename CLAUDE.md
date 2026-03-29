@@ -95,7 +95,7 @@ register_cmd("93", 8, "Weather report");  // *93# → KERCHEVT_CUSTOM + 8
 ```
 Subscribe in the target module: `core->subscribe(KERCHEVT_CUSTOM + 8, handler, NULL);`
 
-Current DTMF commands: `*87#` VM status, `*86#` VM record (own), `*86<id>#` VM record (for user id), `*85#` VM play, `*83#` VM delete, `*84#` VM list, `*41<pin>#` GPIO on, `*40<pin>#` GPIO off, `*93#` weather, `*94#` forecast, `*95#` time, `*911#` emergency on, `*910#` emergency off, `*88#` parrot echo, `*96#` NWS alerts, `*68<6digits>#` OTP authenticate, `*97#` scrambler toggle, `*970#` scrambler off, `*971#`-`*978#` scrambler set code.
+Current DTMF commands: `*87#` VM status, `*86#` VM record (own), `*86<id>#` VM record (for user id), `*85#` VM play, `*83#` VM delete, `*84#` VM list, `*41<pin>#` GPIO on, `*40<pin>#` GPIO off, `*93#` weather, `*94#` forecast, `*95#` time, `*911#` emergency on, `*910#` emergency off, `*88#` parrot echo, `*96#` NWS alerts, `*68<6digits>#` OTP authenticate, `*97#` scrambler toggle, `*970#` scrambler off, `*971#`-`*978#` scrambler set code, `*0<digits>#` autopatch dial, `*0#` autopatch hangup.
 
 The TTS module uses ElevenLabs API via libcurl. Requires `api_key` in `[tts]` config. Responses are cached as WAV files keyed by text hash in `<sounds_dir>/cache/tts/`.
 The NWS module needs libcurl: `make modules/mod_nws.so` uses `pkg-config --libs libcurl`.
@@ -109,7 +109,7 @@ The NWS module needs libcurl: `make modules/mod_nws.so` uses `pkg-config --libs 
 
 ## Config
 
-INI format. Modules read config in their `configure()` callback via `kerchunk_config_get(cfg, "section", "key")`. Key sections: `[general]`, `[modules]`, `[audio]`, `[repeater]`, `[web]`, `[weather]`, `[time]`, `[caller]`, `[recording]`, `[emergency]`, `[tts]`, `[nws]`, `[otp]`, `[stats]`, `[group.N]`, `[user.N]`.
+INI format. Modules read config in their `configure()` callback via `kerchunk_config_get(cfg, "section", "key")`. Key sections: `[general]`, `[modules]`, `[audio]`, `[repeater]`, `[web]`, `[weather]`, `[time]`, `[caller]`, `[recording]`, `[emergency]`, `[tts]`, `[nws]`, `[otp]`, `[stats]`, `[freeswitch]`, `[scrambler]`, `[sdr]`, `[group.N]`, `[user.N]`.
 
 ## User DB & Groups
 
