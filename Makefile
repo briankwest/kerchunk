@@ -21,7 +21,7 @@ endif
 
 # libplcode
 PLCODE_DIR = libplcode
-PLCODE_LIB = $(PLCODE_DIR)/libplcode.a
+PLCODE_LIB = $(PLCODE_DIR)/.libs/libplcode.a
 
 # libnemo_normalize (optional — text normalization for TTS)
 NEMO_DIR = libnemo_normalize
@@ -99,6 +99,8 @@ cli: $(CLI_BIN)
 modules: $(MOD_SO)
 
 $(PLCODE_LIB):
+	@if [ ! -f $(PLCODE_DIR)/configure ]; then cd $(PLCODE_DIR) && autoreconf -fi; fi
+	@if [ ! -f $(PLCODE_DIR)/Makefile ]; then cd $(PLCODE_DIR) && ./configure; fi
 	$(MAKE) -C $(PLCODE_DIR)
 
 ifneq ($(NEMO_DEP),)
