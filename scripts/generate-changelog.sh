@@ -6,8 +6,11 @@
 
 set -euo pipefail
 
+# Fix git ownership check in CI/Docker containers
+git config --global --add safe.directory "$(pwd)" 2>/dev/null || true
+
 VERSION="${1:?Usage: $0 <version>}"
-MAINTAINER="Brian West <brian@bkw.org>"
+MAINTAINER="Brian West <brian@mcalester.net>"
 DATE=$(date -R)
 PACKAGE="kerchunk"
 
