@@ -372,7 +372,7 @@ jobs:
 
           echo "## kerchunkd ${GITHUB_REF_NAME}" > notes.md
           echo "" >> notes.md
-          echo "GMRS/HAM repeater controller daemon." >> notes.md
+          echo "GMRS/HAM/Business repeater controller daemon." >> notes.md
           echo "" >> notes.md
           echo "### Changes" >> notes.md
 
