@@ -70,10 +70,10 @@ agc = off                        ; Auto Gain Control (off recommended — interf
 ; PTT = Push To Talk (transmit control)
 ; ----------------------------------------------------------------------------
 [hid]
-device = /dev/hidraw0            ; HID device path
+device = /dev/rimlite            ; HID device path (udev symlink for CM119)
 cor_bit = 0                      ; GPIO bit for COR input (0-7)
 cor_polarity = active_low        ; active_low | active_high
-ptt_bit = 2                      ; GPIO pin number (1-8)
+ptt_bit = 3                      ; GPIO pin number (1-8), CM119 GPIO3 = PTT
 
 ; ----------------------------------------------------------------------------
 ; Repeater state machine

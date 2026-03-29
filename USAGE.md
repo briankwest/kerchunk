@@ -345,7 +345,7 @@ playback_device = <from -d output>
 hw_rate = 48000            ; Recommended for USB audio
 
 [hid]
-device = /dev/hidraw0      ; Adjust if your device is different
+device = /dev/rimlite      ; Adjust if your device is different
 ```
 
 #### Starting the Daemon
@@ -411,7 +411,7 @@ Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `device` | `/dev/hidraw0` | HID device path |
+| `device` | `/dev/rimlite` | HID device path |
 | `cor_bit` | `0` | GPIO bit for COR input (0-7) |
 | `cor_polarity` | `active_low` | COR polarity: `active_low` or `active_high` |
 | `ptt_bit` | `2` | GPIO pin number for PTT output (1-8) |
@@ -951,7 +951,7 @@ The event logger (`mod_logger`) automatically rotates the log file when it reach
 
 #### HID Device Permissions
 
-**"Permission denied" for /dev/hidraw0:**
+**"Permission denied" for /dev/rimlite:**
 - Install the udev rule: `sudo cp 99-rimlite.rules /etc/udev/rules.d/`
 - Reload: `sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw`
 - Verify your user is in the `audio` group

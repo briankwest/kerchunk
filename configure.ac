@@ -72,7 +72,7 @@ if test "x$have_nemo" = "xyes"; then
 fi
 
 # Install paths
-kerchunkmoddir='${libdir}/kerchunk'
+kerchunkmoddir='${prefix}/lib/kerchunk'
 AC_SUBST([kerchunkmoddir])
 
 AC_CONFIG_FILES([Makefile])

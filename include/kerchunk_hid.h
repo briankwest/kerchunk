@@ -7,7 +7,7 @@
 
 /* HID configuration */
 typedef struct {
-    const char *device;         /* e.g., /dev/hidraw0 */
+    const char *device;         /* e.g., /dev/rimlite (udev symlink) */
     int cor_bit;                /* Bit number for COR signal */
     int cor_polarity;           /* 0 = active_high, 1 = active_low */
     int ptt_bit;                /* Bit number for PTT output */

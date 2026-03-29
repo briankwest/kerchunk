@@ -17,7 +17,7 @@
 
 #include "linenoise.h"
 
-#define DEFAULT_SOCKET "/tmp/kerchunk.sock"
+#define DEFAULT_SOCKET "/run/kerchunk/kerchunk.sock"
 #define MAX_RESP       8192
 #define MAX_CMDS       128
 #define HISTORY_FILE   ".kerchunk_history"

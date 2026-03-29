@@ -19,7 +19,7 @@ liblinenoise_la_CFLAGS  = -std=c11 -Wall -O2 \
 
 # ---------- programs ----------
 
-bin_PROGRAMS = kerchunkd kerchunk
+bin_PROGRAMS = kerchunkd kerchunk kerchunk-diag
 
 # --- kerchunkd (daemon) ---
 
@@ -60,6 +60,14 @@ kerchunk_CFLAGS = -std=c11 -Wall -O2 \
 		  $(PLATFORM_CFLAGS) -D_DEFAULT_SOURCE
 
 kerchunk_LDADD = liblinenoise.la $(PTHREAD_LIBS)
+
+# --- kerchunk-diag (diagnostic tool) ---
+
+kerchunk_diag_SOURCES = tools/kerchunk_diag.c
+kerchunk_diag_CFLAGS  = -std=c11 -Wall -O2 \
+			$(PLATFORM_CFLAGS) -D_DEFAULT_SOURCE \
+			$(PORTAUDIO_CFLAGS)
+kerchunk_diag_LDADD   = $(PORTAUDIO_LIBS) -lm
 
 # ---------- modules (libtool modules) ----------
 

@@ -64,7 +64,7 @@ typedef struct {
 static int             g_listen_fd = -1;
 static client_slot_t   g_clients[MAX_CLIENTS];
 static pthread_mutex_t g_client_mutex = PTHREAD_MUTEX_INITIALIZER;
-static char            g_socket_path[108] = "/tmp/kerchunk.sock";
+static char            g_socket_path[108] = "/run/kerchunk/kerchunk.sock";
 
 static const core_cmd_t *g_core_cmds;
 static int               g_num_core_cmds;

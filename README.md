@@ -869,7 +869,7 @@ Config section: `[audio]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `device` | string | `/dev/hidraw0` | HID device path |
+| `device` | string | `/dev/rimlite` | HID device path |
 | `cor_bit` | int | `0` | GPIO bit for COR input (0-7) |
 | `cor_polarity` | string | `active_low` | `active_low` or `active_high` |
 | `ptt_bit` | int | `2` | GPIO pin number for PTT (1-8, maps to bit N-1) |
