@@ -461,6 +461,7 @@ static void *audio_thread_fn(void *arg)
     audio_thread_ctx_t *ctx = (audio_thread_ctx_t *)arg;
 
     int prev_ctcss = 0, prev_dcs = 0, prev_dtmf = 0;
+    char prev_dtmf_digit = '\0';
 
     KERCHUNK_LOG_I(LOG_MOD, "audio thread started (tick=%dus)", AUDIO_TICK_US);
 
@@ -547,6 +548,7 @@ static void *audio_thread_fn(void *arg)
         /* ── DTMF decoder runs on descrambled frame ── */
         plcode_dtmf_result_t dtmf_res;
         plcode_dtmf_dec_process(ctx->dtmf_dec, frame, (size_t)nread, &dtmf_res);
+
         if (dtmf_res.detected && !prev_dtmf) {
             KERCHUNK_LOG_I(LOG_MOD, "DTMF: %c", dtmf_res.digit);
             kerchevt_t evt = {
@@ -555,6 +557,7 @@ static void *audio_thread_fn(void *arg)
                 .dtmf = { .digit = dtmf_res.digit, .duration_ms = 0 },
             };
             kerchevt_fire(&evt);
+            prev_dtmf_digit = dtmf_res.digit;
         } else if (!dtmf_res.detected && prev_dtmf) {
             kerchevt_t evt = {
                 .type = KERCHEVT_DTMF_END,
@@ -1026,8 +1029,8 @@ int main(int argc, char **argv)
      * misses_to_end rides through the dropout without false digit-end.
      * Higher min_off_frames prevents same-digit re-detection. */
     plcode_dtmf_dec_opts_t dtmf_opts = {0};
-    dtmf_opts.misses_to_end = 10;   /* 200ms of silence to end digit (default 3 = 60ms) */
-    dtmf_opts.min_off_frames = 8;   /* 160ms cooldown for same digit (default 2 = 40ms) */
+    dtmf_opts.misses_to_end = 5;    /* 100ms of silence to end digit */
+    dtmf_opts.min_off_frames = 3;   /* 60ms cooldown for same digit re-detection */
     plcode_dtmf_dec_create_ex(&audio_ctx.dtmf_dec, sample_rate, &dtmf_opts);
 
     /* ── Start audio thread ── */
