@@ -1,3 +1,19 @@
+kerchunk (1.0.1-1) stable; urgency=medium
+
+  * Fix COR polarity: CM108 inverts internally, default now active_high
+  * Fix COR HID read: drain all queued reports, use last state
+  * Fix PTT pin: GPIO2 for CM108 RIM-Lite (was wrong pin)
+  * Fix module install path: /usr/lib/kerchunk (was multiarch path)
+  * Fix socket path: /run/kerchunk/kerchunk.sock
+  * Fix audio jitter: pad partial queue drain frames with silence
+  * Fix resampler underrun: ramp down instead of hard zero (clicks)
+  * Add kerchunk-diag: standalone PTT/audio/COR diagnostic tool
+  * Add HID debug logging for COR troubleshooting
+  * Use /dev/rimlite udev symlink as default HID device
+  * Update README with RIM-Lite GPIO mapping and polarity notes
+
+ -- Brian West <brian@mcalester.net>  Sun, 29 Mar 2026 20:00:00 -0500
+
 kerchunk (1.0.0-1) stable; urgency=medium
 
   * Initial Debian package release

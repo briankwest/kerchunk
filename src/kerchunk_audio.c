@@ -160,7 +160,7 @@ static int duplex_cb(const void *in, void *out, unsigned long n,
                     g_play_prev = g_play_cur;
                     int16_t s;
                     if (ring_read(&g_play_ring, &s, 1) == 1) g_play_cur = s;
-                    else g_play_cur = 0;
+                    else g_play_cur = g_play_cur / 2;  /* Ramp down on underrun */
                     g_play_resample_pos -= 1.0;
                 }
                 double frac = g_play_resample_pos;

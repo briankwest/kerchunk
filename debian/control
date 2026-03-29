@@ -14,8 +14,8 @@ Build-Depends: debhelper-compat (= 13),
                libssl-dev,
                librtlsdr-dev,
                libasound2-dev,
-               libplcode-dev,
-               libnemo-normalize
+               libplcode-dev (>= 1.0.1),
+               libnemo-normalize (>= 1.0.1)
 Standards-Version: 4.6.2
 Homepage: https://github.com/briankwest/kerchunk
 Rules-Requires-Root: no
@@ -25,20 +25,27 @@ Architecture: any
 Depends: ${shlibs:Depends},
          ${misc:Depends},
          adduser
-Recommends: libnemo-normalize,
-            libnemo-normalize-data,
+Recommends: libnemo-normalize (>= 1.0.1),
+            libnemo-normalize-data (>= 1.0.1),
             librtlsdr0 | librtlsdr2
-Description: GMRS/HAM repeater controller daemon with DSP and web dashboard
- kerchunkd is a lightweight C11 repeater controller for GMRS radios using
- USB HID interfaces (CM108/CM119/RIM-Lite). It provides real-time CTCSS/DCS/DTMF
- decoding via libplcode, a priority audio queue with automatic PTT management,
- and a modular event-driven architecture with 24 dynamically loaded modules.
+Description: GMRS/Amateur/Part 90 repeater controller daemon
+ kerchunkd is a lightweight C11 repeater controller for Retevis RT97L and
+ similar GMRS, Amateur (Part 97), and Business/Industrial (Part 90) repeaters.
+ Interfaces via a RIM-Lite v2 USB radio interface (CM108AH chipset) using
+ hidraw for COR/PTT and PortAudio for audio I/O. All CTCSS/DCS/DTMF decoding
+ and CW ID generation is handled in software using libplcode.
  .
- Features include CW ID (FCC 95.1751 compliant), weather announcements,
- NWS alert monitoring, text-to-speech via ElevenLabs, voicemail, call detail
- records, transmission recording, voice scrambler, SDR channel monitoring,
- FreeSWITCH autopatch, OTP authentication, and an embedded HTTPS web dashboard
- with real-time audio streaming via WebSocket.
+ 24 dynamically loaded modules: repeater state machine, CW ID (FCC 95.1751),
+ caller identification, DTMF commands, voicemail, weather, time, NWS alerts,
+ TTS (ElevenLabs), parrot/echo, CDR, statistics, recording, TX encoding,
+ emergency mode, OTP authentication, courtesy tones, GPIO, logging, web
+ dashboard, webhook notifications, voice scrambler, SDR channel monitor,
+ and FreeSWITCH autopatch.
  .
- This package provides the kerchunkd daemon, the kerchunk CLI, all modules,
- sound files, web dashboard, and systemd service.
+ Embedded HTTPS web dashboard with real-time SSE event stream, WebSocket
+ audio monitoring, and WebSocket push-to-talk. Native JSON API with NDJSON
+ event streaming. Interactive CLI with tab completion.
+ .
+ This package provides the kerchunkd daemon, the kerchunk CLI, the
+ kerchunk-diag diagnostic tool, all modules, sound files, web dashboard,
+ and systemd service.

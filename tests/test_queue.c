@@ -73,7 +73,9 @@ void test_queue(void)
     total = 0;
     while ((n = kerchunk_queue_drain(out, 160)) > 0)
         total += n;
-    test_assert(total == 400, "silence length wrong");
+    /* 50ms = 400 samples, but drain pads partial frames to 160,
+     * so 160 + 160 + 160 = 480 (last 80 samples are silence padding) */
+    test_assert(total == 480, "silence length wrong");
     test_end();
 
     test_begin("priority ordering (high drains first)");

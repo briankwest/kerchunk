@@ -345,13 +345,19 @@ int kerchunk_queue_drain(int16_t *out, size_t max_n)
 
     pthread_mutex_lock(&g_mutex);
 
+    size_t filled = 0;
+
     /* Emit inter-item silence gap before loading next item */
     if (g_gap_remaining > 0) {
         size_t gap_n = g_gap_remaining < max_n ? g_gap_remaining : max_n;
         memset(out, 0, gap_n * sizeof(int16_t));
         g_gap_remaining -= gap_n;
+        filled = gap_n;
+        /* If gap didn't fill the frame, pad with silence */
+        if (filled < max_n)
+            memset(out + filled, 0, (max_n - filled) * sizeof(int16_t));
         pthread_mutex_unlock(&g_mutex);
-        return (int)gap_n;
+        return (int)max_n;
     }
 
     /* If not currently draining, load next item */
@@ -368,6 +374,7 @@ int kerchunk_queue_drain(int16_t *out, size_t max_n)
     size_t to_copy = remaining < max_n ? remaining : max_n;
     memcpy(out, g_drain_buf + g_drain_pos, to_copy * sizeof(int16_t));
     g_drain_pos += to_copy;
+    filled = to_copy;
 
     /* Check if item is complete */
     if (g_drain_pos >= g_drain_len) {
@@ -379,8 +386,14 @@ int kerchunk_queue_drain(int16_t *out, size_t max_n)
             g_gap_remaining = GAP_SAMPLES;
     }
 
+    /* Pad partial frame with silence — never return fewer than max_n
+     * samples.  Partial frames cause playback ring underruns because
+     * the PortAudio callback consumes at a constant rate. */
+    if (filled < max_n)
+        memset(out + filled, 0, (max_n - filled) * sizeof(int16_t));
+
     pthread_mutex_unlock(&g_mutex);
-    return (int)to_copy;
+    return (int)max_n;
 }
 
 int kerchunk_queue_is_draining(void)
