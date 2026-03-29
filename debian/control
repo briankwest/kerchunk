@@ -4,11 +4,16 @@ Priority: optional
 Maintainer: Brian West <brian@bkw.org>
 Build-Depends: debhelper-compat (= 13),
                build-essential,
+               autoconf,
+               automake,
+               libtool,
                pkg-config,
+               autoconf-archive,
                portaudio19-dev,
                libcurl4-openssl-dev,
                libssl-dev,
                librtlsdr-dev,
+               libasound2-dev,
                libplcode-dev,
                libnemo-normalize
 Standards-Version: 4.6.2

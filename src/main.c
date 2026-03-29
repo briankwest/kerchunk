@@ -968,7 +968,10 @@ int main(int argc, char **argv)
 
     /* Load modules */
     const char *mod_path = kerchunk_config_get(cfg, "modules", "module_path");
-    kerchunk_modules_init(mod_path ? mod_path : "./modules");
+#ifndef KERCHUNK_MODULE_DIR
+#define KERCHUNK_MODULE_DIR "./modules"
+#endif
+    kerchunk_modules_init(mod_path ? mod_path : KERCHUNK_MODULE_DIR);
 
     const char *mod_list = kerchunk_config_get(cfg, "modules", "load");
     if (mod_list) {

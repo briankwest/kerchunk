@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  # Build and test libplcode
+  # Build and install libplcode
   libplcode:
     runs-on: ubuntu-24.04
     steps:
@@ -15,11 +15,25 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build and test libplcode
+      - name: Install autotools
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool
+
+      - name: Build and install libplcode
         run: |
           cd libplcode
+          autoreconf -fi
+          ./configure
           make
           make test
+          sudo make install
+          sudo ldconfig
+
+      - name: Upload libplcode install
+        uses: actions/upload-artifact@v4
+        with:
+          name: libplcode-install
+          path: /usr/local/lib/libplcode*
+          include-hidden-files: true
 
   # Build libnemo-normalize (requires OpenFst)
   libnemo-normalize:
@@ -29,13 +43,24 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install OpenFst
-        run: sudo apt-get update && sudo apt-get install -y libfst-dev g++
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool libfst-dev g++
 
-      - name: Build libnemo-normalize
+      - name: Build and install libnemo-normalize
         run: |
           cd libnemo_normalize
-          make CONDA_PREFIX=/usr libnemo_normalize.so
+          autoreconf -fi
+          ./configure
+          make
+          sudo make install
+          sudo ldconfig
+
+      - name: Upload libnemo install
+        uses: actions/upload-artifact@v4
+        with:
+          name: libnemo-install
+          path: /usr/local/lib/libnemo*
+          include-hidden-files: true
 
   # Build and test kerchunk (depends on both libs)
   kerchunk:
@@ -51,11 +76,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config \
+            autoconf automake libtool autoconf-archive \
             portaudio19-dev libcurl4-openssl-dev \
-            libssl-dev librtlsdr-dev libasound2-dev
+            libssl-dev librtlsdr-dev libasound2-dev \
+            libfst-dev g++
 
-      - name: Build
-        run: make all
+      - name: Build and install libplcode
+        run: |
+          cd libplcode
+          autoreconf -fi
+          ./configure
+          make
+          sudo make install
+          sudo ldconfig
+
+      - name: Build and install libnemo-normalize
+        run: |
+          cd libnemo_normalize
+          autoreconf -fi
+          ./configure
+          make
+          sudo make install
+          sudo ldconfig
+
+      - name: Build kerchunk
+        run: |
+          autoreconf -fi
+          ./configure
+          make
 
       - name: Test
-        run: make test
+        run: make check
