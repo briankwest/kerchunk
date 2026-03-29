@@ -15,7 +15,7 @@ jobs:
   build-arm64-ubuntu:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout with submodules
         uses: actions/checkout@v5
         with:
           submodules: recursive
@@ -30,7 +30,7 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Build .deb packages (arm64 Ubuntu 24.04)
+      - name: Build all .deb packages (arm64 Ubuntu 24.04)
         uses: uraimo/run-on-arch-action@v3
         with:
           arch: aarch64
@@ -46,15 +46,11 @@ jobs:
               portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
               libasound2-dev libfst-dev g++
 
-            cd libplcode
-            autoreconf -fi && ./configure && make
+            cd libplcode && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
-            dpkg-buildpackage -us -uc -b
-            dpkg -i ../libplcode-dev_*.deb
-            cd ..
+            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb && cd ..
 
-            cd libnemo_normalize
-            autoreconf -fi && ./configure && make
+            cd libnemo_normalize && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
             dpkg-buildpackage -us -uc -b
             dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
@@ -63,11 +59,8 @@ jobs:
             scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
             dpkg-buildpackage -us -uc -b
 
-      - name: Collect artifacts
-        run: |
-          mkdir -p dist
-          cp ../*.deb ../*.ddeb dist/ 2>/dev/null || true
-          ls -lh dist/
+            mkdir -p /workspace/dist
+            cp ../*.deb ../*.ddeb /workspace/dist/ 2>/dev/null || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -78,7 +71,7 @@ jobs:
   build-arm64-debian12:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout with submodules
         uses: actions/checkout@v5
         with:
           submodules: recursive
@@ -93,7 +86,7 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Build .deb packages (arm64 Debian 12)
+      - name: Build all .deb packages (arm64 Debian 12)
         uses: uraimo/run-on-arch-action@v3
         with:
           arch: aarch64
@@ -109,15 +102,11 @@ jobs:
               portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
               libasound2-dev libfst-dev g++
 
-            cd libplcode
-            autoreconf -fi && ./configure && make
+            cd libplcode && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
-            dpkg-buildpackage -us -uc -b
-            dpkg -i ../libplcode-dev_*.deb
-            cd ..
+            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb && cd ..
 
-            cd libnemo_normalize
-            autoreconf -fi && ./configure && make
+            cd libnemo_normalize && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
             dpkg-buildpackage -us -uc -b
             dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
@@ -126,11 +115,8 @@ jobs:
             scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
             dpkg-buildpackage -us -uc -b
 
-      - name: Collect artifacts
-        run: |
-          mkdir -p dist
-          cp ../*.deb ../*.ddeb dist/ 2>/dev/null || true
-          ls -lh dist/
+            mkdir -p /workspace/dist
+            cp ../*.deb ../*.ddeb /workspace/dist/ 2>/dev/null || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -141,7 +127,7 @@ jobs:
   build-arm64-debian13:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout with submodules
         uses: actions/checkout@v5
         with:
           submodules: recursive
@@ -156,27 +142,23 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Build .deb packages (arm64 Debian 13)
+      - name: Build all .deb packages (arm64 Debian 13)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           docker run --rm --platform linux/arm64 \
             -v "${{ github.workspace }}:/workspace" \
-            -w /workspace \
-            debian:trixie bash -c '
+            debian:trixie bash -c "
+              cd /workspace &&
               apt-get update &&
               apt-get install -y build-essential pkg-config devscripts debhelper fakeroot autoconf automake libtool autoconf-archive portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev libasound2-dev libfst-dev g++ &&
               cd libplcode && autoreconf -fi && ./configure && make -j4 && scripts/generate-changelog.sh 1.0.0 && dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb && cd .. &&
-              cd libnemo_normalize && autoreconf -fi && ./configure && make -j4 && scripts/generate-changelog.sh 1.0.0 && dpkg-buildpackage -us -uc -b && dpkg -i ../libnemo-normalize*.deb && cd .. &&
-              scripts/generate-changelog.sh "'"$VERSION"'" &&
-              dpkg-buildpackage -us -uc -b
-            '
-
-      - name: Collect artifacts
-        run: |
-          mkdir -p dist
-          cp ../*.deb ../*.ddeb dist/ 2>/dev/null || true
-          ls -lh dist/
+              cd libnemo_normalize && autoreconf -fi && ./configure && make -j4 && scripts/generate-changelog.sh 1.0.0 && dpkg-buildpackage -us -uc -b && (dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true) && cd .. &&
+              scripts/generate-changelog.sh $VERSION &&
+              dpkg-buildpackage -us -uc -b &&
+              mkdir -p /workspace/dist &&
+              cp ../*.deb ../*.ddeb /workspace/dist/ 2>/dev/null || true
+            "
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -187,7 +169,7 @@ jobs:
   build-amd64-ubuntu:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout with submodules
         uses: actions/checkout@v5
         with:
           submodules: recursive
@@ -209,7 +191,7 @@ jobs:
       - name: Build libplcode-dev .deb
         run: |
           cd libplcode
-          autoreconf -fi && ./configure && make
+          autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           sudo dpkg -i ../libplcode-dev_*.deb
@@ -217,12 +199,12 @@ jobs:
       - name: Build libnemo-normalize .deb
         run: |
           cd libnemo_normalize
-          autoreconf -fi && ./configure && make
+          autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           sudo dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
 
-      - name: Build .deb packages (amd64 Ubuntu 24.04)
+      - name: Build kerchunk .deb
         run: |
           scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
           dpkg-buildpackage -us -uc -b
@@ -247,7 +229,7 @@ jobs:
       - name: Install git
         run: apt-get update && apt-get install -y git
 
-      - name: Checkout
+      - name: Checkout with submodules
         uses: actions/checkout@v5
         with:
           submodules: recursive
@@ -259,7 +241,6 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          apt-get update
           apt-get install -y \
             build-essential pkg-config devscripts debhelper fakeroot \
             autoconf automake libtool autoconf-archive \
@@ -269,7 +250,7 @@ jobs:
       - name: Build libplcode-dev .deb
         run: |
           cd libplcode
-          autoreconf -fi && ./configure && make
+          autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           dpkg -i ../libplcode-dev_*.deb
@@ -277,12 +258,12 @@ jobs:
       - name: Build libnemo-normalize .deb
         run: |
           cd libnemo_normalize
-          autoreconf -fi && ./configure && make
+          autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
 
-      - name: Build .deb packages (amd64 Debian 12)
+      - name: Build kerchunk .deb
         run: |
           scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
           dpkg-buildpackage -us -uc -b
@@ -307,7 +288,7 @@ jobs:
       - name: Install git
         run: apt-get update && apt-get install -y git
 
-      - name: Checkout
+      - name: Checkout with submodules
         uses: actions/checkout@v5
         with:
           submodules: recursive
@@ -319,7 +300,6 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          apt-get update
           apt-get install -y \
             build-essential pkg-config devscripts debhelper fakeroot \
             autoconf automake libtool autoconf-archive \
@@ -329,7 +309,7 @@ jobs:
       - name: Build libplcode-dev .deb
         run: |
           cd libplcode
-          autoreconf -fi && ./configure && make
+          autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           dpkg -i ../libplcode-dev_*.deb
@@ -337,12 +317,12 @@ jobs:
       - name: Build libnemo-normalize .deb
         run: |
           cd libnemo_normalize
-          autoreconf -fi && ./configure && make
+          autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
 
-      - name: Build .deb packages (amd64 Debian 13)
+      - name: Build kerchunk .deb
         run: |
           scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
           dpkg-buildpackage -us -uc -b
@@ -371,17 +351,29 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
-          path: dist
-          merge-multiple: true
+          path: artifacts
+
+      - name: Flatten and rename with distro suffix
+        run: |
+          mkdir -p dist
+          for dir in artifacts/debs-*/; do
+            distro=$(basename "$dir" | sed 's/debs-//')
+            for f in "$dir"*.deb "$dir"*.ddeb; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              ext="${base##*.}"
+              name="${base%.*}"
+              cp "$f" "dist/${name}~${distro}.${ext}"
+            done
+          done
+          ls -lh dist/
 
       - name: Generate release notes
         run: |
           PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
-          if [ -z "$PREV_TAG" ]; then
-            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
-          fi
+          [ -z "$PREV_TAG" ] && PREV_TAG=$(git rev-list --max-parents=0 HEAD)
 
-          cat > release_notes.md << HEADER
+          cat > notes.md << 'HEADER'
           ## kerchunkd ${GITHUB_REF_NAME}
 
           GMRS/HAM repeater controller daemon.
@@ -389,24 +381,25 @@ jobs:
           ### Changes
           HEADER
 
-          git log --pretty=format:"- %s (%h)" "${PREV_TAG}..HEAD" >> release_notes.md
+          git log --pretty=format:"- %s (%h)" "${PREV_TAG}..HEAD" >> notes.md
 
-          cat >> release_notes.md << 'FOOTER'
+          cat >> notes.md << 'FOOTER'
 
-          ### Installation
+          ### Installation (Raspberry Pi / arm64)
 
           ```bash
-          sudo dpkg -i libplcode-dev_*_<arch>.deb
-          sudo dpkg -i libnemo-normalize-data_*_all.deb libnemo-normalize_*_<arch>.deb
-          sudo dpkg -i kerchunk_*_<arch>.deb
+          sudo dpkg -i libplcode-dev_*~arm64-ubuntu.deb
+          sudo dpkg -i libnemo-normalize-data_*~arm64-ubuntu.deb libnemo-normalize_*~arm64-ubuntu.deb
+          sudo dpkg -i kerchunk_*~arm64-ubuntu.deb
           sudo apt-get -f install
-          sudo ldconfig
+          sudo vi /etc/kerchunk/kerchunk.conf
+          sudo systemctl start kerchunkd
           ```
 
           ### Build Matrix
 
           | Architecture | OS |
-          |--------------|----|
+          |-|-|
           | amd64 | Ubuntu 24.04 |
           | amd64 | Debian 12 (Bookworm) |
           | amd64 | Debian 13 (Trixie) |
@@ -417,20 +410,18 @@ jobs:
           ### Packages
           FOOTER
 
-          echo "" >> release_notes.md
-          echo "| File | Size |" >> release_notes.md
-          echo "|------|------|" >> release_notes.md
+          echo "" >> notes.md
+          echo "| File | Size |" >> notes.md
+          echo "|------|------|" >> notes.md
           for f in dist/*.deb dist/*.ddeb; do
             [ -f "$f" ] || continue
-            name=$(basename "$f")
-            size=$(du -h "$f" | cut -f1)
-            echo "| \`${name}\` | ${size} |" >> release_notes.md
+            echo "| \`$(basename $f)\` | $(du -h "$f" | cut -f1) |" >> notes.md
           done
 
-      - name: Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release_notes.md
+          body_path: notes.md
           files: |
             dist/*.deb
             dist/*.ddeb
