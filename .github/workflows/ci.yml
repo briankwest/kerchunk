@@ -6,15 +6,12 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   # Build and install libplcode
   libplcode:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -32,7 +29,7 @@ jobs:
           sudo ldconfig
 
       - name: Upload libplcode install
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: libplcode-install
           path: /usr/local/lib/libplcode*
@@ -42,7 +39,7 @@ jobs:
   libnemo-normalize:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -59,7 +56,7 @@ jobs:
           sudo ldconfig
 
       - name: Upload libnemo install
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: libnemo-install
           path: /usr/local/lib/libnemo*
@@ -70,7 +67,7 @@ jobs:
     needs: [libplcode, libnemo-normalize]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
