@@ -351,11 +351,11 @@ RT97L DB9 <──> RIM-Lite v2 (CM119 USB) <──> Raspberry Pi / Linux / Mac
 
 | Dependency | Purpose | Install (macOS) | Install (Linux) |
 |-----------|---------|-----------------|-----------------|
-| [libplcode](https://github.com/briankwest/libplcode) | CTCSS/DCS/DTMF/CWID codec | git submodule | git submodule |
+| [libplcode](https://github.com/briankwest/libplcode) | CTCSS/DCS/DTMF/CWID codec | `make install` or .deb | `sudo dpkg -i libplcode-dev_*.deb` |
 | PortAudio | Audio I/O | `brew install portaudio` | `apt install portaudio19-dev` |
 | libcurl | HTTP (weather, NWS, TTS) | `brew install curl` | `apt install libcurl4-openssl-dev` |
 | OpenFst | Optional: TTS text normalization | `brew install openfst` | `apt install libfst-dev` |
-| [libnemo_normalize](https://github.com/briankwest/libnemo_normalize) | Optional: NeMo text normalization | git submodule | git submodule |
+| [libnemo_normalize](https://github.com/briankwest/libnemo_normalize) | Optional: NeMo text normalization | `make install` or .deb | `sudo dpkg -i libnemo-normalize_*.deb` |
 | librtlsdr | Optional: SDR channel monitor | `brew install librtlsdr` | `apt install librtlsdr-dev` |
 | pkg-config | Build system | (included with Xcode) | `apt install pkg-config` |
 
@@ -378,7 +378,7 @@ sudo apt install libnemo-normalize-dev libfst-dev
 Build with autotools:
 
 ```bash
-git clone --recurse-submodules https://github.com/briankwest/kerchunk.git
+git clone https://github.com/briankwest/kerchunk.git
 cd kerchunk
 
 autoreconf -fi

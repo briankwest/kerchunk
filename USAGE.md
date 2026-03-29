@@ -258,10 +258,12 @@ sudo apt install build-essential pkg-config portaudio19-dev libcurl4-openssl-dev
 ### Building from Source
 
 ```bash
-git clone --recurse-submodules https://github.com/briankwest/kerchunk.git
+git clone https://github.com/briankwest/kerchunk.git
 cd kerchunk
-make            # Builds libplcode, daemon, CLI, and all 24 modules
-make test       # Runs the test suite (234 tests, all must pass)
+autoreconf -fi
+./configure
+make            # Builds daemon, CLI, and all 24 modules
+make check      # Runs the test suite (all must pass)
 ```
 
 Build outputs:

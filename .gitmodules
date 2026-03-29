@@ -1,7 +1,0 @@
-[submodule "libplcode"]
-	path = libplcode
-	url = https://github.com/briankwest/libplcode.git
-	branch = main
-[submodule "libnemo_normalize"]
-	path = libnemo_normalize
-	url = git@github.com:briankwest/libnemo_normalize.git

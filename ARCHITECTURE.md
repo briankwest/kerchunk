@@ -621,7 +621,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
   kerchunk            CLI binary (connects via Unix socket)
   modules/*.so        24 dynamically loaded modules
   test_kerchunk       Test binary (234 tests)
-  libplcode/          Git submodule (CTCSS/DCS/DTMF/CW ID codec library)
+  libplcode           External dependency (CTCSS/DCS/DTMF/CW ID codec library)
   sounds/             WAV files: 8kHz, 16-bit, mono
   └── cache/tts/      TTS response cache (hash-keyed WAV files)
   web/                Static HTML/JS/CSS for dashboard

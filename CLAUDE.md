@@ -3,30 +3,28 @@
 ## Clone & Build
 
 ```bash
-git clone --recurse-submodules git@github.com:briankwest/kerchunk.git
+git clone git@github.com:briankwest/kerchunk.git
 cd kerchunk
-
-# If you already cloned without --recurse-submodules:
-git submodule update --init
-
-make            # Build libplcode, daemon, CLI, all modules
-make test       # Run full test suite (204 tests, must all pass)
-make clean      # Remove artifacts (does NOT clean libplcode)
-make modules    # Build just the .so modules
+autoreconf -fi
+./configure
+make            # Build daemon, CLI, all modules
+make check      # Run full test suite (must all pass)
+make clean      # Remove artifacts
 ```
 
-The `libplcode/` directory is a git submodule (`github.com/briankwest/libplcode`). The Makefile builds it automatically via `make -C libplcode`. To fully clean both:
-
-```bash
-make -C libplcode clean && make clean
-```
-
-Always run `make test` after changes. If you modify `kerchunk.h` or any core header, do `make clean && make all` — stale .o files cause crashes due to struct layout changes.
+Always run `make check` after changes. If you modify `kerchunk.h` or any core header, do `make clean && make all` — stale .o files cause crashes due to struct layout changes.
 
 ### Dependencies
 
-- **portaudio** (required): `brew install portaudio` / `apt install portaudio19-dev`
-- **libcurl** (for weather/NWS/TTS modules): `brew install curl` / `apt install libcurl4-openssl-dev`
+Libraries must be installed before building kerchunk:
+
+- **libplcode** (required): `github.com/briankwest/libplcode` — install via `make install` or .deb package
+- **libnemo_normalize** (optional): `github.com/briankwest/libnemo_normalize` — install via `make install` or .deb package
+- **portaudio** (required): `apt install portaudio19-dev`
+- **libcurl** (for weather/NWS/TTS modules): `apt install libcurl4-openssl-dev`
+- **libssl** (for TLS): `apt install libssl-dev`
+- **librtlsdr** (for SDR module): `apt install librtlsdr-dev`
+- **libasound2** (for ALSA mixer): `apt install libasound2-dev`
 
 ## Architecture
 

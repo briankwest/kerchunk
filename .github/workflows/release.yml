@@ -12,15 +12,13 @@ jobs:
   build-arm64-ubuntu:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout with submodules
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           fetch-depth: 0
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Generate changelog
+        run: scripts/generate-changelog.sh "${GITHUB_REF_NAME#v}"
 
       - name: Set up QEMU for arm64
         uses: docker/setup-qemu-action@v4
@@ -41,19 +39,20 @@ jobs:
               build-essential pkg-config devscripts debhelper fakeroot \
               autoconf automake libtool autoconf-archive \
               portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
-              libasound2-dev libfst-dev g++
+              libasound2-dev libfst-dev g++ git
 
-            cd libplcode && autoreconf -fi && ./configure && make -j4
+            git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+            cd /tmp/libplcode && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
-            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb && cd ..
+            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb
 
-            cd libnemo_normalize && autoreconf -fi && ./configure && make -j4
+            git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+            cd /tmp/libnemo_normalize && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
             dpkg-buildpackage -us -uc -b
             dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
-            cd ..
 
-            scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
+            cd /workspace
             dpkg-buildpackage -us -uc -b
 
             mkdir -p /workspace/dist
@@ -68,15 +67,13 @@ jobs:
   build-arm64-debian12:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout with submodules
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           fetch-depth: 0
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Generate changelog
+        run: scripts/generate-changelog.sh "${GITHUB_REF_NAME#v}"
 
       - name: Set up QEMU for arm64
         uses: docker/setup-qemu-action@v4
@@ -97,19 +94,20 @@ jobs:
               build-essential pkg-config devscripts debhelper fakeroot \
               autoconf automake libtool autoconf-archive \
               portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
-              libasound2-dev libfst-dev g++
+              libasound2-dev libfst-dev g++ git
 
-            cd libplcode && autoreconf -fi && ./configure && make -j4
+            git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+            cd /tmp/libplcode && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
-            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb && cd ..
+            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb
 
-            cd libnemo_normalize && autoreconf -fi && ./configure && make -j4
+            git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+            cd /tmp/libnemo_normalize && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
             dpkg-buildpackage -us -uc -b
             dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
-            cd ..
 
-            scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
+            cd /workspace
             dpkg-buildpackage -us -uc -b
 
             mkdir -p /workspace/dist
@@ -124,15 +122,13 @@ jobs:
   build-arm64-debian13:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout with submodules
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           fetch-depth: 0
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Generate changelog
+        run: scripts/generate-changelog.sh "${GITHUB_REF_NAME#v}"
 
       - name: Set up QEMU for arm64
         uses: docker/setup-qemu-action@v4
@@ -140,22 +136,35 @@ jobs:
           platforms: arm64
 
       - name: Build all .deb packages (arm64 Debian 13)
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           docker run --rm --platform linux/arm64 \
             -v "${{ github.workspace }}:/workspace" \
-            debian:trixie bash -c "
-              cd /workspace &&
-              apt-get update &&
-              apt-get install -y build-essential pkg-config devscripts debhelper fakeroot autoconf automake libtool autoconf-archive portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev libasound2-dev libfst-dev g++ &&
-              cd libplcode && autoreconf -fi && ./configure && make -j4 && scripts/generate-changelog.sh 1.0.0 && dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb && cd .. &&
-              cd libnemo_normalize && autoreconf -fi && ./configure && make -j4 && scripts/generate-changelog.sh 1.0.0 && dpkg-buildpackage -us -uc -b && (dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true) && cd .. &&
-              scripts/generate-changelog.sh $VERSION &&
-              dpkg-buildpackage -us -uc -b &&
-              mkdir -p /workspace/dist &&
+            debian:trixie bash -c '
+              cd /workspace
+              apt-get update
+              apt-get install -y \
+                build-essential pkg-config devscripts debhelper fakeroot \
+                autoconf automake libtool autoconf-archive \
+                portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
+                libasound2-dev libfst-dev g++ git
+
+              git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+              cd /tmp/libplcode && autoreconf -fi && ./configure && make -j4
+              scripts/generate-changelog.sh "1.0.0"
+              dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb
+
+              git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+              cd /tmp/libnemo_normalize && autoreconf -fi && ./configure && make -j4
+              scripts/generate-changelog.sh "1.0.0"
+              dpkg-buildpackage -us -uc -b
+              dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
+
+              cd /workspace
+              dpkg-buildpackage -us -uc -b
+
+              mkdir -p /workspace/dist
               cp ../*.deb ../*.ddeb /workspace/dist/ 2>/dev/null || true
-            "
+            '
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -166,15 +175,10 @@ jobs:
   build-amd64-ubuntu:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout with submodules
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           fetch-depth: 0
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install build dependencies
         run: |
@@ -185,17 +189,19 @@ jobs:
             portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
             libasound2-dev libfst-dev g++
 
-      - name: Build libplcode-dev .deb
+      - name: Build and install libplcode
         run: |
-          cd libplcode
+          git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+          cd /tmp/libplcode
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           sudo dpkg -i ../libplcode-dev_*.deb
 
-      - name: Build libnemo-normalize .deb
+      - name: Build and install libnemo-normalize
         run: |
-          cd libnemo_normalize
+          git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+          cd /tmp/libnemo_normalize
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
@@ -203,7 +209,7 @@ jobs:
 
       - name: Build kerchunk .deb
         run: |
-          scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
+          scripts/generate-changelog.sh "${GITHUB_REF_NAME#v}"
           dpkg-buildpackage -us -uc -b
 
       - name: Collect artifacts
@@ -226,15 +232,10 @@ jobs:
       - name: Install git
         run: apt-get update && apt-get install -y git
 
-      - name: Checkout with submodules
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           fetch-depth: 0
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install build dependencies
         run: |
@@ -244,17 +245,19 @@ jobs:
             portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
             libasound2-dev libfst-dev g++
 
-      - name: Build libplcode-dev .deb
+      - name: Build and install libplcode
         run: |
-          cd libplcode
+          git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+          cd /tmp/libplcode
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           dpkg -i ../libplcode-dev_*.deb
 
-      - name: Build libnemo-normalize .deb
+      - name: Build and install libnemo-normalize
         run: |
-          cd libnemo_normalize
+          git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+          cd /tmp/libnemo_normalize
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
@@ -262,7 +265,7 @@ jobs:
 
       - name: Build kerchunk .deb
         run: |
-          scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
+          scripts/generate-changelog.sh "${GITHUB_REF_NAME#v}"
           dpkg-buildpackage -us -uc -b
 
       - name: Collect artifacts
@@ -285,15 +288,10 @@ jobs:
       - name: Install git
         run: apt-get update && apt-get install -y git
 
-      - name: Checkout with submodules
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           fetch-depth: 0
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install build dependencies
         run: |
@@ -303,17 +301,19 @@ jobs:
             portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
             libasound2-dev libfst-dev g++
 
-      - name: Build libplcode-dev .deb
+      - name: Build and install libplcode
         run: |
-          cd libplcode
+          git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+          cd /tmp/libplcode
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           dpkg -i ../libplcode-dev_*.deb
 
-      - name: Build libnemo-normalize .deb
+      - name: Build and install libnemo-normalize
         run: |
-          cd libnemo_normalize
+          git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+          cd /tmp/libnemo_normalize
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
@@ -321,7 +321,7 @@ jobs:
 
       - name: Build kerchunk .deb
         run: |
-          scripts/generate-changelog.sh "${{ steps.version.outputs.VERSION }}"
+          scripts/generate-changelog.sh "${GITHUB_REF_NAME#v}"
           dpkg-buildpackage -us -uc -b
 
       - name: Collect artifacts

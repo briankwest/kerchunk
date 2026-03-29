@@ -7,69 +7,10 @@ on:
     branches: [main]
 
 jobs:
-  # Build and install libplcode
-  libplcode:
+  build-and-test:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Install autotools
-        run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool
-
-      - name: Build and install libplcode
-        run: |
-          cd libplcode
-          autoreconf -fi
-          ./configure
-          make
-          make test
-          sudo make install
-          sudo ldconfig
-
-      - name: Upload libplcode install
-        uses: actions/upload-artifact@v7
-        with:
-          name: libplcode-install
-          path: /usr/local/lib/libplcode*
-          include-hidden-files: true
-
-  # Build libnemo-normalize (requires OpenFst)
-  libnemo-normalize:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool libfst-dev g++
-
-      - name: Build and install libnemo-normalize
-        run: |
-          cd libnemo_normalize
-          autoreconf -fi
-          ./configure
-          make
-          sudo make install
-          sudo ldconfig
-
-      - name: Upload libnemo install
-        uses: actions/upload-artifact@v7
-        with:
-          name: libnemo-install
-          path: /usr/local/lib/libnemo*
-          include-hidden-files: true
-
-  # Build and test kerchunk (depends on both libs)
-  kerchunk:
-    needs: [libplcode, libnemo-normalize]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Install dependencies
         run: |
@@ -83,16 +24,19 @@ jobs:
 
       - name: Build and install libplcode
         run: |
-          cd libplcode
+          git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+          cd /tmp/libplcode
           autoreconf -fi
           ./configure
           make
+          make check
           sudo make install
           sudo ldconfig
 
       - name: Build and install libnemo-normalize
         run: |
-          cd libnemo_normalize
+          git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+          cd /tmp/libnemo_normalize
           autoreconf -fi
           ./configure
           make
