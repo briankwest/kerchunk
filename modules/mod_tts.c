@@ -513,7 +513,7 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
 
 static kerchunk_module_def_t mod_tts = {
     .name             = "mod_tts",
-    .version          = "1.1.0",
+    .version          = "1.0.0",
     .description      = "Text-to-speech via ElevenLabs API (cached)",
     .load             = tts_load,
     .configure        = tts_configure,

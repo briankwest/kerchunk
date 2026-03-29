@@ -2,6 +2,33 @@
 
 A complete guide for radio users and administrators of a kerchunkd-powered GMRS repeater.
 
+## Table of Contents
+
+- [Part 1: For Radio Users](#part-1-for-radio-users)
+  - [What is kerchunkd?](#what-is-kerchunkd)
+  - [Programming Your Radio](#programming-your-radio)
+  - [How You Are Identified](#how-you-are-identified)
+  - [Using DTMF Commands](#using-dtmf-commands)
+  - [Weather and Time](#weather-and-time)
+  - [Echo Test (Parrot)](#echo-test-parrot)
+  - [Voicemail](#voicemail)
+  - [Emergency Mode](#emergency-mode)
+  - [OTP Authentication](#otp-authentication)
+  - [What You Will Hear](#what-you-will-hear)
+- [Part 2: For Administrators](#part-2-for-administrators)
+  - [Prerequisites](#prerequisites)
+  - [Building from Source](#building-from-source)
+  - [Linux Setup](#linux-setup)
+  - [Initial Configuration](#initial-configuration)
+  - [Configuration Reference](#configuration-reference)
+  - [FCC Compliance Settings](#fcc-compliance-settings)
+  - [User and Group Management](#user-and-group-management)
+  - [Web Dashboard](#web-dashboard)
+  - [CLI Tool](#cli-tool)
+  - [Monitoring and Maintenance](#monitoring-and-maintenance)
+  - [Troubleshooting](#troubleshooting)
+  - [Running as a System Service](#running-as-a-system-service)
+
 ---
 
 ## Part 1: For Radio Users
@@ -233,14 +260,14 @@ sudo apt install build-essential pkg-config portaudio19-dev libcurl4-openssl-dev
 ```bash
 git clone --recurse-submodules https://github.com/briankwest/kerchunk.git
 cd kerchunk
-make            # Builds libplcode, daemon, CLI, and all 23 modules
-make test       # Runs the test suite (214 tests, all must pass)
+make            # Builds libplcode, daemon, CLI, and all 24 modules
+make test       # Runs the test suite (234 tests, all must pass)
 ```
 
 Build outputs:
 - `kerchunkd` -- the daemon
 - `kerchunk` -- the CLI tool
-- `modules/*.so` -- 23 loadable modules
+- `modules/*.so` -- 24 loadable modules
 - `test_kerchunk` -- test binary
 
 ### Linux Setup
@@ -570,7 +597,7 @@ DTMF: `*97#` toggle, `*970#` off, `*971#`-`*978#` set code. CW ID and emergency 
 |-----|---------|-------------|
 | `enabled` | `off` | Enable RTL-SDR channel monitor |
 | `device_index` | `0` | RTL-SDR device index |
-| `channel` | `1` | GMRS/FRS channel number (1-22) |
+| `channel` | `1` | Channel number (1-22) |
 | `log_file` | `sdr_activity.csv` | CSV activity log file |
 
 Requires `librtlsdr-dev`. Tunes to a single channel at 240 kHz, FM demod with CTCSS/DCS/DTMF decoding.

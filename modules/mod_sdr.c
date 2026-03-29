@@ -1,5 +1,5 @@
 /*
- * mod_sdr.c — SDR GMRS/FRS single-channel monitor
+ * mod_sdr.c — SDR single-channel monitor
  *
  * Tunes to one channel at 240 kHz, FM demod + de-emphasis + decimate to 8 kHz.
  * Identical to sdr_test — proven to produce clean CTCSS/DCS/DTMF detection.
@@ -398,8 +398,8 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
 
 static kerchunk_module_def_t mod_sdr = {
     .name             = "mod_sdr",
-    .version          = "3.0.0",
-    .description      = "SDR GMRS/FRS channel monitor",
+    .version          = "1.0.0",
+    .description      = "SDR channel monitor",
     .load             = sdr_load,
     .configure        = sdr_configure,
     .unload           = sdr_unload,

@@ -414,9 +414,9 @@ time_skew = 1                    ; Accept +/- N time steps (each 30s)
 ; admin_only = off
 
 ; ----------------------------------------------------------------------------
-; SDR GMRS/FRS channel monitor
+; SDR channel monitor
 ;
-; Uses an RTL-SDR dongle (librtlsdr) to monitor a single GMRS/FRS channel.
+; Uses an RTL-SDR dongle (librtlsdr) to monitor a single channel.
 ; Tunes to channel frequency at 240 kHz, FM demod + de-emphasis to 8 kHz audio.
 ; CTCSS/DCS/DTMF decoding, FM squelch, and CSV activity logging.
 ; Requires: sudo apt install librtlsdr-dev

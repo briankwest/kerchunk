@@ -16,6 +16,60 @@ A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 f
 
 **Web Dashboard** — embedded HTTP/HTTPS server with real-time SSE event stream and live audio monitoring via WebSocket. Seven pages: Public dashboard (status, live audio, weather, coverage map), Registration, PTT (WebSocket push-to-talk), Admin dashboard (real-time SSE, controls), Users, Config, Coverage Planner.
 
+## Table of Contents
+
+- [GMRS vs Amateur (Ham) Feature Matrix](#gmrs-vs-amateur-ham-feature-matrix)
+  - [Regulatory Notes](#regulatory-notes)
+  - [Configuring for Service Type](#configuring-for-service-type)
+- [Architecture](#architecture)
+  - [Threading Model](#threading-model)
+  - [Dual State Machines](#dual-state-machines)
+  - [Core Audio Engine](#core-audio-engine)
+- [Hardware](#hardware)
+- [Dependencies](#dependencies)
+- [Building](#building)
+  - [Linux Setup](#linux-setup)
+- [Running](#running)
+- [CLI](#cli)
+  - [Interactive Console](#interactive-console)
+  - [One-shot and Scripting](#one-shot-and-scripting)
+  - [JSON Output and Event Streaming](#json-output-and-event-streaming)
+  - [Simulation Commands](#simulation-commands)
+- [DTMF Commands](#dtmf-commands)
+- [Modules](#modules)
+  - [mod_repeater — RX State Machine](#mod_repeater--rx-state-machine)
+  - [mod_cwid — CW Callsign Identification](#mod_cwid--cw-callsign-identification)
+  - [mod_courtesy — Courtesy Tone](#mod_courtesy--courtesy-tone)
+  - [mod_caller — Caller Identification](#mod_caller--caller-identification)
+  - [mod_dtmfcmd — DTMF Command Router](#mod_dtmfcmd--dtmf-command-router)
+  - [mod_voicemail — Voicemail](#mod_voicemail--voicemail)
+  - [mod_weather — Weather Announcements](#mod_weather--weather-announcements)
+  - [mod_time — Time Announcements](#mod_time--time-announcements)
+  - [mod_recorder — Transmission Recording](#mod_recorder--transmission-recording)
+  - [mod_txcode — Dynamic TX Encoding](#mod_txcode--dynamic-tx-encoding)
+  - [mod_emergency — Emergency Mode](#mod_emergency--emergency-mode)
+  - [mod_otp — TOTP Authentication](#mod_otp--totp-authentication)
+  - [mod_parrot — Echo/Parrot](#mod_parrot--echoparrot)
+  - [mod_cdr — Call Detail Records](#mod_cdr--call-detail-records)
+  - [mod_tts — Text-to-Speech (ElevenLabs)](#mod_tts--text-to-speech-elevenlabs)
+  - [mod_nws — NWS Weather Alert Monitor](#mod_nws--nws-weather-alert-monitor)
+  - [mod_stats — Statistics and Metrics](#mod_stats--statistics-and-metrics)
+  - [mod_web — Web Dashboard](#mod_web--web-dashboard)
+  - [mod_webhook — Webhook Notifications](#mod_webhook--webhook-notifications)
+  - [mod_scrambler — Voice Scrambler](#mod_scrambler--voice-scrambler)
+  - [mod_sdr — SDR Channel Monitor](#mod_sdr--sdr-channel-monitor)
+  - [mod_gpio — GPIO Relay Control](#mod_gpio--gpio-relay-control)
+  - [mod_logger — Event Logger](#mod_logger--event-logger)
+- [General Config](#general-config)
+- [Audio Config](#audio-config)
+- [HID Config](#hid-config)
+- [User and Group Database](#user-and-group-database)
+- [GMRS Coverage Planner](#gmrs-coverage-planner)
+- [Event Types](#event-types)
+- [FCC Compliance](#fcc-compliance)
+- [Testing](#testing)
+- [License](#license)
+
 ## GMRS vs Amateur (Ham) Feature Matrix
 
 kerchunkd supports both GMRS (Part 95E) and Amateur (Part 97) repeater operation. Some features have regulatory restrictions depending on the service type. The operator is responsible for compliance.
@@ -131,7 +185,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 |  |  mod_web        HTTP server + SSE + web dashboard        | |
 |  |  mod_webhook    HTTP POST notifications on events        | |
 |  |  mod_scrambler  Frequency inversion voice scrambler      | |
-|  |  mod_sdr        RTL-SDR single-channel GMRS/FRS monitor  | |
+|  |  mod_sdr        RTL-SDR single-channel monitor         | |
 |  |  mod_freeswitch FreeSWITCH AutoPatch (Ham only)          | |
 |  +----------------------------------------------------------+ |
 +---------------------------------------------------------------+
@@ -282,17 +336,31 @@ RT97L DB9 <--> RIM-Lite v2 (CM119 USB) <--> Raspberry Pi / Linux / Mac
 
 ## Building
 
+Install dependencies first:
+
+```bash
+# Required (Debian/Ubuntu)
+sudo apt install build-essential pkg-config autoconf automake libtool \
+  portaudio19-dev libcurl4-openssl-dev libplcode-dev
+
+# Optional: RTL-SDR channel monitor
+sudo apt install librtlsdr-dev
+
+# Optional: TTS text normalization (libnemo-normalize)
+sudo apt install libnemo-normalize-dev libfst-dev
+```
+
+Build with autotools:
+
 ```bash
 git clone --recurse-submodules https://github.com/briankwest/kerchunk.git
 cd kerchunk
 
-# If you already cloned without --recurse-submodules:
-git submodule update --init
-
-make            # Build libplcode, daemon, CLI, all modules
-make test       # Run test suite (234 tests)
-make devices    # List audio devices
-make clean      # Remove artifacts
+autoreconf -fi
+./configure
+make
+make check       # Run test suite (234 tests)
+sudo make install
 ```
 
 Build outputs:
@@ -306,10 +374,14 @@ Build outputs:
 On a fresh Linux install (Ubuntu/Debian), install all build dependencies:
 
 ```bash
-sudo apt install build-essential pkg-config portaudio19-dev libcurl4-openssl-dev
+sudo apt install build-essential pkg-config autoconf automake libtool \
+  portaudio19-dev libcurl4-openssl-dev libplcode-dev
 
-# Optional: for TTS text normalization (libnemo_normalize)
-sudo apt install libfst-dev
+# Optional: for TTS text normalization (libnemo-normalize)
+sudo apt install libnemo-normalize-dev libfst-dev
+
+# Optional: for SDR channel monitor
+sudo apt install librtlsdr-dev
 ```
 
 **Audio group** — PortAudio needs access to ALSA devices (`/dev/snd/*`), which are owned by the `audio` group:
@@ -682,7 +754,7 @@ Config section: `[scrambler]`. DTMF: `*97#` toggle, `*970#` off, `*971#`-`*978#`
 
 ### mod_sdr — SDR Channel Monitor
 
-Uses an RTL-SDR dongle (librtlsdr) to monitor a single GMRS/FRS channel. Tunes to the channel frequency at 240 kHz sample rate, FM demodulation with de-emphasis, CTCSS/DCS/DTMF decoding via libplcode, FM noise squelch, and CSV activity logging.
+Uses an RTL-SDR dongle (librtlsdr) to monitor a single channel. Tunes to the channel frequency at 240 kHz sample rate, FM demodulation with de-emphasis, CTCSS/DCS/DTMF decoding via libplcode, FM noise squelch, and CSV activity logging.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|

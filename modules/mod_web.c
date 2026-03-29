@@ -1860,7 +1860,7 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
 
 static kerchunk_module_def_t mod_web = {
     .name             = "mod_web",
-    .version          = "2.0.0",
+    .version          = "1.0.0",
     .description      = "Embedded HTTP/HTTPS server for web dashboard",
     .load             = web_load,
     .configure        = web_configure,
