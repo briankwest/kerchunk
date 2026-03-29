@@ -14,7 +14,7 @@ jobs:
   libplcode:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -32,7 +32,7 @@ jobs:
           sudo ldconfig
 
       - name: Upload libplcode install
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: libplcode-install
           path: /usr/local/lib/libplcode*
@@ -42,7 +42,7 @@ jobs:
   libnemo-normalize:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -59,7 +59,7 @@ jobs:
           sudo ldconfig
 
       - name: Upload libnemo install
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: libnemo-install
           path: /usr/local/lib/libnemo*
@@ -70,7 +70,7 @@ jobs:
     needs: [libplcode, libnemo-normalize]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
