@@ -2,6 +2,34 @@
 
 Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
 
+## Table of Contents
+
+- [System Overview](#system-overview)
+- [Threading Model](#threading-model)
+  - [Synchronization](#synchronization)
+- [Event Bus](#event-bus)
+  - [Event Types](#event-types)
+- [Audio Pipeline](#audio-pipeline)
+  - [RX Path (Capture)](#rx-path-capture)
+  - [TX Path (Playback)](#tx-path-playback)
+  - [Queue Priority Levels](#queue-priority-levels)
+- [RX State Machine (mod_repeater)](#rx-state-machine-mod_repeater)
+- [TX State Machine](#tx-state-machine)
+- [HID Driver (CM108/CM119 GPIO)](#hid-driver-cm108cm119-gpio)
+  - [PTT Write Format (5 bytes)](#ptt-write-format-5-bytes)
+  - [COR Read Format](#cor-read-format)
+  - [COR Drop Hold Timer](#cor-drop-hold-timer)
+- [WebSocket Audio Streaming](#websocket-audio-streaming)
+- [Module Lifecycle](#module-lifecycle)
+  - [DTMF Command Registration](#dtmf-command-registration)
+- [User & Group System](#user--group-system)
+- [Web Dashboard](#web-dashboard)
+- [FCC Compliance](#fcc-compliance)
+- [DSP Pipeline (libplcode)](#dsp-pipeline-libplcode)
+  - [DTMF Decoder State Machine](#dtmf-decoder-state-machine)
+- [Configuration Hierarchy](#configuration-hierarchy)
+- [Build Artifacts](#build-artifacts)
+
 ---
 
 ## System Overview
@@ -37,7 +65,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
                           │     └────────────────────────────────┘  │
                           │                                         │
                           │  ┌───────────────────────────────────┐  │
-                          │  │         23 Loaded Modules         │  │
+                          │  │         24 Loaded Modules         │  │
                           │  │  repeater  cwid      courtesy     │  │
                           │  │  caller    dtmfcmd   otp          │  │
                           │  │  voicemail gpio      logger       │  │
@@ -45,7 +73,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
                           │  │  txcode    emergency parrot       │  │
                           │  │  cdr       tts       nws          │  │
                           │  │  stats     web       webhook      │  │
-                          │  │  scrambler sdr                    │  │
+                          │  │  scrambler sdr       freeswitch   │  │
                           │  └───────────────────────────────────┘  │
                           └─────────────────────────────────────────┘
 ```
@@ -591,8 +619,8 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
 ```
   kerchunkd           Daemon binary (links libplcode.a + PortAudio + ALSA)
   kerchunk            CLI binary (connects via Unix socket)
-  modules/*.so        23 dynamically loaded modules
-  test_kerchunk       Test binary (214 tests)
+  modules/*.so        24 dynamically loaded modules
+  test_kerchunk       Test binary (234 tests)
   libplcode/          Git submodule (CTCSS/DCS/DTMF/CW ID codec library)
   sounds/             WAV files: 8kHz, 16-bit, mono
   └── cache/tts/      TTS response cache (hash-keyed WAV files)

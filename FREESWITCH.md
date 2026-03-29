@@ -5,6 +5,47 @@
    Last updated: 2026-03-28
 ```
 
+## Table of Contents
+
+- [1. What Is This?](#1-what-is-this)
+- [2. Architecture Overview](#2-architecture-overview)
+- [3. FreeSWITCH Integration Approach](#3-freeswitch-integration-approach)
+  - [3.1. Why ESL + UnicastStream](#31-why-esl--unicaststream)
+  - [3.2. How It Works](#32-how-it-works)
+  - [3.3. ESL Client Implementation](#33-esl-client-implementation)
+- [4. Audio Flow](#4-audio-flow)
+  - [4.1. Radio-to-Phone (RX audio -> FreeSWITCH)](#41-radio-to-phone-rx-audio---freeswitch)
+  - [4.2. Phone-to-Radio (FreeSWITCH -> TX audio)](#42-phone-to-radio-freeswitch---tx-audio)
+  - [4.3. The Half-Duplex Dance](#43-the-half-duplex-dance)
+- [5. Voice Activity Detection (VOX)](#5-voice-activity-detection-vox)
+  - [5.1. Why We Need It](#51-why-we-need-it)
+  - [5.2. Algorithm](#52-algorithm)
+  - [5.3. Jitter Buffer](#53-jitter-buffer)
+- [6. DTMF Command Integration](#6-dtmf-command-integration)
+  - [6.1. New Command](#61-new-command)
+  - [6.2. Call Flow](#62-call-flow)
+  - [6.3. Safety Timers](#63-safety-timers)
+- [7. Module Structure](#7-module-structure)
+  - [7.1. Static Globals](#71-static-globals)
+  - [7.2. Lifecycle](#72-lifecycle)
+  - [7.3. The Tick Handler](#73-the-tick-handler)
+  - [7.4. Audio Tap (Radio -> Phone)](#74-audio-tap-radio---phone)
+- [8. Configuration](#8-configuration)
+- [9. FreeSWITCH Server Configuration](#9-freeswitch-server-configuration)
+- [10. Sound Files](#10-sound-files)
+- [11. Legal Considerations](#11-legal-considerations)
+  - [11.1. Amateur Radio (Part 97)](#111-amateur-radio-part-97)
+  - [11.2. GMRS (Part 95 Subpart E)](#112-gmrs-part-95-subpart-e)
+  - [11.3. Safety Features](#113-safety-features)
+- [12. Implementation Phases](#12-implementation-phases)
+  - [Phase 1: ESL Client + Call Control (no audio)](#phase-1-esl-client--call-control-no-audio)
+  - [Phase 2: Audio Bridge](#phase-2-audio-bridge)
+  - [Phase 3: VAD + Polish](#phase-3-vad--polish)
+  - [Phase 4: Edge Cases](#phase-4-edge-cases)
+- [13. Difficulty Assessment](#13-difficulty-assessment)
+- [14. Estimated Size](#14-estimated-size)
+- [15. The Payoff](#15-the-payoff)
+
 ## 1. What Is This?
 
 AutoPatch connects a radio repeater to the telephone network. A repeater user
