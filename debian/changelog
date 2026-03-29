@@ -9,4 +9,4 @@ kerchunk (1.0.0) stable; urgency=medium
   * NWS alert monitoring with TTS announcements
   * Systemd service with security hardening
 
- -- Brian West <brian@bkw.org>  Fri, 27 Mar 2026 12:00:00 -0500
+ -- Brian West <brian@mcalester.net>  Fri, 27 Mar 2026 12:00:00 -0500
