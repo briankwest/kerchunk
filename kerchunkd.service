@@ -5,18 +5,23 @@ Wants=sound.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/kerchunkd -c /etc/kerchunk/kerchunk.conf -f
+ExecStart=/usr/bin/kerchunkd -c /etc/kerchunk/kerchunk.conf -f
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 User=kerchunk
 Group=kerchunk
-WorkingDirectory=/etc/kerchunk
+WorkingDirectory=/var/lib/kerchunk
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kerchunkd
 
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/kerchunk /etc/kerchunk /tmp
+ReadWritePaths=/var/lib/kerchunk /var/log/kerchunk /etc/kerchunk /run/kerchunk /usr/share/kerchunk/sounds/cache
 ProtectHome=true
 
 # Allow access to USB HID and audio devices

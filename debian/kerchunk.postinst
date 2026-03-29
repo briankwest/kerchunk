@@ -28,6 +28,13 @@ case "$1" in
         install -d -o kerchunk -g kerchunk -m 0755 /usr/share/kerchunk/sounds/cache
         install -d -o kerchunk -g kerchunk -m 0755 /usr/share/kerchunk/sounds/cache/tts
 
+        # Install default config if none exists
+        if [ ! -f /etc/kerchunk/kerchunk.conf ]; then
+            cp /etc/kerchunk/kerchunk.conf.example /etc/kerchunk/kerchunk.conf
+            chown kerchunk:kerchunk /etc/kerchunk/kerchunk.conf
+            chmod 0640 /etc/kerchunk/kerchunk.conf
+        fi
+
         # Ensure config directory is writable for users.conf updates from web UI
         chown kerchunk:kerchunk /etc/kerchunk
         chmod 0755 /etc/kerchunk

@@ -21,7 +21,7 @@ SyslogIdentifier=kerchunkd
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/kerchunk /var/log/kerchunk /etc/kerchunk /run/kerchunk
+ReadWritePaths=/var/lib/kerchunk /var/log/kerchunk /etc/kerchunk /run/kerchunk /usr/share/kerchunk/sounds/cache
 ProtectHome=true
 
 # Allow access to USB HID and audio devices

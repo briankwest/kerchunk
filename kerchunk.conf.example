@@ -15,10 +15,10 @@ frequency = 462.550              ; Repeater output frequency (MHz, for display)
 offset = +5.000                  ; Input offset (MHz, for display)
 sample_rate = 8000               ; Audio sample rate (Hz) — must be 8000
 log_level = info                 ; error | warn | info | debug
-sounds_dir = ./sounds            ; Base path for WAV sound files
-socket_path = /tmp/kerchunk.sock   ; Unix socket for CLI control
-; pid_file = /tmp/kerchunkd.pid  ; PID file path
-; users_file = users.conf       ; Separate user/group database file
+sounds_dir = /usr/share/kerchunk/sounds  ; Base path for WAV sound files
+socket_path = /run/kerchunk/kerchunk.sock  ; Unix socket for CLI control
+pid_file = /run/kerchunk/kerchunkd.pid     ; PID file path
+; users_file = /etc/kerchunk/users.conf    ; Separate user/group database file
 ;                                ; When set, [user.N] and [group.N] sections
 ;                                ; are loaded from this file instead of kerchunk.conf.
 ;                                ; The web UI writes changes to this file only.
@@ -34,7 +34,7 @@ socket_path = /tmp/kerchunk.sock   ; Unix socket for CLI control
 ; Module loading
 ; ----------------------------------------------------------------------------
 [modules]
-module_path = ./modules          ; Directory containing .so module files
+module_path = /usr/lib/kerchunk   ; Directory containing .so module files
 
 ; Comma-separated list of modules to load (order matters — dependencies first)
 ; mod_tts should load before mod_nws so TTS is available for announcements
@@ -140,7 +140,7 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; port = 8080
 ; bind = 127.0.0.1              ; Use 0.0.0.0 for external access
 ; auth_token =                  ; Bearer token for admin API auth (empty = no auth)
-; static_dir = /etc/kerchunk/web  ; Path to HTML/JS/CSS files
+; static_dir = /usr/share/kerchunk/web  ; Path to HTML/JS/CSS files
 ; tls_cert =                    ; Path to TLS certificate (PEM). Enables HTTPS.
 ; tls_key =                     ; Path to TLS private key (PEM). Required with tls_cert.
 ; ptt_enabled = off              ; Enable WebSocket push-to-talk
@@ -155,7 +155,7 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; ----------------------------------------------------------------------------
 [stats]
 ; persist = off                  ; on | off (default: off)
-; persist_file = stats.dat       ; Binary file for persistence
+; persist_file = /var/lib/kerchunk/stats.dat  ; Binary file for persistence
 
 ; ----------------------------------------------------------------------------
 ; Courtesy tone (boop after COR drop)
@@ -233,7 +233,7 @@ allowed_pins = 17,27,22          ; Comma-separated list of allowed GPIO pins
 ; Tees all log output to a file in addition to stderr.
 ; ----------------------------------------------------------------------------
 [logger]
-file = events.log                ; Log file path
+file = /var/log/kerchunk/events.log  ; Log file path
 ; max_size_mb = 10               ; Max log file size before rotation (MB)
 
 ; ----------------------------------------------------------------------------
@@ -260,7 +260,7 @@ announce_wind = on               ; Include wind speed/direction
 ; ----------------------------------------------------------------------------
 [recording]
 enabled = on                     ; on | off
-directory = recordings           ; Output directory
+directory = /var/lib/kerchunk/recordings  ; Output directory
 max_duration = 300               ; Max recording length (seconds, 5 min)
 
 ; ----------------------------------------------------------------------------
@@ -303,7 +303,7 @@ max_duration = 10                ; Max recording length (seconds, capped at 30)
 ; ----------------------------------------------------------------------------
 [cdr]
 ; enabled = on                   ; on | off (default: on)
-directory = cdr                  ; Output directory
+directory = /var/lib/kerchunk/cdr  ; Output directory
 
 ; ----------------------------------------------------------------------------
 ; Text-to-Speech (ElevenLabs API)
@@ -429,7 +429,7 @@ time_skew = 1                    ; Accept +/- N time steps (each 30s)
 ; enabled = off
 ; device_index = 0               ; RTL-SDR device index (0 = first)
 ; channel = 1                    ; Channel number (1-22)
-; log_file = sdr_activity.csv    ; Activity log file
+; log_file = /var/log/kerchunk/sdr_activity.csv  ; Activity log file
 
 ; ============================================================================
 ; User and group database
