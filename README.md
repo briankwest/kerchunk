@@ -138,57 +138,57 @@ ptt_enabled = off    ; no remote TX on GMRS
 Modular design: a lightweight core with an event bus, dynamically loadable modules (`.so`), an outbound audio queue with priority, an interactive CLI, and an embedded web server.
 
 ```
-+---------------------------------------------------------------+
-|                       kerchunkd (daemon)                      |
-|                                                               |
-|  +----------+  +----------+  +----------+  +----------+       |
-|  | PortAudio|  | HID      |  | Event    |  | Module   |       |
-|  | Audio    |  | COR/PTT  |  | Bus      |  | Loader   |       |
-|  | (callback|  | (hidraw) |  | (mutex)  |  | (dlopen) |       |
-|  | +ring buf|  |          |  |          |  |          |       |
-|  +----+-----+  +----+-----+  +----+-----+  +----+-----+       |
-|       |             |             |             |             |
-|  +----+-------------+-------------+-------------+--------+    |
-|  |              DSP Pipeline (libplcode)                 |    |
-|  |  CTCSS dec . DCS dec . DTMF dec . CW ID enc . Tones   |    |
-|  +-------------------------------------------------------+    |
-|                                                               |
-|  +----------+  +----------+  +----------+                     |
-|  | Outbound |  | Control  |  | HTTP/SSE |                     |
-|  | Queue    |  | Socket   |  | mod_web  |                     |
-|  | (priority|  | (per-    |  | (port    |                     |
-|  |  sorted) |  |  client) |  |   8080)  |                     |
-|  +----------+  +----------+  +----------+                     |
-|                                                               |
-|  +----------------------------------------------------------+ |
-|  |                  Loaded Modules (24)                     | |
-|  |                                                          | |
-|  |  mod_repeater   RX state machine (IDLE/RECV/TAIL/HANG)   | |
-|  |  mod_cwid       Morse CW ID + voice ID via TTS           | |
-|  |  mod_courtesy   Courtesy tone on COR drop                | |
-|  |  mod_caller     Caller ID (DTMF ANI / DTMF login)        | |
-|  |  mod_dtmfcmd    DTMF command router (*XX#)               | |
-|  |  mod_voicemail  Record/play/delete voice messages        | |
-|  |  mod_gpio       GPIO relay control via DTMF              | |
-|  |  mod_logger     Event logging + rotation                 | |
-|  |  mod_weather    Weather via weatherapi.com + TTS         | |
-|  |  mod_time       Time announcements via TTS               | |
-|  |  mod_recorder   Per-transmission WAV recording           | |
-|  |  mod_txcode     Dynamic TX CTCSS/DCS encoding            | |
-|  |  mod_emergency  Emergency mode (*911#/*910#)             | |
-|  |  mod_otp        TOTP authentication (*68<code>#)         | |
-|  |  mod_parrot     Echo/parrot for audio quality check      | |
-|  |  mod_cdr        Call detail records (daily CSV)          | |
-|  |  mod_tts        Text-to-speech (ElevenLabs API)          | |
-|  |  mod_nws        NWS weather alert monitor                | |
-|  |  mod_stats      Statistics, metrics, persistence         | |
-|  |  mod_web        HTTP server + SSE + web dashboard        | |
-|  |  mod_webhook    HTTP POST notifications on events        | |
-|  |  mod_scrambler  Frequency inversion voice scrambler      | |
-|  |  mod_sdr        RTL-SDR single-channel monitor         | |
-|  |  mod_freeswitch FreeSWITCH AutoPatch (Ham only)          | |
-|  +----------------------------------------------------------+ |
-+---------------------------------------------------------------+
+┌───────────────────────────────────────────────────────────────┐
+│                       kerchunkd (daemon)                      │
+│                                                               │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐       │
+│  │ PortAudio│  │ HID      │  │ Event    │  │ Module   │       │
+│  │ Audio    │  │ COR/PTT  │  │ Bus      │  │ Loader   │       │
+│  │ (callback│  │ (hidraw) │  │ (mutex)  │  │ (dlopen) │       │
+│  │ +ring buf│  │          │  │          │  │          │       │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘       │
+│       │             │             │             │             │
+│  ┌────┴─────────────┴─────────────┴─────────────┴────────┐    │
+│  │              DSP Pipeline (libplcode)                 │    │
+│  │  CTCSS dec . DCS dec . DTMF dec . CW ID enc . Tones   │    │
+│  └───────────────────────────────────────────────────────┘    │
+│                                                               │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                     │
+│  │ Outbound │  │ Control  │  │ HTTP/SSE │                     │
+│  │ Queue    │  │ Socket   │  │ mod_web  │                     │
+│  │ (priority│  │ (per-    │  │ (port    │                     │
+│  │  sorted) │  │  client) │  │   8080)  │                     │
+│  └──────────┘  └──────────┘  └──────────┘                     │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │                  Loaded Modules (24)                     │ │
+│  │                                                          │ │
+│  │  mod_repeater   RX state machine (IDLE/RECV/TAIL/HANG)   │ │
+│  │  mod_cwid       Morse CW ID + voice ID via TTS           │ │
+│  │  mod_courtesy   Courtesy tone on COR drop                │ │
+│  │  mod_caller     Caller ID (DTMF ANI / DTMF login)        │ │
+│  │  mod_dtmfcmd    DTMF command router (*XX#)               │ │
+│  │  mod_voicemail  Record/play/delete voice messages        │ │
+│  │  mod_gpio       GPIO relay control via DTMF              │ │
+│  │  mod_logger     Event logging + rotation                 │ │
+│  │  mod_weather    Weather via weatherapi.com + TTS         │ │
+│  │  mod_time       Time announcements via TTS               │ │
+│  │  mod_recorder   Per-transmission WAV recording           │ │
+│  │  mod_txcode     Dynamic TX CTCSS/DCS encoding            │ │
+│  │  mod_emergency  Emergency mode (*911#/*910#)             │ │
+│  │  mod_otp        TOTP authentication (*68<code>#)         │ │
+│  │  mod_parrot     Echo/parrot for audio quality check      │ │
+│  │  mod_cdr        Call detail records (daily CSV)          │ │
+│  │  mod_tts        Text-to-speech (ElevenLabs API)          │ │
+│  │  mod_nws        NWS weather alert monitor                │ │
+│  │  mod_stats      Statistics, metrics, persistence         │ │
+│  │  mod_web        HTTP server + SSE + web dashboard        │ │
+│  │  mod_webhook    HTTP POST notifications on events        │ │
+│  │  mod_scrambler  Frequency inversion voice scrambler      │ │
+│  │  mod_sdr        RTL-SDR single-channel monitor           │ │
+│  │  mod_freeswitch FreeSWITCH AutoPatch (Ham only)          │ │
+│  └──────────────────────────────────────────────────────────┘ │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ### Threading Model
@@ -215,34 +215,34 @@ The repeater tracks two independent state machines:
 
 ```
                  COR assert
-        +----------+----------+
-        |          |          |
-        v          |          |
-     +------+   (debounce)    |
-     | IDLE |----->+          |
-     +------+      |          |
-        ^          v          |
-        |    +-----------+    |
-        |    | RECEIVING |<---+ COR re-assert (rekey)
-        |    +-----------+    |
-        |         |           |
-        |     COR drop        |
-        |         |           |
-        |         v           |
-        |    +-----------+    |
-        |    | TAIL_WAIT |----+ COR re-assert (rekey)
-        |    +-----------+
-        |         |
-        |     tail expires
-        |         |
-        |         v
-        |    +-----------+
-        |    | HANG_WAIT |----+ COR re-assert (rekey)
-        |    +-----------+
-        |         |
-        |     hang expires
-        |         |
-        +---------+
+        ┌──────────┬──────────┐
+        │          │          │
+        ▼          │          │
+     ┌──────┐   (debounce)    │
+     │ IDLE │─────►┐          │
+     └──────┘      │          │
+        ▲          ▼          │
+        │    ┌───────────┐    │
+        │    │ RECEIVING │◄───┤ COR re-assert (rekey)
+        │    └───────────┘    │
+        │         │           │
+        │     COR drop        │
+        │         │           │
+        │         ▼           │
+        │    ┌───────────┐    │
+        │    │ TAIL_WAIT │────┘ COR re-assert (rekey)
+        │    └───────────┘
+        │         │
+        │     tail expires
+        │         │
+        │         ▼
+        │    ┌───────────┐
+        │    │ HANG_WAIT │────┐ COR re-assert (rekey)
+        │    └───────────┘
+        │         │
+        │     hang expires
+        │         │
+        └─────────┘
 
      TIMEOUT: fires after timeout_time in RECEIVING
 ```
@@ -250,33 +250,33 @@ The repeater tracks two independent state machines:
 **TX (Outbound) — what the repeater is transmitting:**
 
 ```
-     +---------+
-     | TX_IDLE |  Not transmitting
-     +---------+
-          |
-          +--- COR assert (software_relay=on) ----+
-          |                                       v
-          |                                  +---------+
-          +--- Queue has items               | TX_RELAY|  Relaying RX audio
-          |                                  +---------+
-          v                                       |
-     +---------+                              COR drop
-     | TX_QUEUE|  Playing queued audio            |
-     +---------+  (TTS, weather, CW ID)           v
-          |                                  +---------+
-          +--- queue empties                 | TX_TAIL |  Drain + tail silence
-          |                                  +---------+
-          v                                       |
-     +---------+                              PTT drop
-     | TX_TAIL |  TX tail silence (CTCSS)         |
-     +---------+                                  v
-          |                                  +---------+
-      PTT drop                               | TX_IDLE |
-          |                                  +---------+
-          v
-     +---------+
-     | TX_IDLE |
-     +---------+
+     ┌─────────┐
+     │ TX_IDLE │  Not transmitting
+     └─────────┘
+          │
+          ├─── COR assert (software_relay=on) ────┐
+          │                                       ▼
+          │                                  ┌─────────┐
+          ├─── Queue has items               │ TX_RELAY│  Relaying RX audio
+          │                                  └─────────┘
+          ▼                                       │
+     ┌─────────┐                              COR drop
+     │ TX_QUEUE│  Playing queued audio            │
+     └─────────┘  (TTS, weather, CW ID)           ▼
+          │                                  ┌─────────┐
+          ├─── queue empties                 │ TX_TAIL │  Drain + tail silence
+          │                                  └─────────┘
+          ▼                                       │
+     ┌─────────┐                              PTT drop
+     │ TX_TAIL │  TX tail silence (CTCSS)         │
+     └─────────┘                                  ▼
+          │                                  ┌─────────┐
+      PTT drop                               │ TX_IDLE │
+          │                                  └─────────┘
+          ▼
+     ┌─────────┐
+     │ TX_IDLE │
+     └─────────┘
 ```
 
 Both state machines are visible in the web dashboard and reported via `/api/status`:
@@ -309,9 +309,9 @@ Both state machines are visible in the web dashboard and reported via `/api/stat
 ## Hardware
 
 ```
-RT97L DB9 <--> RIM-Lite v2 (CM119 USB) <--> Raspberry Pi / Linux / Mac
-                                             +-- PortAudio: audio I/O
-                                             +-- HID: COR input / PTT output
+RT97L DB9 <──> RIM-Lite v2 (CM119 USB) <──> Raspberry Pi / Linux / Mac
+                                             ├── PortAudio: audio I/O
+                                             └── HID: COR input / PTT output
 ```
 
 | RIM-Lite | Signal | RT-97S | Notes |

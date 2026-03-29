@@ -2,9 +2,55 @@
 *.o
 *.so
 *.a
+*.la
+*.lo
+*.dSYM/
+.libs/
+.deps/
 kerchunkd
 kerchunk
 test_kerchunk
+
+# Autotools generated
+/aclocal.m4
+/autom4te.cache/
+/build-aux/
+/config.h
+/config.h.in~
+/config.log
+/config.lt
+/config.status
+/configure
+/libtool
+/Makefile
+/Makefile.in
+/stamp-h1
+modules/.libs/
+modules/.deps/
+src/.libs/
+src/.deps/
+src/.dirstamp
+cli/.deps/
+cli/.dirstamp
+tests/.deps/
+tests/.dirstamp
+vendor/.deps/
+vendor/.dirstamp
+
+# Test logs
+test-suite.log
+*.trs
+
+# Debian build artifacts
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/*.substvars
+/debian/kerchunk/
+/debian/tmp/
+/debian/autoreconf.*
+/debian/kerchunk.postinst.debhelper
+/debian/kerchunk.postrm.debhelper
 
 # Editor/IDE
 .vscode/
@@ -17,9 +63,17 @@ test_kerchunk
 # Runtime
 *.pid
 *.log
+!debian/changelog
 *.sock
 events.log
 kerchunk.conf
 stats.dat
 recordings/
 cdr/
+sounds/cache/
+
+# Generated packages
+*.deb
+*.ddeb
+*.buildinfo
+*.changes

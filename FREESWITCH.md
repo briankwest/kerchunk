@@ -67,60 +67,60 @@ The bridge between them is a new module: **mod_freeswitch.c**.
 
 ```
                     PSTN / VoIP Provider
-                           |
-                           | SIP trunk
-                           v
-                   +---------------+
-                   |  FreeSWITCH   |
-                   |   (SIP UA)    |
-                   |               |
-                   |  ESL socket   |<---- TCP 8021 (inbound ESL)
-                   +------+--------+
-                          |
-              +-----------+-----------+
-              |  Audio    |  Control  |
-              |  (L16     |  (ESL     |
-              |  via UDP  |  commands |
-              |  unicast) |  + events)|
-              +-----+-----+-----+----+
-                    |           |
-                    v           v
-              +---------------------+
-              |   mod_freeswitch.c  |
-              |                     |
-              |  +==============+   |
-              |  | VAD engine   |   |
-              |  | (energy +    |   |
-              |  | hold timer)  |   |
-              |  +==============+   |
-              |                     |
-              |  +==============+   |
-              |  | ESL client   |   |
-              |  | (TCP socket  |   |
-              |  |  non-block)  |   |
-              |  +==============+   |
-              |                     |
-              |  +==============+   |
-              |  | UDP audio    |   |
-              |  | send/recv    |   |
-              |  +==============+   |
-              +----------+----------+
-                         |
+                           │
+                           │ SIP trunk
+                           ▼
+                   ┌───────────────┐
+                   │  FreeSWITCH   │
+                   │   (SIP UA)    │
+                   │               │
+                   │  ESL socket   │◄──── TCP 8021 (inbound ESL)
+                   └──────┬────────┘
+                          │
+              ┌───────────┴───────────┐
+              │  Audio    │  Control  │
+              │  (L16     │  (ESL     │
+              │  via UDP  │  commands │
+              │  unicast) │  + events)│
+              └─────┬─────┴─────┬─────┘
+                    │           │
+                    ▼           ▼
+              ┌─────────────────────┐
+              │   mod_freeswitch.c  │
+              │                     │
+              │  ╔══════════════╗   │
+              │  ║ VAD engine   ║   │
+              │  ║ (energy +    ║   │
+              │  ║ hold timer)  ║   │
+              │  ╚══════════════╝   │
+              │                     │
+              │  ╔══════════════╗   │
+              │  ║ ESL client   ║   │
+              │  ║ (TCP socket  ║   │
+              │  ║  non-block)  ║   │
+              │  ╚══════════════╝   │
+              │                     │
+              │  ╔══════════════╗   │
+              │  ║ UDP audio    ║   │
+              │  ║ send/recv    ║   │
+              │  ╚══════════════╝   │
+              └──────────┬──────────┘
+                         │
                     kerchunk_core_t vtable
-                         |
-              +----------+----------+
-              |      kerchunkd        |
-              |                     |
-              |  Audio thread (20ms)| <-- PortAudio capture/playback
-              |  Main thread (20ms) | <-- HID COR/PTT, timers, socket
-              +----------+----------+
-                         |
+                         │
+              ┌──────────┴──────────┐
+              │      kerchunkd      │
+              │                     │
+              │  Audio thread (20ms)│ ◄── PortAudio capture/playback
+              │  Main thread (20ms) │ ◄── HID COR/PTT, timers, socket
+              └──────────┬──────────┘
+                         │
                     USB HID (RIM-Lite v2)
-                         |
-                    +----+----+
-                    | RT-97L  | <-- Duplexer, separate TX/RX frequencies
-                    |Repeater |
-                    +---------+
+                         │
+                    ┌────┴────┐
+                    │ RT-97L  │ ◄── Duplexer, separate TX/RX frequencies
+                    │Repeater │
+                    └─────────┘
 ```
 
 ## 3. FreeSWITCH Integration Approach
@@ -171,20 +171,20 @@ main thread (20ms tick).
 
 ```
   Radio user keys up (COR assert)
-        |
-        v
+        │
+        ▼
   Audio thread captures frame (160 samples / 20ms)
-        |
-        v
+        │
+        ▼
   kerchunk_core_dispatch_taps() calls tap handlers
-        |
-        v
+        │
+        ▼
   mod_freeswitch radio_audio_tap() receives frame
-        |
-        v
+        │
+        ▼
   sendto() to FreeSWITCH's UnicastStream receive port
-        |
-        v
+        │
+        ▼
   Phone user hears radio user
 ```
 
@@ -196,41 +196,41 @@ packet size. No reframing needed.
 
 ```
   Phone user speaks
-        |
-        v
+        │
+        ▼
   FreeSWITCH sends L16 UDP packets
-        |
-        v
+        │
+        ▼
   mod_freeswitch recvfrom() in tick handler (20ms poll)
-        |
-        v
+        │
+        ▼
   Samples land in jitter buffer (ring buffer, ~100ms)
-        |
-        v
+        │
+        ▼
   VAD analyzes: is the phone user talking?
-        |
-        +-- YES: voice activity detected
-        |         |
-        |         v
-        |    If PTT not held -> request_ptt("freeswitch")
-        |         |
-        |         v
-        |    queue_audio_buffer(samples, n, KERCHUNK_PRI_ELEVATED)
-        |         |
-        |         v
-        |    Audio thread drains -> PortAudio -> radio TX
-        |         |
-        |         v
-        |    Phone user's voice transmits over repeater
-        |
-        +-- NO: silence detected
-                  |
-                  v
+        │
+        ├── YES: voice activity detected
+        │         │
+        │         ▼
+        │    If PTT not held -> request_ptt("freeswitch")
+        │         │
+        │         ▼
+        │    queue_audio_buffer(samples, n, KERCHUNK_PRI_ELEVATED)
+        │         │
+        │         ▼
+        │    Audio thread drains -> PortAudio -> radio TX
+        │         │
+        │         ▼
+        │    Phone user's voice transmits over repeater
+        │
+        └── NO: silence detected
+                  │
+                  ▼
              Hold timer (configurable, e.g. 500ms)
-                  |
-                  +-- Timer expires -> release_ptt("freeswitch")
-                  |
-                  +-- Voice resumes -> cancel timer, continue TX
+                  │
+                  ├── Timer expires -> release_ptt("freeswitch")
+                  │
+                  └── Voice resumes -> cancel timer, continue TX
 ```
 
 mod_freeswitch holds its own PTT ref via `request_ptt("freeswitch")` controlled
@@ -375,40 +375,40 @@ static void on_autopatch(const kerchevt_t *evt, void *ud)
 
 ```
   User dials: * 0 5 5 5 1 2 3 4 5 6 7 #
-        |
-        v
+        │
+        ▼
   mod_dtmfcmd fires KERCHEVT_CUSTOM+13 with arg="5551234567"
-        |
-        v
+        │
+        ▼
   mod_freeswitch autopatch_dial("5551234567")
-        |
-        v
+        │
+        ▼
   ESL: bgapi originate sofia/gateway/provider/15551234567 &park()
-        |
-        v
+        │
+        ▼
   Play "phone/phone_dialing.wav" on repeater
-        |
-        +-- CHANNEL_PROGRESS -> play ringback / "phone/phone_ringing.wav"
-        +-- CHANNEL_HANGUP USER_BUSY -> "phone/phone_busy.wav", reset
-        +-- CHANNEL_HANGUP NO_ANSWER -> "phone/phone_no_answer.wav", reset
-        +-- CHANNEL_ANSWER:
-              |
-              v
+        │
+        ├── CHANNEL_PROGRESS -> play ringback / "phone/phone_ringing.wav"
+        ├── CHANNEL_HANGUP USER_BUSY -> "phone/phone_busy.wav", reset
+        ├── CHANNEL_HANGUP NO_ANSWER -> "phone/phone_no_answer.wav", reset
+        └── CHANNEL_ANSWER:
+              │
+              ▼
          uuid_unicast <uuid> <ip> <rx_port> <tx_port> mono 8000
-              |
-              v
+              │
+              ▼
          Register audio tap (radio -> phone)
          Start UDP receive (phone -> radio)
          Play "phone/phone_connected.wav"
          Start call duration timer
-              |
-              v
-         === CALL IN PROGRESS ===
-              |
-              v
+              │
+              ▼
+         ═══ CALL IN PROGRESS ═══
+              │
+              ▼
   User dials: * 0 #
-        |
-        v
+        │
+        ▼
   ESL: api uuid_kill <uuid>
   Unregister audio tap, close UDP, release PTT
   Play "phone/phone_disconnected.wav"
