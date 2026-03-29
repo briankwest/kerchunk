@@ -14,11 +14,23 @@
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
-#include "../libplcode/src/plcode_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+
+static inline int16_t clamp16(int32_t x)
+{
+    if (x > 32767)  return 32767;
+    if (x < -32768) return -32768;
+    return (int16_t)x;
+}
+
+static inline int16_t nco_sine(uint32_t phase)
+{
+    float rad = (float)phase * (2.0f * (float)M_PI / 4294967296.0f);
+    return (int16_t)(sinf(rad) * 32767.0f);
+}
 
 #define LOG_MOD "scrambler"
 #define DTMF_EVT_SCRAMBLER (KERCHEVT_CUSTOM + 16)
@@ -121,7 +133,7 @@ static void scrambler_process(int16_t *buf, size_t n, void *ctx)
         int16_t filtered = fir_process(st->delay_in, &st->pos_in, buf[i]);
 
         /* 2. Mix with NCO (frequency shift) */
-        int16_t sine = plcode_sine_lookup(st->nco_phase);
+        int16_t sine = nco_sine(st->nco_phase);
         int32_t mixed = ((int32_t)filtered * (int32_t)sine) >> 15;
         st->nco_phase += st->nco_inc;
 
@@ -135,7 +147,7 @@ static void scrambler_process(int16_t *buf, size_t n, void *ctx)
         st->dc_prev_y = dc;
 
         /* 5. 2x gain (mixing halves amplitude) + clamp */
-        buf[i] = plcode_clamp16(dc * 2);
+        buf[i] = clamp16(dc * 2);
     }
 }
 
