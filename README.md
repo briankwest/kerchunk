@@ -18,7 +18,7 @@ A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 f
 
 ## Table of Contents
 
-- [GMRS vs Amateur (Ham) Feature Matrix](#gmrs-vs-amateur-ham-feature-matrix)
+- [GMRS / Amateur / Part 90 Feature Matrix](#gmrs--amateur--part-90-feature-matrix)
   - [Regulatory Notes](#regulatory-notes)
   - [Configuring for Service Type](#configuring-for-service-type)
 - [Architecture](#architecture)
@@ -56,7 +56,7 @@ A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 f
   - [mod_stats — Statistics and Metrics](#mod_stats--statistics-and-metrics)
   - [mod_web — Web Dashboard](#mod_web--web-dashboard)
   - [mod_webhook — Webhook Notifications](#mod_webhook--webhook-notifications)
-  - [mod_scrambler — Voice Scrambler](#mod_scrambler--voice-scrambler)
+  - [mod_scrambler — Voice Scrambler (Part 90 only)](#mod_scrambler--voice-scrambler-part-90-only)
   - [mod_sdr — SDR Channel Monitor](#mod_sdr--sdr-channel-monitor)
   - [mod_gpio — GPIO Relay Control](#mod_gpio--gpio-relay-control)
   - [mod_logger — Event Logger](#mod_logger--event-logger)
@@ -70,7 +70,7 @@ A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 f
 - [Testing](#testing)
 - [License](#license)
 
-## GMRS vs Amateur (Ham) Feature Matrix
+## GMRS / Amateur / Part 90 Feature Matrix
 
 kerchunkd supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) repeater operation. Some features have regulatory restrictions depending on the service type. The operator is responsible for compliance.
 
@@ -765,7 +765,7 @@ Fires HTTP POST to a configured URL when specified events occur. Background thre
 
 Config section: `[webhook]`
 
-### mod_scrambler — Voice Scrambler
+### mod_scrambler — Voice Scrambler (Part 90 only)
 
 Frequency inversion voice scrambler for **Part 90 (Business/Industrial) operation only**. Prohibited on GMRS (FCC 95.333) and Amateur (FCC 97.113(a)(4)). Self-inverse: same operation scrambles and descrambles. 8 codes mapping to carrier frequencies 2700-3400 Hz (100 Hz steps). CW ID and emergency mode bypass scrambling.
 
