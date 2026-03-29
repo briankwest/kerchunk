@@ -41,16 +41,19 @@ jobs:
               portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
               libasound2-dev libfst-dev g++ git
 
-            git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+            git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
             cd /tmp/libplcode && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
-            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb
+            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode*.deb
 
-            git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+            git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
             cd /tmp/libnemo_normalize && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
             dpkg-buildpackage -us -uc -b
-            dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
+            dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
+            # Fix: libfst-dev has no fst.pc — inline the link flag
+            find /usr -name nemo_normalize.pc -exec sed -i '/^Requires: fst$/d' {} \;
+            find /usr -name nemo_normalize.pc -exec sed -i 's/-lnemo_normalize/-lnemo_normalize -lfst/' {} \;
 
             cd /workspace
             dpkg-buildpackage -us -uc -b
@@ -96,16 +99,19 @@ jobs:
               portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
               libasound2-dev libfst-dev g++ git
 
-            git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+            git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
             cd /tmp/libplcode && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
-            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb
+            dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode*.deb
 
-            git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+            git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
             cd /tmp/libnemo_normalize && autoreconf -fi && ./configure && make -j4
             scripts/generate-changelog.sh "1.0.0"
             dpkg-buildpackage -us -uc -b
-            dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
+            dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
+            # Fix: libfst-dev has no fst.pc — inline the link flag
+            find /usr -name nemo_normalize.pc -exec sed -i '/^Requires: fst$/d' {} \;
+            find /usr -name nemo_normalize.pc -exec sed -i 's/-lnemo_normalize/-lnemo_normalize -lfst/' {} \;
 
             cd /workspace
             dpkg-buildpackage -us -uc -b
@@ -148,16 +154,19 @@ jobs:
                 portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
                 libasound2-dev libfst-dev g++ git
 
-              git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+              git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
               cd /tmp/libplcode && autoreconf -fi && ./configure && make -j4
               scripts/generate-changelog.sh "1.0.0"
-              dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb
+              dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode*.deb
 
-              git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+              git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
               cd /tmp/libnemo_normalize && autoreconf -fi && ./configure && make -j4
               scripts/generate-changelog.sh "1.0.0"
               dpkg-buildpackage -us -uc -b
-              dpkg -i ../libnemo-normalize_*.deb ../libnemo-normalize-data_*.deb 2>/dev/null || true
+              dpkg -i ../libnemo-normalize*.deb 2>/dev/null || true
+            # Fix: libfst-dev has no fst.pc — inline the link flag
+            find /usr -name nemo_normalize.pc -exec sed -i '/^Requires: fst$/d' {} \;
+            find /usr -name nemo_normalize.pc -exec sed -i 's/-lnemo_normalize/-lnemo_normalize -lfst/' {} \;
 
               cd /workspace
               dpkg-buildpackage -us -uc -b
@@ -191,7 +200,7 @@ jobs:
 
       - name: Build and install libplcode
         run: |
-          git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+          git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
           cd /tmp/libplcode
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
@@ -200,7 +209,7 @@ jobs:
 
       - name: Build and install libnemo-normalize
         run: |
-          git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+          git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
           cd /tmp/libnemo_normalize
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
@@ -247,7 +256,7 @@ jobs:
 
       - name: Build and install libplcode
         run: |
-          git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+          git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
           cd /tmp/libplcode
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
@@ -256,7 +265,7 @@ jobs:
 
       - name: Build and install libnemo-normalize
         run: |
-          git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+          git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
           cd /tmp/libnemo_normalize
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
@@ -303,7 +312,7 @@ jobs:
 
       - name: Build and install libplcode
         run: |
-          git clone https://github.com/briankwest/libplcode.git /tmp/libplcode
+          git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
           cd /tmp/libplcode
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
@@ -312,7 +321,7 @@ jobs:
 
       - name: Build and install libnemo-normalize
         run: |
-          git clone https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+          git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
           cd /tmp/libnemo_normalize
           autoreconf -fi && ./configure && make -j4
           scripts/generate-changelog.sh "1.0.0"
