@@ -370,13 +370,11 @@ jobs:
           PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
           [ -z "$PREV_TAG" ] && PREV_TAG=$(git rev-list --max-parents=0 HEAD)
 
-          cat > notes.md << 'HEADER'
-          ## kerchunkd ${GITHUB_REF_NAME}
-
-          GMRS/HAM repeater controller daemon.
-
-          ### Changes
-          HEADER
+          echo "## kerchunkd ${GITHUB_REF_NAME}" > notes.md
+          echo "" >> notes.md
+          echo "GMRS/HAM repeater controller daemon." >> notes.md
+          echo "" >> notes.md
+          echo "### Changes" >> notes.md
 
           git log --pretty=format:"- %s (%h)" "${PREV_TAG}..HEAD" >> notes.md
 
