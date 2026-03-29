@@ -38,7 +38,7 @@ Integrate [libaprs](https://github.com/briankwest/libaprs) into kerchunkd for AP
 │  │  ↓                │        └─────────────────────────┘ │
 │  │  log + event +    │                                    │
 │  │  web dashboard    │                                    │
-│  └──────────────────┘                                     │
+│  └───────────────────┘                                    │
 └───────────────────────────────────────────────────────────┘
 ```
 
