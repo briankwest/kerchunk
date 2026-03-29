@@ -12,7 +12,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-arm64:
+  build-arm64-ubuntu:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout with submodules
@@ -30,7 +30,7 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Build all .deb packages (arm64)
+      - name: Build all .deb packages (arm64 Ubuntu)
         uses: uraimo/run-on-arch-action@v2
         with:
           arch: aarch64
@@ -42,42 +42,74 @@ jobs:
             apt-get update
             apt-get install -y \
               build-essential pkg-config devscripts debhelper fakeroot \
+              autoconf automake libtool autoconf-archive \
               portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
               libasound2-dev libfst-dev g++
 
-            # 1. Build and install libplcode-dev
-            cd libplcode
-            scripts/generate-changelog.sh "0.1.0"
-            dpkg-buildpackage -us -uc -b
-            dpkg -i ../libplcode-dev_*.deb
-            cd ..
+            cd libplcode && scripts/generate-changelog.sh "1.0.0" && dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb && cd ..
+            cd libnemo_normalize && scripts/generate-changelog.sh "1.0.0" && dpkg-buildpackage -us -uc -b && dpkg -i ../libnemo-normalize*.deb && cd ..
+            scripts/generate-changelog.sh "$VERSION" && dpkg-buildpackage -us -uc -b
 
-            # 2. Build and install libnemo-normalize
-            cd libnemo_normalize
-            scripts/generate-changelog.sh "0.1.0"
-            dpkg-buildpackage -us -uc -b
-            dpkg -i ../libnemo-normalize*.deb
-            cd ..
-
-            # 3. Build kerchunk (depends on both libs)
-            scripts/generate-changelog.sh "$VERSION"
-            dpkg-buildpackage -us -uc -b
-
-      - name: Collect arm64 artifacts
+      - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp *.deb dist/ 2>/dev/null || true
-          cp libplcode-dev_*.deb dist/ 2>/dev/null || true
-          cp libnemo-normalize*.deb dist/ 2>/dev/null || true
-          cp kerchunk_*.deb dist/ 2>/dev/null || true
+          cp ../*.deb dist/ 2>/dev/null || true
           ls -lh dist/
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
 
-      - name: Upload arm64 artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: debs-arm64
+          name: debs-arm64-ubuntu
+          path: dist/*.deb
+
+  build-arm64-debian13:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU for arm64
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build all .deb packages (arm64 Debian 13)
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: aarch64
+          distro: trixie
+          githubToken: ${{ github.token }}
+          dockerRunArgs: --volume "${{ github.workspace }}:/workspace"
+          run: |
+            cd /workspace
+            apt-get update
+            apt-get install -y \
+              build-essential pkg-config devscripts debhelper fakeroot \
+              autoconf automake libtool autoconf-archive \
+              portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
+              libasound2-dev libfst-dev g++
+
+            cd libplcode && scripts/generate-changelog.sh "1.0.0" && dpkg-buildpackage -us -uc -b && dpkg -i ../libplcode-dev_*.deb && cd ..
+            cd libnemo_normalize && scripts/generate-changelog.sh "1.0.0" && dpkg-buildpackage -us -uc -b && dpkg -i ../libnemo-normalize*.deb && cd ..
+            scripts/generate-changelog.sh "$VERSION" && dpkg-buildpackage -us -uc -b
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp ../*.deb dist/ 2>/dev/null || true
+          ls -lh dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs-arm64-debian13
           path: dist/*.deb
 
   build-amd64:
@@ -98,20 +130,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config devscripts debhelper fakeroot lintian \
+            autoconf automake libtool autoconf-archive \
             portaudio19-dev libcurl4-openssl-dev libssl-dev librtlsdr-dev \
             libasound2-dev libfst-dev g++
 
       - name: Build libplcode-dev .deb
         run: |
           cd libplcode
-          scripts/generate-changelog.sh "0.1.0"
+          scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           sudo dpkg -i ../libplcode-dev_*.deb
 
       - name: Build libnemo-normalize .deb
         run: |
           cd libnemo_normalize
-          scripts/generate-changelog.sh "0.1.0"
+          scripts/generate-changelog.sh "1.0.0"
           dpkg-buildpackage -us -uc -b
           sudo dpkg -i ../libnemo-normalize*.deb
 
@@ -133,7 +166,7 @@ jobs:
           path: dist/*.deb
 
   create-release:
-    needs: [build-arm64, build-amd64]
+    needs: [build-arm64-ubuntu, build-arm64-debian13, build-amd64]
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -157,7 +190,7 @@ jobs:
           cat > release_notes.md << HEADER
           ## kerchunkd ${GITHUB_REF_NAME}
 
-          GMRS/Amateur repeater controller daemon.
+          GMRS/HAM repeater controller daemon.
 
           ### Changes
           HEADER
@@ -169,13 +202,11 @@ jobs:
           ### Installation (Raspberry Pi / arm64)
 
           ```bash
-          # Install in dependency order
           sudo dpkg -i libplcode-dev_*_arm64.deb
           sudo dpkg -i libnemo-normalize-data_*_all.deb libnemo-normalize_*_arm64.deb
           sudo dpkg -i kerchunk_*_arm64.deb
           sudo apt-get -f install
 
-          # Configure and start
           sudo vi /etc/kerchunk/kerchunk.conf
           sudo systemctl start kerchunkd
           ```
