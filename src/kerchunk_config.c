@@ -43,7 +43,7 @@ static int parse_file(kerchunk_config_t *cfg, const char *path)
     if (!fp)
         return -1;
 
-    char line[512];
+    char line[2048];
     char current_section[KERCHUNK_CONFIG_MAX_SECTION] = "";
 
     while (fgets(line, sizeof(line), fp)) {

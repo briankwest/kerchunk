@@ -13,7 +13,7 @@ typedef struct kerchunk_config kerchunk_config_t;
 /* Max lengths */
 #define KERCHUNK_CONFIG_MAX_SECTION  64
 #define KERCHUNK_CONFIG_MAX_KEY      64
-#define KERCHUNK_CONFIG_MAX_VALUE    256
+#define KERCHUNK_CONFIG_MAX_VALUE    1024
 #define KERCHUNK_CONFIG_MAX_ENTRIES  1024
 
 /* Create config from an INI file. Returns NULL on error. */
