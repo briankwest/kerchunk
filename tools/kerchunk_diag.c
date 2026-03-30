@@ -80,14 +80,10 @@ static int hid_set_ptt(int fd, int ptt_pin, int active)
     return 0;
 }
 
-static int hid_read_cor(int fd, int cor_bit, int active_low)
+/* Extract COR state from raw HID byte0 */
+static int cor_from_byte(int byte0, int bit, int active_low)
 {
-    unsigned char buf[8];
-    ssize_t n = read(fd, buf, sizeof(buf));
-    if (n <= 0)
-        return -1;
-
-    int raw = (buf[0] >> cor_bit) & 1;
+    int raw = (byte0 >> bit) & 1;
     return active_low ? !raw : raw;
 }
 
@@ -239,14 +235,17 @@ int main(int argc, char *argv[])
         int fd = hid_open(hid_device);
         if (fd < 0) return 1;
 
-        printf("COR test: dumping raw HID reports from %s — Ctrl+C to stop\n",
-               hid_device);
+        printf("COR test: monitoring %s (bit=%d, %s) — Ctrl+C to stop\n",
+               hid_device, cor_bit,
+               cor_active_low ? "active-low" : "active-high");
         printf("  Key your radio and watch which bits change.\n\n");
 
+        int prev_cor = -1;
         while (g_running) {
             unsigned char buf[8] = {0};
             ssize_t n = read(fd, buf, sizeof(buf));
             if (n > 0) {
+                int cor = cor_from_byte(buf[0], cor_bit, cor_active_low);
                 printf("  HID [%zd bytes]:", n);
                 for (ssize_t i = 0; i < n; i++)
                     printf(" %02x", buf[i]);
@@ -256,6 +255,11 @@ int main(int argc, char *argv[])
                 printf("  | GPIO0=%d GPIO1=%d GPIO2=%d GPIO3=%d",
                        buf[0] & 1, (buf[0] >> 1) & 1,
                        (buf[0] >> 2) & 1, (buf[0] >> 3) & 1);
+                printf("  | COR=%d", cor);
+                if (cor != prev_cor) {
+                    printf(" (%s)", cor ? "ACTIVE" : "inactive");
+                    prev_cor = cor;
+                }
                 printf("\n");
             }
             usleep(20000);

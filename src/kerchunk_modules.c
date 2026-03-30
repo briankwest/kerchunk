@@ -65,6 +65,16 @@ int kerchunk_module_load(const char *name, kerchunk_core_t *core)
         }
     }
 
+    /* Build path and dlopen BEFORE allocating a slot */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s.so", g_module_path, name);
+
+    void *handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        KERCHUNK_LOG_E(LOG_MOD, "dlopen %s: %s", path, dlerror());
+        return -1;
+    }
+
     /* Find a free slot (reuse unloaded slots before appending) */
     int slot = -1;
     for (int i = 0; i < g_module_count; i++) {
@@ -76,19 +86,10 @@ int kerchunk_module_load(const char *name, kerchunk_core_t *core)
     if (slot < 0) {
         if (g_module_count >= KERCHUNK_MAX_MODULES) {
             KERCHUNK_LOG_E(LOG_MOD, "max modules reached (%d)", KERCHUNK_MAX_MODULES);
+            dlclose(handle);
             return -1;
         }
         slot = g_module_count++;
-    }
-
-    /* Build path */
-    char path[512];
-    snprintf(path, sizeof(path), "%s/%s.so", g_module_path, name);
-
-    void *handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-    if (!handle) {
-        KERCHUNK_LOG_E(LOG_MOD, "dlopen %s: %s", path, dlerror());
-        return -1;
     }
 
     /* Find entry point */

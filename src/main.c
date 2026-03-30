@@ -461,7 +461,6 @@ static void *audio_thread_fn(void *arg)
     audio_thread_ctx_t *ctx = (audio_thread_ctx_t *)arg;
 
     int prev_ctcss = 0, prev_dcs = 0, prev_dtmf = 0;
-    char prev_dtmf_digit = '\0';
 
     KERCHUNK_LOG_I(LOG_MOD, "audio thread started (tick=%dus)", AUDIO_TICK_US);
 
@@ -557,7 +556,6 @@ static void *audio_thread_fn(void *arg)
                 .dtmf = { .digit = dtmf_res.digit, .duration_ms = 0 },
             };
             kerchevt_fire(&evt);
-            prev_dtmf_digit = dtmf_res.digit;
         } else if (!dtmf_res.detected && prev_dtmf) {
             kerchevt_t evt = {
                 .type = KERCHEVT_DTMF_END,

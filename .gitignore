@@ -9,6 +9,7 @@
 .deps/
 kerchunkd
 kerchunk
+kerchunk-diag
 test_kerchunk
 
 # Autotools generated

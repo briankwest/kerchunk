@@ -38,7 +38,8 @@ module_path = /usr/lib/kerchunk   ; Directory containing .so module files
 
 ; Comma-separated list of modules to load (order matters — dependencies first)
 ; mod_tts should load before mod_nws so TTS is available for announcements
-load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_txcode,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,mod_webhook,mod_scrambler,mod_sdr,mod_web
+; mod_pocsag/mod_flex/mod_aprs require libpocsag/libflex/libaprs (optional)
+load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_txcode,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,mod_webhook,mod_scrambler,mod_sdr,mod_web,mod_pocsag,mod_flex,mod_aprs
 
 ; ----------------------------------------------------------------------------
 ; Audio device (PortAudio)
@@ -474,3 +475,45 @@ access = 1
 voicemail = 1
 group = 2
 ; totp_secret = HXDMVJECJJWSRB3H ; Base32 TOTP secret
+
+; ============================================================================
+; PAGING / APRS MODULES
+; ============================================================================
+
+; ----------------------------------------------------------------------------
+; POCSAG paging transmitter (requires libpocsag)
+;
+; CLI: pocsag send <addr> <baud> <message>
+;      pocsag numeric <addr> <baud> <digits>
+;      pocsag tone <addr> <baud>
+; Baud rates: 512, 1200, 2400
+; ----------------------------------------------------------------------------
+[pocsag]
+; enabled = on
+
+; ----------------------------------------------------------------------------
+; FLEX paging transmitter (requires libflex)
+;
+; CLI: flex send <capcode> [speed] <message>
+;      flex numeric <capcode> <digits>
+;      flex tone <capcode>
+; Speeds: 1600, 3200
+; ----------------------------------------------------------------------------
+[flex]
+; enabled = on
+; default_speed = 1600
+
+; ----------------------------------------------------------------------------
+; APRS beacon and messaging (requires libaprs)
+;
+; CLI: aprs beacon
+;      aprs send <callsign> <message>
+; ----------------------------------------------------------------------------
+[aprs]
+; enabled = on
+; callsign = N0CALL-9
+; lat = 35.2100
+; lon = -97.5000
+; symbol = >
+; comment = Kerchunk APRS gateway
+; path = WIDE1-1,WIDE2-1

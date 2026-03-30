@@ -220,12 +220,31 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
 
     /* ANI capture (during window) */
     if (g_ani_active && g_ani_pos < MAX_ANI_LEN) {
-        /* Start timer on first digit — gives the full window for the
-         * complete ANI sequence regardless of COR-to-DTMF delay */
-        if (g_ani_pos == 0 && g_ani_timer < 0)
-            g_ani_timer = g_core->timer_create(g_ani_window_ms, 0, ani_timeout, NULL);
-        g_ani_buf[g_ani_pos++] = d;
-        return;
+        /* * starts a login sequence — close ANI window immediately
+         * and fall through to the login handler below. */
+        if (d == '*') {
+            g_ani_active = 0;
+            if (g_ani_timer >= 0) {
+                g_core->timer_cancel(g_ani_timer);
+                g_ani_timer = -1;
+            }
+            /* process any ANI digits collected so far */
+            if (g_ani_pos > 0) {
+                g_ani_buf[g_ani_pos] = '\0';
+                const kerchunk_user_t *u = g_core->user_lookup_by_ani(g_ani_buf);
+                if (u)
+                    fire_identified(u->id, KERCHUNK_CALLER_DTMF_ANI);
+            }
+            /* fall through to login handler */
+        } else {
+            /* Start timer on first digit — gives the full window for the
+             * complete ANI sequence regardless of COR-to-DTMF delay */
+            if (g_ani_pos == 0 && g_ani_timer < 0)
+                g_ani_timer = g_core->timer_create(g_ani_window_ms, 0,
+                                                   ani_timeout, NULL);
+            g_ani_buf[g_ani_pos++] = d;
+            return;
+        }
     }
 
     /* DTMF login: *<code># sequence */
