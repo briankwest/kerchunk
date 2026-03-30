@@ -64,6 +64,27 @@ if test "x$have_rtlsdr" = "xyes"; then
   AC_DEFINE([HAVE_RTLSDR], [1], [Have librtlsdr])
 fi
 
+# Optional: libaprs
+PKG_CHECK_MODULES([LIBAPRS], [libaprs], [have_libaprs=yes], [have_libaprs=no])
+AM_CONDITIONAL([HAVE_LIBAPRS], [test "x$have_libaprs" = "xyes"])
+if test "x$have_libaprs" = "xyes"; then
+  AC_DEFINE([HAVE_LIBAPRS], [1], [Have libaprs])
+fi
+
+# Optional: libpocsag
+PKG_CHECK_MODULES([LIBPOCSAG], [libpocsag], [have_libpocsag=yes], [have_libpocsag=no])
+AM_CONDITIONAL([HAVE_LIBPOCSAG], [test "x$have_libpocsag" = "xyes"])
+if test "x$have_libpocsag" = "xyes"; then
+  AC_DEFINE([HAVE_LIBPOCSAG], [1], [Have libpocsag])
+fi
+
+# Optional: libflex
+PKG_CHECK_MODULES([LIBFLEX], [libflex], [have_libflex=yes], [have_libflex=no])
+AM_CONDITIONAL([HAVE_LIBFLEX], [test "x$have_libflex" = "xyes"])
+if test "x$have_libflex" = "xyes"; then
+  AC_DEFINE([HAVE_LIBFLEX], [1], [Have libflex])
+fi
+
 # Optional: libnemo_normalize
 PKG_CHECK_MODULES([NEMO], [nemo_normalize], [have_nemo=yes], [have_nemo=no])
 AM_CONDITIONAL([HAVE_NEMO], [test "x$have_nemo" = "xyes"])
@@ -82,6 +103,9 @@ AC_OUTPUT
 AC_MSG_NOTICE([])
 AC_MSG_NOTICE([kerchunk $PACKAGE_VERSION configuration:])
 AC_MSG_NOTICE([  librtlsdr:        $have_rtlsdr])
+AC_MSG_NOTICE([  libaprs:          $have_libaprs])
+AC_MSG_NOTICE([  libpocsag:        $have_libpocsag])
+AC_MSG_NOTICE([  libflex:          $have_libflex])
 AC_MSG_NOTICE([  libnemo_normalize: $have_nemo])
 AC_MSG_NOTICE([  module dir:       $kerchunkmoddir])
 AC_MSG_NOTICE([])

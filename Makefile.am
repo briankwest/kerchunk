@@ -241,6 +241,32 @@ modules_mod_sdr_la_LDFLAGS       = $(MOD_LDFLAGS)
 modules_mod_sdr_la_LIBADD        = $(PLCODE_LIBS) $(RTLSDR_LIBS)
 endif
 
+# --- Paging / APRS modules (conditional on libraries) ---
+
+if HAVE_LIBPOCSAG
+kerchunkmod_LTLIBRARIES += modules/mod_pocsag.la
+modules_mod_pocsag_la_SOURCES    = modules/mod_pocsag.c
+modules_mod_pocsag_la_CFLAGS     = $(MOD_CFLAGS) $(LIBPOCSAG_CFLAGS)
+modules_mod_pocsag_la_LDFLAGS    = $(MOD_LDFLAGS)
+modules_mod_pocsag_la_LIBADD     = $(LIBPOCSAG_LIBS)
+endif
+
+if HAVE_LIBFLEX
+kerchunkmod_LTLIBRARIES += modules/mod_flex.la
+modules_mod_flex_la_SOURCES      = modules/mod_flex.c
+modules_mod_flex_la_CFLAGS       = $(MOD_CFLAGS) $(LIBFLEX_CFLAGS)
+modules_mod_flex_la_LDFLAGS      = $(MOD_LDFLAGS)
+modules_mod_flex_la_LIBADD       = $(LIBFLEX_LIBS)
+endif
+
+if HAVE_LIBAPRS
+kerchunkmod_LTLIBRARIES += modules/mod_aprs.la
+modules_mod_aprs_la_SOURCES      = modules/mod_aprs.c
+modules_mod_aprs_la_CFLAGS       = $(MOD_CFLAGS) $(LIBAPRS_CFLAGS)
+modules_mod_aprs_la_LDFLAGS      = $(MOD_LDFLAGS)
+modules_mod_aprs_la_LIBADD       = $(LIBAPRS_LIBS) -lm
+endif
+
 # ---------- tests ----------
 
 check_PROGRAMS = test_kerchunk
