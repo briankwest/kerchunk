@@ -78,6 +78,7 @@ static flex_speed_t parse_speed(const char *s)
 	switch (v) {
 	case 1600: return FLEX_SPEED_1600_2;
 	case 3200: return FLEX_SPEED_3200_2;
+	case 6400: return FLEX_SPEED_6400_4;
 	default:   return g_default_speed;
 	}
 }
@@ -171,7 +172,7 @@ usage:
 
 static const kerchunk_ui_field_t flex_send_fields[] = {
 	{ "capcode", "Capcode", "number", NULL, "101000" },
-	{ "speed",   "Speed",   "select", "1600,3200", NULL },
+	{ "speed",   "Speed",   "select", "1600,3200,6400", NULL },
 	{ "msg",     "Message", "text", NULL, "Hello FLEX" },
 };
 

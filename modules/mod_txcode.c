@@ -410,20 +410,45 @@ static const kerchunk_ui_field_t selcall_fields[] = {
 	{ "digits", "Address", "text", NULL, "12345" },
 	{ "std",    "Standard", "select", "zvei1,ccir,eia", NULL },
 };
+static const kerchunk_ui_field_t twotone_fields[] = {
+	{ "f1",  "Freq 1 (Hz)", "number", NULL, "1000" },
+	{ "f2",  "Freq 2 (Hz)", "number", NULL, "1500" },
+	{ "dur", "Duration (ms)", "number", NULL, "1000" },
+};
+static const kerchunk_ui_field_t mdc_fields[] = {
+	{ "op",   "Opcode (hex)", "text", NULL, "01" },
+	{ "arg",  "Arg (hex)", "text", NULL, "80" },
+	{ "unit", "Unit ID (hex)", "text", NULL, "1234" },
+};
+static const kerchunk_ui_field_t cwid_fields[] = {
+	{ "call", "Callsign", "text", NULL, "" },
+};
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ .name = "txcode", .usage = "txcode <dtmf|twotone|selcall|burst|mdc|cwid>",
-	  .description = "TX tone encoder and burst tone toolbox", .handler = cli_txcode,
+	{ .name = "txcode", .usage = "txcode dtmf <digits>",
+	  .description = "DTMF sequence", .handler = cli_txcode,
 	  .category = "Tones", .ui_label = "DTMF", .ui_type = CLI_UI_FORM,
 	  .ui_command = "txcode dtmf", .ui_fields = dtmf_fields, .num_ui_fields = 1 },
 	{ .name = "txcode", .usage = "txcode burst <freq> <dur_ms>",
 	  .description = "Tone burst", .handler = cli_txcode,
 	  .category = "Tones", .ui_label = "Tone Burst", .ui_type = CLI_UI_FORM,
 	  .ui_command = "txcode burst", .ui_fields = burst_fields, .num_ui_fields = 2 },
-	{ .name = "txcode", .usage = "txcode selcall <digits> <std>",
-	  .description = "Selcall encoder", .handler = cli_txcode,
+	{ .name = "txcode", .usage = "txcode twotone <f1> <f2> <dur_ms>",
+	  .description = "Two-tone page", .handler = cli_txcode,
+	  .category = "Tones", .ui_label = "Two-Tone", .ui_type = CLI_UI_FORM,
+	  .ui_command = "txcode twotone", .ui_fields = twotone_fields, .num_ui_fields = 3 },
+	{ .name = "txcode", .usage = "txcode selcall <digits> [std]",
+	  .description = "5-tone selective call", .handler = cli_txcode,
 	  .category = "Tones", .ui_label = "Selcall", .ui_type = CLI_UI_FORM,
 	  .ui_command = "txcode selcall", .ui_fields = selcall_fields, .num_ui_fields = 2 },
+	{ .name = "txcode", .usage = "txcode mdc <op> <arg> <unit_id>",
+	  .description = "MDC-1200 data burst", .handler = cli_txcode,
+	  .category = "Tones", .ui_label = "MDC-1200", .ui_type = CLI_UI_FORM,
+	  .ui_command = "txcode mdc", .ui_fields = mdc_fields, .num_ui_fields = 3 },
+	{ .name = "txcode", .usage = "txcode cwid [callsign]",
+	  .description = "Manual CW ID", .handler = cli_txcode,
+	  .category = "Tones", .ui_label = "CW ID", .ui_type = CLI_UI_FORM,
+	  .ui_command = "txcode cwid", .ui_fields = cwid_fields, .num_ui_fields = 1 },
 };
 
 static kerchunk_module_def_t mod_txcode = {
@@ -434,7 +459,7 @@ static kerchunk_module_def_t mod_txcode = {
 	.configure        = txcode_configure,
 	.unload           = txcode_unload,
 	.cli_commands     = cli_cmds,
-	.num_cli_commands = 3,
+	.num_cli_commands = sizeof(cli_cmds) / sizeof(cli_cmds[0]),
 };
 
 KERCHUNK_MODULE_DEFINE(mod_txcode);
