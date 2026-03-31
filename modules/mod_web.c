@@ -1747,7 +1747,7 @@ static int web_configure(const kerchunk_config_t *cfg)
         KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
         KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
         KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_RECORDING_SAVED,
-        KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN,
+        KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN, KERCHEVT_HEARTBEAT,
     };
     for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
         g_core->unsubscribe(types[i], web_event_handler);
@@ -1795,7 +1795,7 @@ static void web_unload(void)
         KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
         KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
         KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_RECORDING_SAVED,
-        KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN,
+        KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN, KERCHEVT_HEARTBEAT,
     };
     for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
         g_core->unsubscribe(types[i], web_event_handler);

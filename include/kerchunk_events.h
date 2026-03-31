@@ -41,6 +41,7 @@ typedef enum {
     KERCHEVT_CONFIG_RELOAD,
     KERCHEVT_SHUTDOWN,
     KERCHEVT_TICK,
+    KERCHEVT_HEARTBEAT,
 
     /* Sentinel for built-in count */
     KERCHEVT_BUILTIN_COUNT,

@@ -141,6 +141,10 @@ int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max)
         return snprintf(buf, max,
             "{\"type\":\"shutdown\",\"ts\":%llu}", ts);
 
+    case KERCHEVT_HEARTBEAT:
+        return snprintf(buf, max,
+            "{\"type\":\"heartbeat\",\"ts\":%llu}", ts);
+
     default:
         /* Custom events or unknown */
         if (evt->type >= KERCHEVT_CUSTOM)

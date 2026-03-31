@@ -114,6 +114,7 @@ static int cmd_status(int argc, const char **argv, kerchunk_resp_t *r)
 
     const kerchunk_config_t *cfg = kerchunk_core_get_config();
 
+    resp_str(r, "version", KERCHUNK_VERSION_STRING);
     resp_str(r, "rx_state", get_rx_state());
     resp_str(r, "tx_state", get_tx_state());
     resp_bool(r, "ptt", ptt);
@@ -290,7 +291,7 @@ static int cmd_event(int argc, const char **argv, kerchunk_resp_t *r)
         "STATE_CHANGE", "TAIL_START", "TAIL_EXPIRE", "TIMEOUT",
         "CALLER_IDENTIFIED", "CALLER_CLEARED",
         "QUEUE_DRAIN", "QUEUE_COMPLETE", "RECORDING_SAVED", "ANNOUNCEMENT",
-        "CONFIG_RELOAD", "SHUTDOWN", "TICK",
+        "CONFIG_RELOAD", "SHUTDOWN", "TICK", "HEARTBEAT",
     };
     /* JSON: array of subscription objects */
     if (!r->jfirst) resp_json_raw(r, ",");
@@ -1461,6 +1462,16 @@ int main(int argc, char **argv)
         /* Tick event */
         kerchevt_t tick_evt = { .type = KERCHEVT_TICK, .timestamp_us = tick_start };
         kerchevt_fire(&tick_evt);
+
+        /* Heartbeat: every 5 seconds (250 × 20ms ticks) */
+        {
+            static int hb_count = 0;
+            if (++hb_count >= 250) {
+                hb_count = 0;
+                kerchevt_t hb = { .type = KERCHEVT_HEARTBEAT, .timestamp_us = tick_start };
+                kerchevt_fire(&hb);
+            }
+        }
 
         /* Timers */
         kerchunk_timer_tick();

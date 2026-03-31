@@ -289,8 +289,10 @@ async function refreshStation() {
     if(d.address) h+=tr('Address',d.address);
     if(d.latitude&&d.longitude) h+=tr('Coordinates',d.latitude+', '+d.longitude);
     if(d.elevation) h+=tr('Elevation',d.elevation+' ft ASL');
+    if(d.version) h+=tr('Version',d.version);
     if(d.modules) h+=tr('Modules',d.modules);
     if(d.users) h+=tr('Users',d.users);
+    if(d.sample_rate) h+=tr('Sample Rate',d.sample_rate+' Hz');
     document.getElementById('station-table').innerHTML=h||'<tr><td>No data</td></tr>';
   } catch(e){}
 }
@@ -533,6 +535,10 @@ function connectSSE() {
           addLog('Daemon shutting down!','log-err');
           window._sseShutdown=true;
           es.close();
+          break;
+        case 'heartbeat':
+          /* Reset reconnect backoff — server is alive */
+          sseRetry=0;
           break;
         case 'custom':
           /* Custom events: 8=weather, 9=forecast, 10=time */
