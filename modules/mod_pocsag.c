@@ -81,7 +81,7 @@ static int pocsag_tx(uint32_t addr, uint32_t baud, pocsag_func_t func,
 
 static int cli_pocsag(int argc, const char **argv, kerchunk_resp_t *resp)
 {
-	if (argc < 2) goto usage;
+	if (argc < 2 || strcmp(argv[1], "help") == 0) goto usage;
 
 	const char *sub = argv[1];
 
@@ -141,7 +141,20 @@ static int cli_pocsag(int argc, const char **argv, kerchunk_resp_t *resp)
 	return 0;
 
 usage:
-	resp_str(resp, "error", "usage: pocsag <send|numeric|tone|status> ...");
+	resp_text_raw(resp, "POCSAG paging transmitter\n\n"
+		"  pocsag send <addr> <baud> <message>\n"
+		"    Send alphanumeric page to address at baud rate.\n"
+		"    addr:  0-2097151  Pager address (capcode)\n"
+		"    baud:  512, 1200, 2400\n"
+		"    message: text string\n\n"
+		"  pocsag numeric <addr> <baud> <digits>\n"
+		"    Send numeric page (digits 0-9, *, #, -, space).\n\n"
+		"  pocsag tone <addr> <baud>\n"
+		"    Send tone-only page (no message content).\n\n"
+		"  pocsag status\n"
+		"    Show module status, TX count, deemphasis setting.\n\n"
+		"Config: [pocsag] enabled, deemphasis\n");
+	resp_str(resp, "error", "usage: pocsag <send|numeric|tone|status>");
 	resp_finish(resp);
 	return -1;
 }

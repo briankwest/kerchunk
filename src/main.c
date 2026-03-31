@@ -166,7 +166,14 @@ static int cmd_ptt(int argc, const char **argv, kerchunk_resp_t *r)
 
 static int cmd_queue(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    if (argc < 2) { resp_str(r, "error", "Usage: queue list|inject <path>|flush"); return -1; }
+    if (argc < 2 || (argc >= 2 && strcmp(argv[1], "help") == 0)) {
+        resp_text_raw(r, "Audio queue management\n\n"
+            "  queue list                 Show queue depth\n"
+            "  queue inject <path.wav>    Queue a WAV/PCM file for playback\n"
+            "  queue flush                Clear all queued items\n");
+        resp_str(r, "error", "usage: queue list|inject <path>|flush");
+        return -1;
+    }
     if (strcmp(argv[1], "list") == 0) {
         int depth = kerchunk_queue_depth();
         resp_int(r, "depth", depth);
@@ -204,7 +211,15 @@ static int cmd_queue(int argc, const char **argv, kerchunk_resp_t *r)
 
 static int cmd_module(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    if (argc < 2) { resp_str(r, "error", "Usage: module list|load|unload|reload <name>"); return -1; }
+    if (argc < 2 || (argc >= 2 && strcmp(argv[1], "help") == 0)) {
+        resp_text_raw(r, "Module management\n\n"
+            "  module list                List loaded modules\n"
+            "  module load <name>         Load a module (e.g. mod_parrot)\n"
+            "  module unload <name>       Unload a module\n"
+            "  module reload <name>       Unload and reload a module\n");
+        resp_str(r, "error", "usage: module list|load|unload|reload <name>");
+        return -1;
+    }
     if (strcmp(argv[1], "list") == 0) {
         int n = kerchunk_module_count();
         /* JSON: array of module objects */
@@ -407,8 +422,11 @@ static int cmd_hid(int argc, const char **argv, kerchunk_resp_t *r)
 
 static int cmd_user(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    if (argc < 2) {
-        resp_str(r, "error", "Usage: user list|lookup <id|ani>");
+    if (argc < 2 || (argc >= 2 && strcmp(argv[1], "help") == 0)) {
+        resp_text_raw(r, "User database\n\n"
+            "  user list                  List all users (id, name, ANI, access)\n"
+            "  user lookup <id|ani>       Look up a user by ID or ANI code\n");
+        resp_str(r, "error", "usage: user list|lookup <id|ani>");
         return -1;
     }
     if (strcmp(argv[1], "list") == 0) {
@@ -460,8 +478,12 @@ extern int kerchunk_log_get_level(void);
 
 static int cmd_log(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    if (argc < 2) {
-        resp_str(r, "error", "Usage: log level <error|warn|info|debug>");
+    if (argc < 2 || (argc >= 2 && strcmp(argv[1], "help") == 0)) {
+        resp_text_raw(r, "Runtime log level control\n\n"
+            "  log level                  Show current log level\n"
+            "  log level <level>          Set log level\n"
+            "    Levels: error, warn, info, debug\n");
+        resp_str(r, "error", "usage: log level [error|warn|info|debug]");
         return -1;
     }
     if (strcmp(argv[1], "level") == 0) {
@@ -522,8 +544,11 @@ static int cmd_diag(int argc, const char **argv, kerchunk_resp_t *r)
 
 static int cmd_play(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    if (argc < 2) {
-        resp_str(r, "error", "Usage: play <path.wav>");
+    if (argc < 2 || (argc >= 2 && strcmp(argv[1], "help") == 0)) {
+        resp_text_raw(r, "Play a WAV file through the repeater\n\n"
+            "  play <path.wav>    Queue file for playback at normal priority.\n"
+            "                     WAV files at any sample rate are auto-resampled.\n");
+        resp_str(r, "error", "usage: play <path.wav>");
         return -1;
     }
     const char *path = argv[1];
@@ -545,8 +570,13 @@ static int cmd_play(int argc, const char **argv, kerchunk_resp_t *r)
 
 static int cmd_tone(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    if (argc < 3) {
-        resp_str(r, "error", "Usage: tone <freq_hz> <duration_ms>");
+    if (argc < 3 || (argc >= 2 && strcmp(argv[1], "help") == 0)) {
+        resp_text_raw(r, "Play a test tone through the repeater\n\n"
+            "  tone <freq_hz> <duration_ms>\n"
+            "    freq_hz:      100-10000 Hz\n"
+            "    duration_ms:  10-30000 ms\n\n"
+            "  Example: tone 1000 500   (1kHz for 0.5 seconds)\n");
+        resp_str(r, "error", "usage: tone <freq_hz> <duration_ms>");
         return -1;
     }
     int freq = atoi(argv[1]);

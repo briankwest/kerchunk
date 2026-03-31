@@ -84,7 +84,7 @@ static flex_speed_t parse_speed(const char *s)
 
 static int cli_flex(int argc, const char **argv, kerchunk_resp_t *resp)
 {
-	if (argc < 2) goto usage;
+	if (argc < 2 || strcmp(argv[1], "help") == 0) goto usage;
 
 	const char *sub = argv[1];
 
@@ -151,7 +151,20 @@ static int cli_flex(int argc, const char **argv, kerchunk_resp_t *resp)
 	return 0;
 
 usage:
-	resp_str(resp, "error", "usage: flex <send|numeric|tone|status> ...");
+	resp_text_raw(resp, "FLEX paging transmitter\n\n"
+		"  flex send <capcode> [speed] <message>\n"
+		"    Send alphanumeric page.\n"
+		"    capcode: pager address (decimal)\n"
+		"    speed:   1600 (default), 3200\n"
+		"    message: text string\n\n"
+		"  flex numeric <capcode> <digits>\n"
+		"    Send numeric page.\n\n"
+		"  flex tone <capcode>\n"
+		"    Send tone-only page.\n\n"
+		"  flex status\n"
+		"    Show module status, TX count, speed, deemphasis.\n\n"
+		"Config: [flex] enabled, default_speed, deemphasis\n");
+	resp_str(resp, "error", "usage: flex <send|numeric|tone|status>");
 	resp_finish(resp);
 	return -1;
 }

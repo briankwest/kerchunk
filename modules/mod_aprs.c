@@ -129,7 +129,7 @@ static int do_message(const char *to_call, const char *text)
 
 static int cli_aprs(int argc, const char **argv, kerchunk_resp_t *resp)
 {
-	if (argc < 2) goto usage;
+	if (argc < 2 || strcmp(argv[1], "help") == 0) goto usage;
 
 	const char *sub = argv[1];
 
@@ -174,7 +174,19 @@ static int cli_aprs(int argc, const char **argv, kerchunk_resp_t *resp)
 	return 0;
 
 usage:
-	resp_str(resp, "error", "usage: aprs <beacon|send|status> ...");
+	resp_text_raw(resp, "APRS beacon and message transmitter\n\n"
+		"  aprs beacon\n"
+		"    Transmit position beacon with configured callsign,\n"
+		"    lat/lon, symbol, and comment.\n\n"
+		"  aprs send <callsign> <message>\n"
+		"    Send APRS message to a station.\n"
+		"    callsign: destination (e.g. W3ADO-1)\n"
+		"    message:  text string\n\n"
+		"  aprs status\n"
+		"    Show callsign, position, TX count.\n\n"
+		"Config: [aprs] enabled, callsign, lat, lon, symbol,\n"
+		"        comment, path\n");
+	resp_str(resp, "error", "usage: aprs <beacon|send|status>");
 	resp_finish(resp);
 	return -1;
 }
