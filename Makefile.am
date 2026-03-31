@@ -5,9 +5,12 @@ ACLOCAL_AMFLAGS = -I m4
 
 # ---------- common flags ----------
 
+GIT_HASH := $(shell git -C $(srcdir) rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
 AM_CFLAGS = -Wall -Wextra -Wpedantic -O2 \
 	    -Iinclude $(PLATFORM_CFLAGS) \
-	    $(PLCODE_CFLAGS)
+	    $(PLCODE_CFLAGS) \
+	    -DKERCHUNK_GIT_HASH=\"$(GIT_HASH)\"
 
 # ---------- convenience library: linenoise ----------
 # Vendored linenoise needs relaxed warnings (no -Wpedantic)
