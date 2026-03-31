@@ -191,12 +191,17 @@ function connect() {
     }
   };
 
+  let wsRetry = 0;
   ws.onclose = () => {
     $('conn-status').textContent = 'Disconnected';
     log('WebSocket closed');
     if (pttHeld) endPtt();
     ws = null;
-    setTimeout(connect, 3000);
+    if (window._wsShutdown) return;
+    wsRetry++;
+    let delay = Math.min(3000 * Math.pow(2, wsRetry - 1), 30000);
+    if (wsRetry <= 10) setTimeout(connect, delay);
+    else log('Gave up reconnecting');
   };
 
   ws.onerror = () => {
@@ -219,6 +224,13 @@ function sendCmd(obj) {
 
 /* ── JSON responses ── */
 function handleJsonMsg(msg) {
+  if (msg.type === 'shutdown') {
+    log('Daemon shutting down');
+    window._wsShutdown = true;
+    if (ws) { try { ws.onclose = null; ws.close(); } catch(_) {} ws = null; }
+    $('conn-status').textContent = 'Server shutdown';
+    return;
+  }
   if (msg.ok === false) {
     log('Error: ' + (msg.error || 'unknown'));
     if (!authenticated) {

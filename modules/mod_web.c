@@ -1806,8 +1806,20 @@ static void web_unload(void)
         pthread_join(g_audio_ws_thread, NULL);
     }
 
-    /* Stop the web thread */
+    /* Broadcast shutdown to all clients before stopping */
     if (g_running) {
+        for (struct mg_connection *c = g_mgr.conns; c; c = c->next) {
+            if (c->data[0] == 'E') {
+                /* SSE: send shutdown event */
+                mg_printf(c, "data: {\"type\":\"shutdown\"}\n\n");
+            } else if (c->is_websocket) {
+                /* WebSocket: send close frame (1001 = going away) */
+                mg_ws_send(c, "", 0, WEBSOCKET_OP_CLOSE);
+            }
+        }
+        /* Give mongoose one poll cycle to flush the close frames */
+        mg_mgr_poll(&g_mgr, 50);
+
         g_running = 0;
         pthread_join(g_web_thread, NULL);
     }

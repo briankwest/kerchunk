@@ -530,6 +530,8 @@ function connectSSE() {
           break;
         case 'shutdown':
           addLog('Daemon shutting down!','log-err');
+          window._sseShutdown=true;
+          es.close();
           break;
         case 'custom':
           /* Custom events: 8=weather, 9=forecast, 10=time */
@@ -542,7 +544,15 @@ function connectSSE() {
       }
     } catch(err){}
   };
-  es.onerror=()=>{setTimeout(connectSSE,3000);};
+  let sseRetry=0;
+  es.onerror=()=>{
+    es.close();
+    if (window._sseShutdown) return;
+    sseRetry++;
+    let delay=Math.min(3000*Math.pow(2,sseRetry-1),30000);
+    if (sseRetry<=10) setTimeout(connectSSE,delay);
+    else addLog('SSE: gave up reconnecting after 10 attempts','log-state');
+  };
 }
 
 // ============================================================
