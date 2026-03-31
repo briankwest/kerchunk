@@ -2,6 +2,14 @@
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
+# Append git hash to package version for non-release (untagged) builds.
+# Release builds (tagged v*) keep the changelog version unchanged.
+GIT_TAG := $(shell git describe --exact-match --tags HEAD 2>/dev/null)
+GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+ifeq ($(GIT_TAG),)
+  export DEB_VERSION_UPSTREAM_SUFFIX = +git$(GIT_HASH)
+endif
+
 %:
 	dh $@ --with autoreconf
 
@@ -11,3 +19,10 @@ override_dh_auto_clean:
 
 override_dh_auto_test:
 	$(MAKE) check || true
+
+override_dh_gencontrol:
+ifeq ($(GIT_TAG),)
+	dh_gencontrol -- -v$(shell dpkg-parsechangelog -S Version)+git$(GIT_HASH)
+else
+	dh_gencontrol
+endif
