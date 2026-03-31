@@ -288,8 +288,10 @@ static void ws_handle_auth(struct mg_connection *c, ws_conn_state_t *st,
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "WS auth: user=%s id=%d", st->user_name, st->user_id);
 
-    ws_send_json(c, "{\"ok\":true,\"user\":\"%s\",\"ptt_enabled\":%s}",
-                 st->user_name, g_ptt_enabled ? "true" : "false");
+    ws_send_json(c, "{\"ok\":true,\"user\":\"%s\",\"ptt_enabled\":%s,"
+                 "\"sample_rate\":%d,\"frame_samples\":%d}",
+                 st->user_name, g_ptt_enabled ? "true" : "false",
+                 g_core->sample_rate, g_core->frame_samples);
 
     free(user); free(pin);
 }

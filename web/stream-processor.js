@@ -1,25 +1,29 @@
 /* stream-processor.js — AudioWorklet ring buffer + resampler
  *
- * Receives Float32 audio from main thread port, buffers in a 96k-sample
- * ring (12s at 8kHz), resamples to device rate, outputs to speakers.
+ * Receives PCM audio from main thread port at the server's sample rate,
+ * buffers in a ring, resamples to device rate, outputs to speakers.
+ *
+ * processorOptions: { sampleRate: 48000 }
  */
-const SRC_RATE = 8000;
-const RING = 96000;
-const PRIME = 4000;
-
 class StreamProcessor extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
-    this.ring = new Float32Array(RING);
+    const srcRate = (options.processorOptions && options.processorOptions.sampleRate) || 48000;
+    const ringSize = srcRate * 2;   /* 2 seconds of buffer */
+    const prime = srcRate / 2;      /* 0.5s before playback starts */
+
+    this.ring = new Float32Array(ringSize);
+    this.ringSize = ringSize;
+    this.prime = prime;
     this.w = 0;
     this.r = 0;
     this.frac = 0;
-    this.step = SRC_RATE / sampleRate;
+    this.step = srcRate / sampleRate;
     this.primed = false;
     this.dryRuns = 0;
     this.dryThresh = Math.ceil(sampleRate * 5.0 / 128);
     this.statTick = 0;
-    this.statInterval = Math.ceil(sampleRate / 128); // ~1 per second
+    this.statInterval = Math.ceil(sampleRate / 128);
     this.framesIn = 0;
     this.underruns = 0;
     this.samplesOut = 0;
@@ -28,8 +32,8 @@ class StreamProcessor extends AudioWorkletProcessor {
         this.framesIn++;
         const d = e.data;
         for (let i = 0; i < d.length; i++) {
-          const next = (this.w + 1) % RING;
-          if (next === this.r) this.r = (this.r + 1) % RING;
+          const next = (this.w + 1) % this.ringSize;
+          if (next === this.r) this.r = (this.r + 1) % this.ringSize;
           this.ring[this.w] = d[i];
           this.w = next;
         }
@@ -38,9 +42,9 @@ class StreamProcessor extends AudioWorkletProcessor {
   }
   process(inputs, outputs) {
     const out = outputs[0][0];
-    const avail = (this.w - this.r + RING) % RING;
+    const avail = (this.w - this.r + this.ringSize) % this.ringSize;
     if (!this.primed) {
-      if (avail < PRIME) { out.fill(0); return true; }
+      if (avail < this.prime) { out.fill(0); return true; }
       this.primed = true;
       this.dryRuns = 0;
     }
@@ -51,7 +55,7 @@ class StreamProcessor extends AudioWorkletProcessor {
         this.frac += this.step;
         while (this.frac >= 1.0) {
           this.frac -= 1.0;
-          this.r = (this.r + 1) % RING;
+          this.r = (this.r + 1) % this.ringSize;
         }
         got++;
       } else {
@@ -73,7 +77,7 @@ class StreamProcessor extends AudioWorkletProcessor {
         framesIn: this.framesIn,
         underruns: this.underruns,
         samplesOut: this.samplesOut,
-        ringSize: RING,
+        ringSize: this.ringSize,
         step: this.step
       });
       this.statTick = 0;

@@ -227,7 +227,9 @@ async function startAudio() {
 
     await audioCtx.audioWorklet.addModule('stream-processor.js');
 
-    audioNode = new AudioWorkletNode(audioCtx, 'stream-processor');
+    audioNode = new AudioWorkletNode(audioCtx, 'stream-processor', {
+      processorOptions: { sampleRate: 48000 }
+    });
     audioNode.connect(audioGain);
     audioNode.port.onmessage = function(e) {
       if (e.data && e.data.type === 'stats') {

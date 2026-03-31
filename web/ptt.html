@@ -155,6 +155,7 @@ const WS_URL = WS_PROTO + '//' + location.host + '/api/audio' +
                (TOKEN ? '?token=' + encodeURIComponent(TOKEN) : '');
 
 let ws = null, audioCtx = null, workletNode = null, captureNode = null;
+let serverRate = 48000, serverFrame = 960;
 let micStream = null, pttHeld = false, pttStart = 0, durationTimer = null;
 let muted = false, authenticated = false, rxMuted = false, rxMuteTimer = null;
 const RX_MUTE_TAIL_MS = 1500; /* keep RX muted after PTT release for tx_tail + propagation */
@@ -244,6 +245,8 @@ function handleJsonMsg(msg) {
   }
   /* Auth response */
   if (msg.user && msg.ptt_enabled !== undefined) {
+    if (msg.sample_rate) serverRate = msg.sample_rate;
+    if (msg.frame_samples) serverFrame = msg.frame_samples;
     authenticated = true;
     /* Save credentials for auto-login */
     const su = $('auth-user').value.trim() || localStorage.getItem('kerchunk_ptt_user');
@@ -293,7 +296,9 @@ async function initAudio() {
 
     /* RX playback worklet */
     await audioCtx.audioWorklet.addModule('stream-processor.js');
-    workletNode = new AudioWorkletNode(audioCtx, 'stream-processor');
+    workletNode = new AudioWorkletNode(audioCtx, 'stream-processor', {
+      processorOptions: { sampleRate: serverRate }
+    });
     workletNode.connect(audioCtx.destination);
 
     /* Mic capture worklet */
@@ -305,7 +310,9 @@ async function initAudio() {
     });
 
     const source = audioCtx.createMediaStreamSource(micStream);
-    captureNode = new AudioWorkletNode(audioCtx, 'capture-processor');
+    captureNode = new AudioWorkletNode(audioCtx, 'capture-processor', {
+      processorOptions: { sampleRate: serverRate, frameSize: serverFrame }
+    });
 
     /* Mic level meter via analyser */
     const analyser = audioCtx.createAnalyser();

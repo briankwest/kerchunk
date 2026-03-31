@@ -1,24 +1,26 @@
-/* capture-processor.js — AudioWorklet for mic capture + resample to 8kHz
+/* capture-processor.js — AudioWorklet for mic capture + resample
  *
- * Receives mic input at device sample rate, resamples down to 8kHz,
- * accumulates 160-sample frames, and posts each complete frame to main thread.
+ * Receives mic input at device sample rate, resamples to the server's
+ * sample rate, accumulates frames, and posts each complete frame to
+ * main thread as Int16Array.
  *
- * Uses a simple moving-average low-pass filter before decimation to avoid
- * aliasing, then picks the nearest sample at each output position.
+ * processorOptions: { sampleRate: 48000, frameSize: 960 }
  */
-const DST_RATE = 8000;
-const FRAME_SIZE = 160;
-
 class CaptureProcessor extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
-    this.ratio = sampleRate / DST_RATE;       /* e.g. 6.0 for 48kHz */
-    this.avgLen = Math.max(1, Math.round(this.ratio));  /* filter window */
+    const dstRate = (options.processorOptions && options.processorOptions.sampleRate) || 48000;
+    const frameSize = (options.processorOptions && options.processorOptions.frameSize) || 960;
+
+    this.ratio = sampleRate / dstRate;
+    this.avgLen = Math.max(1, Math.round(this.ratio));
     this.avgBuf = new Float32Array(this.avgLen);
     this.avgIdx = 0;
     this.avgSum = 0;
-    this.phase = 0;                            /* fractional input counter */
-    this.buf = new Int16Array(FRAME_SIZE);
+    this.phase = 0;
+    this.dstRate = dstRate;
+    this.buf = new Int16Array(frameSize);
+    this.frameSize = frameSize;
     this.pos = 0;
   }
   process(inputs) {
@@ -32,13 +34,13 @@ class CaptureProcessor extends AudioWorkletProcessor {
       this.avgSum += inp[i];
       this.avgIdx = (this.avgIdx + 1) % this.avgLen;
 
-      this.phase += DST_RATE;
+      this.phase += this.dstRate;
       if (this.phase >= sampleRate) {
         this.phase -= sampleRate;
         const val = this.avgSum / this.avgLen;
         const s16 = Math.max(-32768, Math.min(32767, Math.round(val * 32767)));
         this.buf[this.pos++] = s16;
-        if (this.pos >= FRAME_SIZE) {
+        if (this.pos >= this.frameSize) {
           this.port.postMessage(this.buf.slice());
           this.pos = 0;
         }
