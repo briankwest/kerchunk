@@ -26,6 +26,7 @@ void kerchunk_log_shutdown(void);
 
 /* Set log level at runtime. */
 void kerchunk_log_set_level(int level);
+int  kerchunk_log_get_level(void);
 
 /* Log a message. */
 void kerchunk_log_msg(int level, const char *module, const char *fmt, ...);

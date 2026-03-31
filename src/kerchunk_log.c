@@ -21,6 +21,7 @@ static int  g_console_active;
 void kerchunk_log_tee_file(FILE *fp)  { g_tee = fp; }
 void kerchunk_log_tee_remove(void)    { g_tee = NULL; }
 void kerchunk_log_set_console_active(int active) { g_console_active = active; }
+int  kerchunk_log_get_level(void)     { return g_level; }
 
 static const char *level_str(int level)
 {

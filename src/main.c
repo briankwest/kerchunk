@@ -322,6 +322,254 @@ static int cmd_shutdown(int argc, const char **argv, kerchunk_resp_t *r)
     return 0;
 }
 
+static int cmd_version(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    (void)argc; (void)argv;
+    resp_str(r, "version", KERCHUNK_VERSION_STRING);
+    resp_int(r, "major", KERCHUNK_VERSION_MAJOR);
+    resp_int(r, "minor", KERCHUNK_VERSION_MINOR);
+    resp_int(r, "patch", KERCHUNK_VERSION_PATCH);
+    resp_int(r, "sample_rate", g_sample_rate);
+    resp_int(r, "frame_samples", g_frame_samples);
+    resp_int(r, "max_frame_samples", KERCHUNK_MAX_FRAME_SAMPLES);
+#ifdef __VERSION__
+    resp_str(r, "compiler", __VERSION__);
+#endif
+    resp_str(r, "built", __DATE__ " " __TIME__);
+    return 0;
+}
+
+static int cmd_uptime(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    (void)argc; (void)argv;
+    if (g_start_time > 0) {
+        time_t now = time(NULL);
+        int secs = (int)difftime(now, g_start_time);
+        int days = secs / 86400; secs %= 86400;
+        int hours = secs / 3600; secs %= 3600;
+        int mins = secs / 60; secs %= 60;
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%dd %dh %dm %ds", days, hours, mins, secs);
+        resp_str(r, "uptime", buf);
+        resp_int64(r, "uptime_s", (int64_t)difftime(now, g_start_time));
+    }
+    resp_int(r, "queue_depth", kerchunk_queue_depth());
+    resp_int(r, "modules", kerchunk_module_count());
+    resp_int(r, "users", kerchunk_user_count());
+    resp_bool(r, "ptt", kerchunk_core_get_ptt());
+    resp_bool(r, "cor", kerchunk_core_get()->is_receiving());
+    resp_bool(r, "emergency", kerchunk_core_get_emergency());
+    return 0;
+}
+
+static int cmd_audio(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    (void)argc; (void)argv;
+    resp_int(r, "sample_rate", g_sample_rate);
+    resp_int(r, "frame_samples", g_frame_samples);
+    resp_int(r, "hw_rate", kerchunk_audio_get_rate());
+    resp_bool(r, "resampling", g_sample_rate != kerchunk_audio_get_rate());
+
+    const kerchunk_config_t *cfg = kerchunk_core_get_config();
+    const char *v;
+    v = kerchunk_config_get(cfg, "audio", "capture_device");
+    if (v) resp_str(r, "capture_device", v);
+    v = kerchunk_config_get(cfg, "audio", "playback_device");
+    if (v) resp_str(r, "playback_device", v);
+
+    size_t writable = kerchunk_audio_playback_writable();
+    resp_int(r, "playback_writable", (int)writable);
+    return 0;
+}
+
+static int cmd_hid(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    (void)argc; (void)argv;
+    resp_bool(r, "available", kerchunk_hid_available());
+    resp_bool(r, "ptt", kerchunk_core_get_ptt());
+    int cor = kerchunk_hid_read_cor();
+    resp_int(r, "cor_raw", cor);
+    resp_bool(r, "cor", kerchunk_core_get()->is_receiving());
+
+    const kerchunk_config_t *cfg = kerchunk_core_get_config();
+    const char *v;
+    v = kerchunk_config_get(cfg, "hid", "device");
+    if (v) resp_str(r, "device", v);
+    v = kerchunk_config_get(cfg, "hid", "ptt_bit");
+    if (v) resp_int(r, "ptt_bit", atoi(v));
+    v = kerchunk_config_get(cfg, "hid", "cor_bit");
+    if (v) resp_int(r, "cor_bit", atoi(v));
+    v = kerchunk_config_get(cfg, "hid", "cor_polarity");
+    if (v) resp_str(r, "cor_polarity", v);
+    return 0;
+}
+
+static int cmd_user(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    if (argc < 2) {
+        resp_str(r, "error", "Usage: user list|lookup <id|ani>");
+        return -1;
+    }
+    if (strcmp(argv[1], "list") == 0) {
+        int n = kerchunk_user_count();
+        resp_int(r, "count", n);
+        if (!r->jfirst) resp_json_raw(r, ",");
+        resp_json_raw(r, "\"users\":[");
+        for (int i = 0; i < n; i++) {
+            const kerchunk_user_t *u = kerchunk_user_get(i);
+            if (!u) continue;
+            if (i > 0) resp_json_raw(r, ",");
+            char frag[256];
+            snprintf(frag, sizeof(frag),
+                     "{\"id\":%d,\"name\":\"%s\",\"ani\":\"%s\",\"access\":%d}",
+                     u->id, u->name, u->ani, u->access);
+            resp_json_raw(r, frag);
+
+            char line[128];
+            snprintf(line, sizeof(line), "  [%d] %-16s ANI=%-6s access=%d\n",
+                     u->id, u->name, u->ani, u->access);
+            resp_text_raw(r, line);
+        }
+        resp_json_raw(r, "]");
+        r->jfirst = 0;
+    } else if (strcmp(argv[1], "lookup") == 0 && argc >= 3) {
+        const kerchunk_user_t *u = NULL;
+        int id = atoi(argv[2]);
+        if (id > 0)
+            u = kerchunk_core_get()->user_lookup_by_id(id);
+        if (!u)
+            u = kerchunk_core_get()->user_lookup_by_ani(argv[2]);
+        if (u) {
+            resp_int(r, "id", u->id);
+            resp_str(r, "name", u->name);
+            resp_str(r, "ani", u->ani);
+            resp_int(r, "access", u->access);
+        } else {
+            resp_str(r, "error", "User not found");
+            return -1;
+        }
+    } else {
+        resp_str(r, "error", "Usage: user list|lookup <id|ani>");
+        return -1;
+    }
+    return 0;
+}
+
+extern int kerchunk_log_get_level(void);
+
+static int cmd_log(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    if (argc < 2) {
+        resp_str(r, "error", "Usage: log level <error|warn|info|debug>");
+        return -1;
+    }
+    if (strcmp(argv[1], "level") == 0) {
+        if (argc >= 3) {
+            int lvl = -1;
+            if (strcmp(argv[2], "error") == 0) lvl = KERCHUNK_LOG_ERROR;
+            else if (strcmp(argv[2], "warn") == 0) lvl = 4;
+            else if (strcmp(argv[2], "info") == 0) lvl = KERCHUNK_LOG_INFO;
+            else if (strcmp(argv[2], "debug") == 0) lvl = KERCHUNK_LOG_DEBUG;
+
+            if (lvl < 0) {
+                resp_str(r, "error", "Invalid level (error|warn|info|debug)");
+                return -1;
+            }
+            kerchunk_log_set_level(lvl);
+            resp_bool(r, "ok", 1);
+            resp_str(r, "level", argv[2]);
+        } else {
+            /* just show current level */
+            int lvl = kerchunk_log_get_level();
+            const char *name = "unknown";
+            if (lvl <= KERCHUNK_LOG_ERROR) name = "error";
+            else if (lvl <= 4) name = "warn";
+            else if (lvl <= KERCHUNK_LOG_INFO) name = "info";
+            else name = "debug";
+            resp_str(r, "level", name);
+        }
+    } else {
+        resp_str(r, "error", "Usage: log level [error|warn|info|debug]");
+        return -1;
+    }
+    return 0;
+}
+
+static int cmd_diag(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    (void)argc; (void)argv;
+    resp_bool(r, "audio", 1);  /* if we got here, daemon is running */
+    resp_bool(r, "hid", kerchunk_hid_available());
+    resp_int(r, "modules", kerchunk_module_count());
+    resp_int(r, "queue_depth", kerchunk_queue_depth());
+    resp_bool(r, "ptt", kerchunk_core_get_ptt());
+    resp_bool(r, "cor", kerchunk_core_get()->is_receiving());
+    resp_int(r, "sample_rate", g_sample_rate);
+    resp_bool(r, "resampling", g_sample_rate != kerchunk_audio_get_rate());
+    resp_int(r, "users", kerchunk_user_count());
+    resp_bool(r, "emergency", kerchunk_core_get_emergency());
+
+    if (g_start_time > 0) {
+        int secs = (int)difftime(time(NULL), g_start_time);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%dd %dh %dm",
+                 secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
+        resp_str(r, "uptime", buf);
+    }
+    return 0;
+}
+
+static int cmd_play(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    if (argc < 2) {
+        resp_str(r, "error", "Usage: play <path.wav>");
+        return -1;
+    }
+    const char *path = argv[1];
+    if (strstr(path, "..") != NULL) {
+        resp_str(r, "error", "path traversal not allowed");
+        return -1;
+    }
+    int id = kerchunk_queue_add_file(path, KERCHUNK_PRI_NORMAL);
+    if (id >= 0) {
+        resp_bool(r, "ok", 1);
+        resp_str(r, "path", path);
+        resp_int(r, "id", id);
+    } else {
+        resp_str(r, "error", "Failed to queue file");
+        return -1;
+    }
+    return 0;
+}
+
+static int cmd_tone(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    if (argc < 3) {
+        resp_str(r, "error", "Usage: tone <freq_hz> <duration_ms>");
+        return -1;
+    }
+    int freq = atoi(argv[1]);
+    int dur = atoi(argv[2]);
+    if (freq < 100 || freq > 10000) {
+        resp_str(r, "error", "Frequency must be 100-10000 Hz");
+        return -1;
+    }
+    if (dur < 10 || dur > 30000) {
+        resp_str(r, "error", "Duration must be 10-30000 ms");
+        return -1;
+    }
+    int id = kerchunk_queue_add_tone(freq, dur, 16000, KERCHUNK_PRI_NORMAL);
+    if (id >= 0) {
+        resp_bool(r, "ok", 1);
+        resp_int(r, "freq", freq);
+        resp_int(r, "duration_ms", dur);
+    } else {
+        resp_str(r, "error", "Failed to queue tone");
+        return -1;
+    }
+    return 0;
+}
+
 static int cmd_sim(int argc, const char **argv, kerchunk_resp_t *r)
 {
     if (argc < 2) {
@@ -408,6 +656,15 @@ typedef struct {
 
 static const core_cmd_entry_t g_core_cmds[] = {
     { "status",   cmd_status,   "status",                          "Show daemon status" },
+    { "version",  cmd_version,  "version",                         "Show version and build info" },
+    { "uptime",   cmd_uptime,   "uptime",                          "Show uptime and summary" },
+    { "audio",    cmd_audio,    "audio",                           "Show audio device info" },
+    { "hid",      cmd_hid,      "hid",                             "Show HID device status" },
+    { "user",     cmd_user,     "user list|lookup <id|ani>",       "User database" },
+    { "log",      cmd_log,      "log level [error|warn|info|debug]", "Get/set log level" },
+    { "diag",     cmd_diag,     "diag",                            "Quick system health check" },
+    { "play",     cmd_play,     "play <path.wav>",                 "Play a WAV file" },
+    { "tone",     cmd_tone,     "tone <freq_hz> <duration_ms>",    "Play a test tone" },
     { "ptt",      cmd_ptt,      "ptt on|off",                      "Manual PTT control" },
     { "queue",    cmd_queue,    "queue list|inject <path>|flush",   "Audio queue management" },
     { "module",   cmd_module,   "module list|load|unload|reload <name>", "Module management" },
