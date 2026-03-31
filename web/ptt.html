@@ -280,13 +280,13 @@ function handleJsonMsg(msg) {
 /* ── RX Audio playback ── */
 function handleAudioFrame(buf) {
   if (muted || pttHeld || rxMuted || !workletNode) return;
-  const view = new DataView(buf);
-  if (view.getUint8(0) !== 0x01) return;
-  const pcm = new Float32Array(160);
-  for (let i = 0; i < 160; i++) {
-    pcm[i] = view.getInt16(4 + i * 2, true) / 32768.0;
-  }
-  workletNode.port.postMessage(pcm, [pcm.buffer]);
+  if (buf.byteLength < 4) return;
+  const hdr = new Uint8Array(buf, 0, 1);
+  if (hdr[0] !== 0x01) return;
+  const pcm = new Int16Array(buf, 4);
+  const f = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) f[i] = pcm[i] / 32768.0;
+  workletNode.port.postMessage(f, [f.buffer]);
 }
 
 /* ── Audio init ── */
