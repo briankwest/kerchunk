@@ -60,6 +60,11 @@ playback_device = default        ; PortAudio playback device name
 ;                                ; resampling at 48kHz gives clean results.
 preemphasis = off                ; on | off (RT-97L handles this in hardware)
 ; preemphasis_alpha = 0.95       ; Pre-emphasis filter coefficient (if enabled)
+tx_encode = off                  ; on | off — mix CTCSS/DCS into TX audio
+                                 ; Set 'off' when the repeater hardware handles
+                                 ; CTCSS/DCS encoding (most repeaters do).
+                                 ; Set 'on' only when using software_relay with
+                                 ; a repeater that has no built-in encoder.
 ;
 ; ALSA mixer levels — set on startup to prevent USB re-enumeration resets.
 ; CM119 (RIM-Lite) resets mixer to defaults every time USB reconnects.
