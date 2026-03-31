@@ -17,6 +17,7 @@ test_kerchunk
 /autom4te.cache/
 /build-aux/
 /config.h
+/config.h.in
 /config.h.in~
 /config.log
 /config.lt
@@ -26,6 +27,11 @@ test_kerchunk
 /Makefile
 /Makefile.in
 /stamp-h1
+m4/libtool.m4
+m4/ltoptions.m4
+m4/ltsugar.m4
+m4/ltversion.m4
+m4/lt~obsolete.m4
 modules/.libs/
 modules/.deps/
 src/.libs/

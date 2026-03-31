@@ -1,3 +1,0 @@
-shlibs:Depends=libasound2t64 (>= 1.0.16), libc6 (>= 2.38), libcurl4t64 (>= 7.16.2), libportaudio2 (>= 19+svn20101113), librtlsdr0, libssl3t64 (>= 3.0.0)
-misc:Depends=
-misc:Pre-Depends=
