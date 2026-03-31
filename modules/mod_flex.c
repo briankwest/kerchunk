@@ -25,6 +25,7 @@
 static kerchunk_core_t *g_core;
 static int g_enabled = 1;
 static int g_tx_count = 0;
+static int g_deemph = 0;
 static flex_speed_t g_default_speed = FLEX_SPEED_1600_2;
 
 static int flex_tx(uint32_t capcode, flex_msg_type_t type,
@@ -45,9 +46,10 @@ static int flex_tx(uint32_t capcode, flex_msg_type_t type,
 
 	float fbuf[512000];
 	size_t ns = 0;
-	err = flex_baseband(bitbuf, bits, speed,
-	                    (float)g_core->sample_rate,
-	                    fbuf, sizeof(fbuf) / sizeof(float), &ns);
+	int flags = g_deemph ? FLEX_BASEBAND_DEEMPH : 0;
+	err = flex_baseband_ex(bitbuf, bits, speed,
+	                       (float)g_core->sample_rate, flags,
+	                       fbuf, sizeof(fbuf) / sizeof(float), &ns);
 	if (err != FLEX_OK) {
 		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
 		            "baseband failed: %s", flex_strerror(err));
@@ -138,6 +140,7 @@ static int cli_flex(int argc, const char **argv, kerchunk_resp_t *resp)
 	} else if (strcmp(sub, "status") == 0) {
 		resp_str(resp, "module", "mod_flex");
 		resp_bool(resp, "enabled", g_enabled);
+		resp_bool(resp, "deemphasis", g_deemph);
 		resp_int(resp, "tx_count", g_tx_count);
 		resp_int(resp, "default_speed", flex_speed_bps(g_default_speed));
 	} else {
@@ -173,6 +176,8 @@ static int mod_configure(const kerchunk_config_t *cfg)
 		g_enabled = 0;
 	v = g_core->config_get("flex", "default_speed");
 	if (v) g_default_speed = parse_speed(v);
+	v = g_core->config_get("flex", "deemphasis");
+	g_deemph = (v && strcmp(v, "on") == 0);
 	return 0;
 }
 

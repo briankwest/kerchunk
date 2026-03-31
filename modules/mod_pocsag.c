@@ -24,6 +24,7 @@
 static kerchunk_core_t *g_core;
 static int g_enabled = 1;
 static int g_tx_count = 0;
+static int g_deemph = 0;
 
 /* ── Transmit a POCSAG page ── */
 
@@ -52,8 +53,9 @@ static int pocsag_tx(uint32_t addr, uint32_t baud, pocsag_func_t func,
 
 	float fbuf[256000];
 	size_t ns = 0;
-	err = pocsag_baseband(bitstream, bs_bits, g_core->sample_rate, baud,
-	                      fbuf, sizeof(fbuf) / sizeof(float), &ns);
+	int flags = g_deemph ? POCSAG_BASEBAND_DEEMPH : 0;
+	err = pocsag_baseband_ex(bitstream, bs_bits, g_core->sample_rate, baud,
+	                         flags, fbuf, sizeof(fbuf) / sizeof(float), &ns);
 	if (err != POCSAG_OK) {
 		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
 		            "baseband failed: %s", pocsag_strerror(err));
@@ -129,6 +131,7 @@ static int cli_pocsag(int argc, const char **argv, kerchunk_resp_t *resp)
 	} else if (strcmp(sub, "status") == 0) {
 		resp_str(resp, "module", "mod_pocsag");
 		resp_bool(resp, "enabled", g_enabled);
+		resp_bool(resp, "deemphasis", g_deemph);
 		resp_int(resp, "tx_count", g_tx_count);
 	} else {
 		goto usage;
@@ -162,6 +165,8 @@ static int mod_configure(const kerchunk_config_t *cfg)
 	const char *v = g_core->config_get("pocsag", "enabled");
 	if (v && (strcmp(v, "off") == 0 || strcmp(v, "0") == 0))
 		g_enabled = 0;
+	v = g_core->config_get("pocsag", "deemphasis");
+	g_deemph = (v && strcmp(v, "on") == 0);
 	return 0;
 }
 
