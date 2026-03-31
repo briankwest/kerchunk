@@ -420,7 +420,8 @@ static void otp_unload(void)
 
 static int cli_otp(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     resp_int(r, "session_timeout_s", g_session_timeout_ms / 1000);
     resp_int(r, "time_skew", g_time_skew);
 
@@ -447,6 +448,25 @@ static int cli_otp(int argc, const char **argv, kerchunk_resp_t *r)
     }
 
     return 0;
+
+usage:
+    resp_text_raw(r, "TOTP authentication for elevated access\n\n"
+        "  otp\n"
+        "    Show OTP session status and active elevated sessions.\n\n"
+        "    Fields:\n"
+        "      session_timeout_s  Time before elevated access expires\n"
+        "      time_skew          Allowed clock drift (+/- time steps)\n"
+        "      active_sessions    Number of users with elevated access\n"
+        "      sessions[]         List of active session user IDs/names\n\n"
+        "    Users authenticate via DTMF *68<6-digit code># using a\n"
+        "    Google Authenticator compatible TOTP token (RFC 6238).\n"
+        "    Grants time-limited elevated access for privileged commands.\n\n"
+        "Config: [otp] session_timeout, time_skew\n"
+        "User:   [user.N] totp_secret = <base32 key>\n"
+        "DTMF:   *68<code>#\n");
+    resp_str(r, "error", "usage: otp [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

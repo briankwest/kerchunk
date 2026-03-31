@@ -12,6 +12,7 @@
 #include "plcode.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define LOG_MOD "txcode"
 
@@ -127,7 +128,8 @@ static void txcode_unload(void)
 /* CLI */
 static int cli_txcode(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     const char *type_str = "none";
     if (g_enc_type == KERCHUNK_TX_ENC_CTCSS) type_str = "CTCSS";
     else if (g_enc_type == KERCHUNK_TX_ENC_DCS) type_str = "DCS";
@@ -135,6 +137,22 @@ static int cli_txcode(int argc, const char **argv, kerchunk_resp_t *r)
     resp_int(r, "default_ctcss", g_default_tx_ctcss);
     resp_int(r, "default_dcs", g_default_tx_dcs);
     return 0;
+
+usage:
+    resp_text_raw(r, "Dynamic TX CTCSS/DCS encoder\n\n"
+        "  txcode\n"
+        "    Show the active TX encoder type and default tone settings.\n\n"
+        "    Fields:\n"
+        "      tx_encoder      Active encoder: CTCSS, DCS, or none\n"
+        "      default_ctcss   Default CTCSS tone (freq x10, 0=none)\n"
+        "      default_dcs     Default DCS code (0=none)\n\n"
+        "    Automatically selects the TX tone based on the identified\n"
+        "    caller's group assignment. Falls back to repeater defaults\n"
+        "    when no caller is identified or no group tone is configured.\n\n"
+        "Config: [repeater] tx_ctcss, tx_dcs, ctcss_amplitude\n");
+    resp_str(r, "error", "usage: txcode [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

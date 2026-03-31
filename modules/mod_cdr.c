@@ -319,7 +319,8 @@ static void cdr_unload(void)
 
 static int cli_cdr(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     resp_bool(r, "enabled", g_enabled);
     resp_str(r, "directory", g_dir);
     resp_int(r, "today_calls", g_today_calls);
@@ -332,6 +333,25 @@ static int cli_cdr(int argc, const char **argv, kerchunk_resp_t *r)
         resp_float(r, "elapsed_s", elapsed);
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "Call Detail Records module\n\n"
+        "  cdr\n"
+        "    Show CDR status and daily statistics.\n\n"
+        "    Fields:\n"
+        "      enabled         Whether CDR logging is active\n"
+        "      directory       Path to daily CSV files\n"
+        "      today_calls     Number of calls logged today\n"
+        "      today_seconds   Total call duration today\n"
+        "      in_call         Whether a call is currently in progress\n"
+        "      active_caller   Name of current caller (if in call)\n"
+        "      elapsed_s       Current call elapsed time (if in call)\n\n"
+        "    CSV files are auto-rotated daily (YYYY-MM-DD.csv).\n"
+        "    Each record includes signal quality metrics (avg/peak RMS).\n\n"
+        "Config: [cdr] enabled, directory\n");
+    resp_str(r, "error", "usage: cdr [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

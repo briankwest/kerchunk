@@ -317,7 +317,8 @@ static void caller_unload(void)
 /* CLI */
 static int cli_caller(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     if (g_current_user_id > 0) {
         const kerchunk_user_t *u = g_core->user_lookup_by_id(g_current_user_id);
         resp_str(r, "active_caller", u ? u->name : "unknown");
@@ -333,6 +334,22 @@ static int cli_caller(int argc, const char **argv, kerchunk_resp_t *r)
         resp_int(r, "session_timeout_s", g_login_timeout_ms / 1000);
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "Caller identification module\n\n"
+        "  caller\n"
+        "    Show the currently identified caller, identification method\n"
+        "    (ANI or LOGIN), and active login session if any.\n\n"
+        "    Fields:\n"
+        "      active_caller   Current caller name (or \"none\")\n"
+        "      caller_id       Numeric user ID\n"
+        "      method          ANI (automatic) or LOGIN (*code#)\n"
+        "      login_session   Persistent login session user (survives COR drops)\n"
+        "      session_timeout_s  Session expiry in seconds\n\n"
+        "Config: [caller] ani_window, login_timeout\n");
+    resp_str(r, "error", "usage: caller [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

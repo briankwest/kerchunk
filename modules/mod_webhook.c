@@ -400,6 +400,8 @@ static void webhook_unload(void)
 
 static int cli_webhook(int argc, const char **argv, kerchunk_resp_t *r)
 {
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     /* webhook test */
     if (argc >= 2 && strcmp(argv[1], "test") == 0) {
         if (!g_enabled || !g_worker_running) {
@@ -455,6 +457,26 @@ static int cli_webhook(int argc, const char **argv, kerchunk_resp_t *r)
     }
 
     return 0;
+
+usage:
+    resp_text_raw(r, "Webhook notifications for repeater events\n\n"
+        "  webhook\n"
+        "    Show webhook status: URL, secret, subscribed events,\n"
+        "    pending queue depth, total sent/failed counters.\n\n"
+        "  webhook test\n"
+        "    Enqueue a test payload to verify webhook delivery.\n\n"
+        "    Fires HTTP POST with JSON payloads to a configured URL\n"
+        "    when subscribed repeater events occur. Uses a background\n"
+        "    worker thread with circular buffer queue to avoid blocking.\n"
+        "    Supports X-Webhook-Secret header and configurable retries.\n\n"
+        "    Available events: cor_assert, cor_drop, ptt_assert, ptt_drop,\n"
+        "    caller_identified, caller_cleared, announcement,\n"
+        "    recording_saved, state_change, shutdown, config_reload\n\n"
+        "Config: [webhook] enabled, url, secret, events,\n"
+        "        timeout_ms, retry_count\n");
+    resp_str(r, "error", "usage: webhook [test]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

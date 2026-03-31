@@ -427,6 +427,8 @@ static void cwid_unload(void)
 
 static int cli_cwid(int argc, const char **argv, kerchunk_resp_t *r)
 {
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     if (argc >= 2 && strcmp(argv[1], "now") == 0) {
         send_cwid();
         resp_bool(r, "ok", 1);
@@ -441,6 +443,24 @@ static int cli_cwid(int argc, const char **argv, kerchunk_resp_t *r)
         resp_str(r, "quiet_mode", g_quiet_solar ? "solar" : "fixed");
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "Morse CW callsign identification\n\n"
+        "  cwid\n"
+        "    Show CW ID status: callsign, interval, quiet hours, pending state.\n\n"
+        "  cwid now\n"
+        "    Immediately send CW ID (bypasses quiet hour check).\n\n"
+        "    CW ID is sent automatically on a clock-aligned interval\n"
+        "    (default 10 minutes, FCC max 15 minutes). Deferred if\n"
+        "    channel is busy; sent during tail or idle. Optional voice\n"
+        "    ID follows CW with frequency and PL tone via TTS.\n\n"
+        "    Quiet hours suppress CW ID (fixed times or solar-based).\n\n"
+        "Config: [repeater] cwid_interval, cwid_wpm, cwid_freq,\n"
+        "        voice_id, quiet_start, quiet_end, quiet_mode, solar_offset\n"
+        "        [general] callsign, frequency, latitude, longitude\n");
+    resp_str(r, "error", "usage: cwid [now]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

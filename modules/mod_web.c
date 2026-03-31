@@ -1856,7 +1856,8 @@ static void web_unload(void)
 
 static int cli_web(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     resp_bool(r, "enabled", g_enabled);
     resp_int(r, "port", g_port);
     resp_str(r, "bind", g_bind);
@@ -1874,6 +1875,29 @@ static int cli_web(int argc, const char **argv, kerchunk_resp_t *r)
     if (g_static_dir[0])
         resp_str(r, "static_dir", g_static_dir);
     return 0;
+
+usage:
+    resp_text_raw(r, "Embedded HTTP/HTTPS server for web dashboard\n\n"
+        "  web\n"
+        "    Show web server status, TLS state, and connected clients.\n\n"
+        "    Fields:\n"
+        "      enabled        Whether the web server is running\n"
+        "      port           Listening port number\n"
+        "      bind           Bind address (e.g. 127.0.0.1, 0.0.0.0)\n"
+        "      auth           Whether auth_token is configured\n"
+        "      tls            Whether TLS/HTTPS is active\n"
+        "      sse_clients    Number of connected SSE event streams\n"
+        "      audio_clients  Number of connected WebSocket audio streams\n"
+        "      ptt_enabled    Whether web PTT is allowed\n"
+        "      static_dir     Path to static file directory\n\n"
+        "    Serves the web dashboard, JSON API, SSE live events,\n"
+        "    and WebSocket audio streaming.\n\n"
+        "Config: [web] enabled, port, bind, auth_token, static_dir,\n"
+        "        tls_cert, tls_key, ptt_enabled, ptt_max_duration,\n"
+        "        ptt_priority, registration_enabled\n");
+    resp_str(r, "error", "usage: web [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

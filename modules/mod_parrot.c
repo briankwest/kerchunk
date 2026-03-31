@@ -240,12 +240,31 @@ static void parrot_unload(void)
 
 static int cli_parrot(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     resp_bool(r, "enabled", g_enabled);
     resp_bool(r, "armed", g_armed);
     resp_bool(r, "recording", g_recording);
     resp_int(r, "max_duration_s", g_max_duration_s);
     return 0;
+
+usage:
+    resp_text_raw(r, "Echo/parrot mode for audio quality check\n\n"
+        "  parrot\n"
+        "    Show parrot mode status (enabled, armed, recording).\n\n"
+        "    Fields:\n"
+        "      enabled         Whether parrot mode is available\n"
+        "      armed           Waiting for next transmission to record\n"
+        "      recording       Currently recording audio\n"
+        "      max_duration_s  Maximum recording length in seconds\n\n"
+        "    DTMF *88# arms parrot mode. User keys up and speaks,\n"
+        "    then releases PTT. The repeater plays back the audio\n"
+        "    with signal quality report (avg/peak level %).\n\n"
+        "Config: [parrot] enabled, max_duration\n"
+        "DTMF:   *88#\n");
+    resp_str(r, "error", "usage: parrot [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

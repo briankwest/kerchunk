@@ -140,11 +140,29 @@ static void emergency_unload(void)
 /* CLI */
 static int cli_emergency(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     resp_bool(r, "active", kerchunk_core_get_emergency());
     resp_str(r, "mode", kerchunk_core_get_emergency() ? "ACTIVE" : "inactive");
     resp_int(r, "timeout_s", g_timeout_ms / 1000);
     return 0;
+
+usage:
+    resp_text_raw(r, "Emergency mode control\n\n"
+        "  emergency\n"
+        "    Show current emergency mode status.\n\n"
+        "    Fields:\n"
+        "      active       Whether emergency mode is currently on\n"
+        "      mode         ACTIVE or inactive\n"
+        "      timeout_s    Auto-deactivation timeout in seconds\n\n"
+        "    DTMF *911# activates emergency mode, *910# deactivates.\n"
+        "    While active: TOT is disabled, automated announcements are\n"
+        "    suppressed. Auto-deactivates after the configured timeout.\n\n"
+        "Config: [emergency] timeout\n"
+        "DTMF:   *911# on, *910# off\n");
+    resp_str(r, "error", "usage: emergency [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

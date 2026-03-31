@@ -296,7 +296,8 @@ static void dtmfcmd_unload(void)
 /* CLI */
 static int cli_dtmfcmd(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     /* JSON: array of command objects */
     if (!r->jfirst) resp_json_raw(r, ",");
     resp_json_raw(r, "\"commands\":[");
@@ -321,6 +322,21 @@ static int cli_dtmfcmd(int argc, const char **argv, kerchunk_resp_t *r)
         resp_text_raw(r, line);
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "DTMF command router\n\n"
+        "  dtmfcmd\n"
+        "    Show all registered DTMF command patterns and their descriptions.\n\n"
+        "    Displays the command table built from all loaded modules.\n"
+        "    Each entry shows the DTMF pattern (*<code>#) and the action\n"
+        "    it triggers. Also shows whether a command is being accumulated\n"
+        "    and the current digit buffer.\n\n"
+        "    DTMF commands are entered on-air as *<digits># sequences.\n"
+        "    Inter-digit timeout and COR gate are configurable.\n\n"
+        "Config: [dtmf] inter_digit_timeout, cor_gate_ms, <pattern overrides>\n");
+    resp_str(r, "error", "usage: dtmfcmd [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

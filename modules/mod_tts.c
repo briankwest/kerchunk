@@ -489,9 +489,29 @@ static int cli_tts(int argc, const char **argv, kerchunk_resp_t *r)
             resp_str(r, "error", "No cache directory configured");
         }
     } else {
-        resp_str(r, "error", "Usage: tts say <text> | status | cache-clear");
+        goto usage;
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "Text-to-speech via ElevenLabs API (cached)\n\n"
+        "  tts say <text>\n"
+        "    Synthesize and play the given text on-air.\n"
+        "    text: one or more words to speak\n\n"
+        "  tts status\n"
+        "    Show TTS engine status: voice, model, cache directory,\n"
+        "    pending queue depth, normalization state.\n\n"
+        "  tts cache-clear\n"
+        "    Remove all cached WAV files from the TTS cache directory.\n"
+        "    Forces re-synthesis on next request for each phrase.\n\n"
+        "    Synthesis runs on a background thread. Responses are cached\n"
+        "    as WAV files keyed by FNV-1a text hash. Identical text is\n"
+        "    synthesized once and replayed from disk on subsequent calls.\n\n"
+        "Config: [tts] api_key, voice_id, model\n"
+        "        [general] sounds_dir (cache stored in <sounds_dir>/cache/tts/)\n");
+    resp_str(r, "error", "usage: tts <say <text>|status|cache-clear>");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

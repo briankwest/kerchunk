@@ -1154,6 +1154,8 @@ static void freeswitch_unload(void)
 
 static int cli_freeswitch(int argc, const char **argv, kerchunk_resp_t *r)
 {
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     if (argc >= 3 && strcmp(argv[1], "dial") == 0) {
         autopatch_dial(argv[2]);
         resp_bool(r, "ok", 1);
@@ -1197,6 +1199,27 @@ static int cli_freeswitch(int argc, const char **argv, kerchunk_resp_t *r)
     }
 
     return 0;
+
+usage:
+    resp_text_raw(r, "AutoPatch telephone interconnect via FreeSWITCH\n\n"
+        "  freeswitch\n"
+        "    Show autopatch status: ESL connection, call state, gateway,\n"
+        "    active call UUID and digits, VAD/PTT state.\n\n"
+        "  freeswitch dial <number>\n"
+        "    Originate a phone call to the given number.\n"
+        "    number: digits to dial via the configured SIP gateway\n\n"
+        "  freeswitch hangup\n"
+        "    Hang up the active call.\n\n"
+        "    Audio flow: Radio->Phone via UDP audio tap,\n"
+        "    Phone->Radio via UDP recvfrom with jitter buffer and VAD.\n"
+        "    DTMF *0<digits># to originate, *0# to hang up.\n\n"
+        "Config: [freeswitch] enabled, host, esl_port, esl_password,\n"
+        "        sip_gateway, udp_base_port, max_call_secs,\n"
+        "        dial_timeout, inactivity_timeout, vad_threshold,\n"
+        "        vad_hold_ms, admin_only, dial_prefix, dial_whitelist\n");
+    resp_str(r, "error", "usage: freeswitch [dial <num>|hangup]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

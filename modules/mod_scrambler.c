@@ -314,6 +314,8 @@ static void scrambler_unload(void)
 
 static int cli_scrambler(int argc, const char **argv, kerchunk_resp_t *r)
 {
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     if (argc >= 2 && strcmp(argv[1], "on") == 0) {
         g_enabled = 1;
         install_hooks();
@@ -332,6 +334,26 @@ static int cli_scrambler(int argc, const char **argv, kerchunk_resp_t *r)
     resp_int(r, "carrier_hz", g_carrier_hz);
     resp_bool(r, "cwid_bypass", g_cwid_bypass);
     return 0;
+
+usage:
+    resp_text_raw(r, "Frequency inversion voice scrambler\n\n"
+        "  scrambler\n"
+        "    Show scrambler status: enabled, code, carrier frequency.\n\n"
+        "  scrambler on\n"
+        "    Enable the scrambler with the current code.\n\n"
+        "  scrambler off\n"
+        "    Disable the scrambler.\n\n"
+        "  scrambler code <N>\n"
+        "    Set scrambler code (1-8) and enable if needed.\n"
+        "    N:  1-8, maps to carrier frequencies 2700-3400 Hz.\n\n"
+        "    Self-inverse frequency inversion scrambler. Same operation\n"
+        "    scrambles and descrambles. Bypasses during CW ID and\n"
+        "    emergency mode. DSP chain: LPF -> NCO mix -> LPF -> DC remove.\n\n"
+        "Config: [scrambler] enabled, code, frequency\n"
+        "DTMF:   *97# toggle, *970# off, *971#-*978# set code\n");
+    resp_str(r, "error", "usage: scrambler [on|off|code <N>]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

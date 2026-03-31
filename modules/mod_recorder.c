@@ -331,7 +331,8 @@ static void recorder_unload(void)
 /* CLI */
 static int cli_recorder(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     resp_bool(r, "enabled", g_enabled);
     resp_str(r, "directory", g_dir);
     resp_int(r, "max_duration_s", g_max_duration_s);
@@ -339,6 +340,24 @@ static int cli_recorder(int argc, const char **argv, kerchunk_resp_t *r)
     if (g_rx_active)
         resp_float(r, "rx_duration_s", (double)g_rx_len / (double)g_core->sample_rate);
     return 0;
+
+usage:
+    resp_text_raw(r, "Transmission recorder\n\n"
+        "  recorder\n"
+        "    Show recording status and configuration.\n\n"
+        "    Fields:\n"
+        "      enabled         Whether recording is active\n"
+        "      directory       Path to WAV output directory\n"
+        "      max_duration_s  Maximum recording length per transmission\n"
+        "      rx_active       Whether an RX recording is in progress\n"
+        "      rx_duration_s   Current RX recording elapsed time\n\n"
+        "    Records every RX and TX transmission to timestamped WAV files.\n"
+        "    Filenames: <dir>/YYYYMMDD_HHMMSS_<RX|TX>_<user>.wav\n"
+        "    Also maintains an activity.log with all recordings.\n\n"
+        "Config: [recording] enabled, directory, max_duration\n");
+    resp_str(r, "error", "usage: recorder [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

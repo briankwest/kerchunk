@@ -562,6 +562,8 @@ static void weather_unload(void)
 
 static int cli_weather(int argc, const char **argv, kerchunk_resp_t *r)
 {
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     if (argc >= 2 && strcmp(argv[1], "now") == 0) {
         if (weather_fetch() == 0) {
             weather_announce();
@@ -599,6 +601,26 @@ static int cli_weather(int argc, const char **argv, kerchunk_resp_t *r)
         }
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "Weather announcements via weatherapi.com\n\n"
+        "  weather\n"
+        "    Show cached weather data: location, API key status,\n"
+        "    current conditions (temp, wind, humidity), and forecast.\n\n"
+        "  weather now\n"
+        "    Fetch current conditions and announce on-air.\n\n"
+        "  weather forecast\n"
+        "    Fetch today's forecast and announce on-air.\n"
+        "    Includes high/low temps, rain/snow chance, humidity.\n\n"
+        "    Fetches from weatherapi.com. Supports TTS or WAV fallback.\n"
+        "    Auto-announce is off by default (FCC 95.1733).\n"
+        "    DTMF *93# current conditions, *94# forecast.\n\n"
+        "Config: [weather] api_key, location, interval, auto_announce,\n"
+        "        announce_temp, announce_conditions, announce_wind\n"
+        "DTMF:   *93# current, *94# forecast\n");
+    resp_str(r, "error", "usage: weather [now|forecast]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

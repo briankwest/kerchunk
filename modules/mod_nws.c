@@ -617,6 +617,8 @@ static void nws_unload(void)
 
 static int cli_nws(int argc, const char **argv, kerchunk_resp_t *r)
 {
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     if (argc >= 2 && strcmp(argv[1], "check") == 0) {
         if (!g_enabled) {
             resp_str(r, "status", "disabled");
@@ -689,6 +691,27 @@ static int cli_nws(int argc, const char **argv, kerchunk_resp_t *r)
         }
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "National Weather Service alert monitor\n\n"
+        "  nws\n"
+        "    Show NWS status: enabled, last poll time, active alerts with\n"
+        "    severity, event type, and headline.\n\n"
+        "  nws check\n"
+        "    Force an immediate poll of api.weather.gov for new alerts.\n\n"
+        "  nws announce\n"
+        "    Read out all active alerts via TTS (same as DTMF *96#).\n\n"
+        "    Polls api.weather.gov for active alerts at a configured\n"
+        "    lat/lon. Tracks alerts by ID, announces new/expired via TTS.\n"
+        "    Re-announces active alerts on a configurable interval.\n"
+        "    Attention tones play for extreme severity alerts.\n\n"
+        "Config: [nws] enabled, latitude, longitude, contact,\n"
+        "        poll_interval, reannounce_interval, min_severity,\n"
+        "        auto_announce, attention_tones\n"
+        "DTMF:   *96# on-demand alert readout\n");
+    resp_str(r, "error", "usage: nws [check|announce]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

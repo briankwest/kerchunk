@@ -163,7 +163,8 @@ static void gpio_unload(void)
 /* CLI */
 static int cli_gpio(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     resp_int(r, "pin_count", g_num_pins);
     /* JSON: array of pin objects */
     if (!r->jfirst) resp_json_raw(r, ",");
@@ -190,6 +191,21 @@ static int cli_gpio(int argc, const char **argv, kerchunk_resp_t *r)
         }
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "GPIO relay control via DTMF commands\n\n"
+        "  gpio\n"
+        "    Show all configured GPIO pins and their current ON/OFF state.\n\n"
+        "    Each pin is controlled via DTMF:\n"
+        "      *41<pin>#  Turn pin ON\n"
+        "      *40<pin>#  Turn pin OFF\n\n"
+        "    Only pins listed in the allowed_pins config are controllable.\n"
+        "    Uses Linux sysfs GPIO interface (/sys/class/gpio/).\n\n"
+        "Config: [gpio] allowed_pins\n"
+        "DTMF:   *41<pin># on, *40<pin># off\n");
+    resp_str(r, "error", "usage: gpio [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

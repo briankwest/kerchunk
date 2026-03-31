@@ -346,11 +346,29 @@ static void repeater_unload(void)
 /* CLI */
 static int cli_repeater(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     resp_str(r, "state", state_name(g_state));
     resp_str(r, "access", g_require_id ? "closed" : "open");
     resp_bool(r, "caller_identified", g_caller_identified);
     return 0;
+
+usage:
+    resp_text_raw(r, "Repeater state machine\n\n"
+        "  repeater\n"
+        "    Show current repeater state and access mode.\n\n"
+        "    Fields:\n"
+        "      state              IDLE, RECEIVING, TAIL_WAIT, HANG_WAIT, or TIMEOUT\n"
+        "      access             open (anyone) or closed (require identification)\n"
+        "      caller_identified  Whether current caller has been identified\n\n"
+        "    State flow: IDLE -> RECEIVING -> TAIL_WAIT -> HANG_WAIT -> IDLE\n"
+        "    TIMEOUT occurs when TOT fires (user held PTT too long).\n"
+        "    Closed repeater requires CTCSS/DCS or DTMF login before access.\n\n"
+        "Config: [repeater] tail_time, hang_time, timeout_time,\n"
+        "        cor_debounce, require_identification, software_relay\n");
+    resp_str(r, "error", "usage: repeater [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

@@ -492,6 +492,8 @@ static void stats_unload(void)
 
 static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
 {
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     /* stats reset */
     if (argc >= 2 && strcmp(argv[1], "reset") == 0) {
         memset(&g_ch, 0, sizeof(g_ch));
@@ -730,6 +732,26 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
     }
 
     return 0;
+
+usage:
+    resp_text_raw(r, "Repeater statistics and metrics\n\n"
+        "  stats\n"
+        "    Show full statistics dashboard: uptime, channel activity,\n"
+        "    24-hour histogram, top users, and system counters.\n\n"
+        "  stats user <name>\n"
+        "    Show per-user statistics for a specific user.\n"
+        "    name: case-insensitive username match\n\n"
+        "  stats reset\n"
+        "    Reset all statistics to zero (preserves restart count).\n\n"
+        "  stats save\n"
+        "    Force-save statistics to disk immediately.\n\n"
+        "    Tracks RX/TX counts, durations, duty cycle (rolling 5-min),\n"
+        "    per-user TX stats, 24-hour activity histogram, TOT events,\n"
+        "    and emergency activations. Persists to disk on shutdown.\n\n"
+        "Config: [stats] persist, persist_file\n");
+    resp_str(r, "error", "usage: stats [user <name>|reset|save]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

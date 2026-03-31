@@ -385,11 +385,28 @@ static void sdr_unload(void)
 
 static int cli_sdr(int argc, const char **argv, kerchunk_resp_t *r)
 {
-    (void)argc; (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     resp_bool(r, "enabled", g_enabled);
     resp_bool(r, "running", g_running);
     resp_int(r, "channel", g_channel);
     return 0;
+
+usage:
+    resp_text_raw(r, "SDR single-channel monitor (RTL-SDR)\n\n"
+        "  sdr\n"
+        "    Show SDR monitor status.\n\n"
+        "    Fields:\n"
+        "      enabled    Whether SDR monitoring is configured on\n"
+        "      running    Whether the monitor thread is active\n"
+        "      channel    FRS/GMRS channel number being monitored (1-22)\n\n"
+        "    Tunes an RTL-SDR dongle to one FRS/GMRS channel at 240 kHz.\n"
+        "    Performs FM demod, de-emphasis, decimation to 8 kHz, and\n"
+        "    CTCSS/DCS/DTMF detection. Activity is logged to CSV.\n\n"
+        "Config: [sdr] enabled, channel, device_index, log_file\n");
+    resp_str(r, "error", "usage: sdr [help]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

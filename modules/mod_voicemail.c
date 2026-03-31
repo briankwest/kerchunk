@@ -469,9 +469,27 @@ static int cli_voicemail(int argc, const char **argv, kerchunk_resp_t *r)
         resp_json_raw(r, "]");
         r->jfirst = 0;
     } else {
-        resp_str(r, "error", "Usage: voicemail status");
+        goto usage;
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "Voicemail system\n\n"
+        "  voicemail status\n"
+        "    Show voicemail status: enabled, directory, and per-user\n"
+        "    message counts for all users with voicemail enabled.\n\n"
+        "    DTMF commands (on-air):\n"
+        "      *87#    Check voicemail status (message count)\n"
+        "      *86#    Record a voicemail message\n"
+        "      *85#    Play voicemail messages\n"
+        "      *83#    Delete voicemail messages\n"
+        "      *84#    List voicemail messages\n\n"
+        "    Messages are stored as PCM files in per-user subdirectories.\n"
+        "    Recording stops on COR drop or max duration timeout.\n\n"
+        "Config: [voicemail] enabled, voicemail_dir, max_messages, max_duration\n");
+    resp_str(r, "error", "usage: voicemail status");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {

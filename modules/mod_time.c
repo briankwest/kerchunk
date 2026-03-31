@@ -252,6 +252,8 @@ static void time_unload(void)
 
 static int cli_time(int argc, const char **argv, kerchunk_resp_t *r)
 {
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
     if (argc >= 2 && strcmp(argv[1], "now") == 0) {
         time_announce();
         resp_bool(r, "ok", 1);
@@ -271,6 +273,21 @@ static int cli_time(int argc, const char **argv, kerchunk_resp_t *r)
         resp_str(r, "current", cur);
     }
     return 0;
+
+usage:
+    resp_text_raw(r, "Periodic time announcement\n\n"
+        "  time\n"
+        "    Show time module status: enabled, interval, current time.\n\n"
+        "  time now\n"
+        "    Immediately announce the current time on-air.\n\n"
+        "    Announces local time via TTS or WAV files on a configurable\n"
+        "    interval. Skips if repeater is busy or in emergency mode.\n"
+        "    DTMF *95# always announces regardless of busy state.\n\n"
+        "Config: [time] enabled, interval, timezone\n"
+        "DTMF:   *95#\n");
+    resp_str(r, "error", "usage: time [now]");
+    resp_finish(r);
+    return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
