@@ -111,6 +111,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 .cmd-form input[type="number"] { width: 90px; }
 .cmd-form select { min-width: 90px; }
 .cmd-form .btn { align-self: flex-end; margin-top: 14px; }
+.btn.active-form { background: var(--accent); color: #fff; border-color: var(--accent); }
 .toggle-on { border-color: var(--green); color: var(--green); }
 </style>
 </head>
@@ -243,9 +244,26 @@ function ttsSpeak() {
 
 /* ── Dynamic controls from /api/commands ── */
 
-function toggleForm(id) {
+function toggleForm(id, btn) {
+  /* Close any other open form and deselect its button */
+  document.querySelectorAll('.cmd-form.open').forEach(f => {
+    if (f.id !== id) {
+      f.classList.remove('open');
+      const prev = document.querySelector('.btn.active-form');
+      if (prev && prev.dataset.formId !== id) prev.classList.remove('active-form');
+    }
+  });
+  document.querySelectorAll('.btn.active-form').forEach(b => {
+    if (b.dataset.formId !== id) b.classList.remove('active-form');
+  });
+
   const el = document.getElementById(id);
-  if (el) el.classList.toggle('open');
+  if (!el) return;
+  el.classList.toggle('open');
+  if (btn) {
+    btn.dataset.formId = id;
+    btn.classList.toggle('active-form', el.classList.contains('open'));
+  }
 }
 
 function submitForm(btn, uiCmd) {
@@ -309,7 +327,7 @@ async function buildDynamicControls() {
                    + c.ui_label + '</button>';
         } else if (c.ui_type === 2) {
           /* FORM — button in row, form expands below */
-          buttons += '<button class="btn" onclick="toggleForm(\'' + fid + '\')">'
+          buttons += '<button class="btn" onclick="toggleForm(\'' + fid + '\',this)">'
                    + c.ui_label + '</button>';
           forms += '<div class="cmd-form" id="' + fid + '">';
           if (c.fields) {
