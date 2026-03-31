@@ -25,16 +25,19 @@ Libraries must be installed before building kerchunk:
 - **libssl** (for TLS): `apt install libssl-dev`
 - **librtlsdr** (for SDR module): `apt install librtlsdr-dev`
 - **libasound2** (for ALSA mixer): `apt install libasound2-dev`
+- **libpocsag** (optional, for POCSAG paging): `github.com/briankwest/libpocsag` — detected by pkg-config
+- **libflex** (optional, for FLEX paging): `github.com/briankwest/libflex` — detected by pkg-config
+- **libaprs** (optional, for APRS): `github.com/briankwest/libaprs` — detected by pkg-config
 
 ## Architecture
 
-Lightweight C11 core with event bus, dlopen'd modules (.so), outbound audio queue, Unix socket CLI. Up to 5 threads: audio (20ms), main (20ms), web server, TTS, and NWS polling.
+Lightweight C11 core with event bus, dlopen'd modules (.so), outbound audio queue, Unix socket CLI. 27 modules. Up to 5 threads: audio (20ms), main (20ms), web server, TTS, and NWS polling. Version string includes git hash (e.g. "1.0.1+abc1234", deb package "1.0.1-1+gitabc1234").
 
 Modules receive a `kerchunk_core_t *` vtable in their `load()` callback. They subscribe to events, queue audio, and use timers — never access hardware directly.
 
 ## Sound file conventions
 
-WAV files: **8kHz, 16-bit, mono**. Organized by module under `sounds/`:
+WAV files: **16-bit, mono** (any sample rate -- the queue auto-resamples to the configured rate via `kerchunk_resample()` at load time). Organized by module under `sounds/`:
 
 ```
 sounds/
@@ -51,10 +54,10 @@ Module code references sounds as `<subdir>/<name>` (e.g., `speak_wav("weather/wx
 To generate a new WAV file:
 ```bash
 say -o /tmp/tmp.aiff "the phrase"
-ffmpeg -y -i /tmp/tmp.aiff -ar 8000 -ac 1 -sample_fmt s16 sounds/<subdir>/<name>.wav
+ffmpeg -y -i /tmp/tmp.aiff -ar 48000 -ac 1 -sample_fmt s16 sounds/<subdir>/<name>.wav
 ```
 
-**Do NOT use afconvert** — it ignores the `-r` flag and produces 22050 Hz files that play as garbled chipmunk audio at 8kHz.
+**Do NOT use afconvert** — it ignores the `-r` flag and produces 22050 Hz files. While the queue will resample automatically, afconvert output quality is poor.
 
 ## Module conventions
 
@@ -95,7 +98,11 @@ register_cmd("93", 8, "Weather report");  // *93# → KERCHEVT_CUSTOM + 8
 ```
 Subscribe in the target module: `core->subscribe(KERCHEVT_CUSTOM + 8, handler, NULL);`
 
-Current DTMF commands: `*87#` VM status, `*86#` VM record (own), `*86<id>#` VM record (for user id), `*85#` VM play, `*83#` VM delete, `*84#` VM list, `*41<pin>#` GPIO on, `*40<pin>#` GPIO off, `*93#` weather, `*94#` forecast, `*95#` time, `*911#` emergency on, `*910#` emergency off, `*88#` parrot echo, `*96#` NWS alerts, `*68<6digits>#` OTP authenticate, `*97#` scrambler toggle, `*970#` scrambler off, `*971#`-`*978#` scrambler set code, `*0<digits>#` autopatch dial, `*0#` autopatch hangup.
+Current DTMF commands: `*87#` VM status, `*86#` VM record (own), `*86<id>#` VM record (for user id), `*85#` VM play, `*83#` VM delete, `*84#` VM list, `*41<pin>#` GPIO on, `*40<pin>#` GPIO off, `*93#` weather, `*94#` forecast, `*95#` time, `*911#` emergency on, `*910#` emergency off, `*88#` parrot echo, `*96#` NWS alerts, `*68<6digits>#` OTP authenticate, `*97#` scrambler toggle, `*970#` scrambler off, `*971#`-`*978#` scrambler set code, `*0<digits>#` autopatch dial, `*0#` autopatch hangup, `*98#` APRS force beacon, `*980#` APRS status.
+
+17 core CLI commands: status, help, version, uptime, audio, hid, user, log, diag, play, tone, sim, tts, cwid, caller, emergency, dtmfcmd.
+
+Module CLI commands: pocsag (send/numeric/tone/status), flex (send/numeric/tone/status), aprs (beacon/send/status).
 
 The TTS module uses ElevenLabs API via libcurl. Requires `api_key` in `[tts]` config. Responses are cached as WAV files keyed by text hash in `<sounds_dir>/cache/tts/`.
 The NWS module needs libcurl: `make modules/mod_nws.so` uses `pkg-config --libs libcurl`.
@@ -109,7 +116,7 @@ The NWS module needs libcurl: `make modules/mod_nws.so` uses `pkg-config --libs 
 
 ## Config
 
-INI format. Modules read config in their `configure()` callback via `kerchunk_config_get(cfg, "section", "key")`. Key sections: `[general]`, `[modules]`, `[audio]`, `[repeater]`, `[web]`, `[weather]`, `[time]`, `[caller]`, `[recording]`, `[emergency]`, `[tts]`, `[nws]`, `[otp]`, `[stats]`, `[freeswitch]`, `[scrambler]`, `[sdr]`, `[group.N]`, `[user.N]`.
+INI format. Modules read config in their `configure()` callback via `kerchunk_config_get(cfg, "section", "key")`. Config buffer is 1024 bytes (supports long module load lists). Key sections: `[general]`, `[modules]`, `[audio]` (includes `sample_rate` default 48000, `tx_encode` default off), `[repeater]`, `[web]`, `[weather]`, `[time]`, `[caller]`, `[recording]`, `[emergency]`, `[tts]`, `[nws]`, `[otp]`, `[stats]`, `[freeswitch]`, `[scrambler]`, `[sdr]`, `[pocsag]`, `[flex]`, `[aprs]`, `[group.N]`, `[user.N]`.
 
 ## User DB & Groups
 

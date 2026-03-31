@@ -61,11 +61,15 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
                           │  └──┤      Audio Engine              │  │
                           │     │  capture ring ◄── PortAudio    │  │
                           │     │  playback ring ──► PortAudio   │  │
+                          │     │  ring buffer: 262144 samples   │  │
+                          │     │  (5.5s at 48kHz)               │  │
                           │     │  ALSA mixer init on startup    │  │
+                          │     │  WAV resample via              │  │
+                          │     │  kerchunk_resample() at load   │  │
                           │     └────────────────────────────────┘  │
                           │                                         │
                           │  ┌───────────────────────────────────┐  │
-                          │  │         24 Loaded Modules         │  │
+                          │  │         27 Loaded Modules         │  │
                           │  │  repeater  cwid      courtesy     │  │
                           │  │  caller    dtmfcmd   otp          │  │
                           │  │  voicemail gpio      logger       │  │
@@ -74,6 +78,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
                           │  │  cdr       tts       nws          │  │
                           │  │  stats     web       webhook      │  │
                           │  │  scrambler sdr       freeswitch   │  │
+                          │  │  pocsag    flex      aprs         │  │
                           │  └───────────────────────────────────┘  │
                           └─────────────────────────────────────────┘
 ```
@@ -113,7 +118,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
 
   Thread 5: TTS Worker (cond_wait)
   ├── ElevenLabs API calls (libcurl)
-  ├── PCM16 → 8kHz WAV conversion
+  ├── PCM16 WAV conversion (resampled to configured rate)
   └── Cache management (hash-keyed WAV files)
 
   Thread 6: NWS Poller (cond_wait)
@@ -187,7 +192,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
 | `RECORDING_SAVED` | mod_recorder | cdr, logger, web |
 | `ANNOUNCEMENT` | cwid, weather, time | cdr, logger, web |
 | `CONFIG_RELOAD` | Main loop (SIGHUP) | logger, web |
-| `SHUTDOWN` | Main loop | stats, logger, web |
+| `SHUTDOWN` | Main loop | stats, logger, web (sends shutdown event to SSE/WebSocket; browser uses exponential backoff) |
 | `TICK` | Main loop (20ms) | — |
 | `CUSTOM+0..16` | mod_dtmfcmd | Target modules (voicemail, gpio, weather, etc.) |
 
@@ -202,7 +207,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
                      (lock-free)          │
                                           ▼
                                     ┌───────────┐
-                                    │ Raw Frame │ 160 samples, 8kHz mono
+                                    │ Raw Frame │ 960 samples at 48kHz (20ms, configurable)
                                     └─────┬─────┘
                                           │
                           ┌───────────────┼───────────────┐
@@ -237,7 +242,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
   │ WAV file │     │                                 │
   │ PCM buf  │────►│  1. Assert PTT                  │
   │ Tone gen │     │  2. TX delay (silence + CTCSS)  │
-  │ Silence  │     │  3. Drain frame (160 samples)   │
+  │ Silence  │     │  3. Drain frame (960 samples)   │
   └──────────┘     │  4. Scrambler (if enabled)      │
    (priority       │  5. Mix TX CTCSS/DCS encoder    │
     sorted)        │  6. Write to playback ring      │──► Playback Ring ──► ALSA
@@ -412,11 +417,12 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
                                                   mg_ws_send() to all
                                                   connected clients
 
-  Frame format (328 bytes):
+  Frame format (variable, depends on sample rate):
     [0]    = 0x01 (audio frame marker)
     [1]    = direction (0x00=RX, 0x01=TX)
     [2..3] = sequence number (uint16 LE)
-    [4..323] = 160 PCM16 samples (320 bytes)
+    [4..N] = PCM16 samples (e.g. 960 samples = 1920 bytes at 48kHz)
+    Server communicates sample rate dynamically; AudioWorklets adapt accordingly.
 
   Gates:
     RX tap: only pushes when is_receiving() (COR active)
@@ -549,14 +555,14 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
 
 | Codec | Direction | Rate | Algorithm |
 |-------|-----------|------|-----------|
-| CTCSS encoder | TX | 8kHz | Sine oscillator, configurable amplitude |
-| CTCSS decoder | RX | 8kHz | Goertzel multi-tone, 300ms early confirm |
-| DCS encoder | TX | 8kHz | NRZ FSK at 134.4 bps, Golay(23,12) |
-| DCS decoder | RX | 8kHz | Dual-path (normal + inverted), orbit mapping |
-| DTMF encoder | TX | 8kHz | Dual-tone generation |
-| DTMF decoder | RX | 8kHz | Goertzel, hysteresis state machine |
-| CW ID encoder | TX | 8kHz | Morse at configurable WPM + frequency |
-| Scrambler | RX/TX | 8kHz | Frequency inversion, self-inverse |
+| CTCSS encoder | TX | configurable (default 48kHz) | Sine oscillator, configurable amplitude |
+| CTCSS decoder | RX | configurable (default 48kHz) | Goertzel multi-tone, 300ms early confirm |
+| DCS encoder | TX | configurable (default 48kHz) | NRZ FSK at 134.4 bps, Golay(23,12) |
+| DCS decoder | RX | configurable (default 48kHz) | Dual-path (normal + inverted), orbit mapping |
+| DTMF encoder | TX | configurable (default 48kHz) | Dual-tone generation |
+| DTMF decoder | RX | configurable (default 48kHz) | Goertzel, hysteresis state machine |
+| CW ID encoder | TX | configurable (default 48kHz) | Morse at configurable WPM + frequency |
+| Scrambler | RX/TX | configurable (default 48kHz) | Frequency inversion, self-inverse |
 
 ### DTMF Decoder State Machine
 
@@ -582,7 +588,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
   kerchunk.conf (main config, .gitignored)
   ├── [general]     Callsign, frequency, paths, coordinates
   ├── [modules]     Module path + load order
-  ├── [audio]       PortAudio devices, mixer levels (speaker, mic, AGC)
+  ├── [audio]       PortAudio devices, sample_rate (default 48000), tx_encode, mixer levels
   ├── [hid]         HID device, COR bit/polarity, PTT GPIO pin
   ├── [repeater]    State machine timers, relay mode, TX tone, CW ID
   ├── [web]         HTTP/TLS, auth, PTT, registration
@@ -605,6 +611,9 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
   ├── [logger]      File, rotation size
   ├── [cdr]         Directory
   ├── [parrot]      Max duration
+  ├── [pocsag]      POCSAG paging encoder settings
+  ├── [flex]        FLEX paging encoder settings
+  ├── [aprs]        APRS position reporting, RX/TX, beacon settings
   ├── [group.N]     Group name, TX CTCSS/DCS
   └── [user.N]      Username, callsign, email, ANI, login, access, group, TOTP
 
@@ -619,10 +628,10 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
 ```
   kerchunkd           Daemon binary (links libplcode.a + PortAudio + ALSA)
   kerchunk            CLI binary (connects via Unix socket)
-  modules/*.so        24 dynamically loaded modules
+  modules/*.so        27 dynamically loaded modules
   test_kerchunk       Test binary (234 tests)
   libplcode           External dependency (CTCSS/DCS/DTMF/CW ID codec library)
-  sounds/             WAV files: 8kHz, 16-bit, mono
+  sounds/             WAV files: any sample rate (auto-resampled at load time)
   └── cache/tts/      TTS response cache (hash-keyed WAV files)
   web/                Static HTML/JS/CSS for dashboard
   tools/              Standalone test utilities (ptt_test, sdr_wb_capture, etc.)

@@ -281,14 +281,14 @@ git clone https://github.com/briankwest/kerchunk.git
 cd kerchunk
 autoreconf -fi
 ./configure
-make            # Builds daemon, CLI, and all 24 modules
+make            # Builds daemon, CLI, and all 27 modules
 make check      # Runs the test suite (all must pass)
 ```
 
 Build outputs:
 - `kerchunkd` -- the daemon
 - `kerchunk` -- the CLI tool
-- `modules/*.so` -- 24 loadable modules
+- `modules/*.so` -- 27 loadable modules
 - `test_kerchunk` -- test binary
 
 ### Linux Setup
@@ -390,7 +390,8 @@ The recommended module load order is:
 mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,
 mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,
 mod_txcode,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,
-mod_web,mod_webhook,mod_scrambler,mod_sdr,mod_freeswitch
+mod_web,mod_webhook,mod_scrambler,mod_sdr,mod_freeswitch,
+mod_pocsag,mod_flex,mod_aprs
 ```
 
 Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert announcements.
@@ -399,9 +400,11 @@ Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `sample_rate` | `48000` | Internal audio sample rate (valid: 8000, 16000, 32000, 48000) |
 | `capture_device` | `default` | PortAudio capture device name |
 | `playback_device` | `default` | PortAudio playback device name |
 | `hw_rate` | `0` (auto) | Force hardware sample rate; use `48000` for USB |
+| `tx_encode` | `off` | Mix CTCSS/DCS encoding into TX audio. Default off (repeater handles encoding) |
 | `speaker_volume` | `-1` | ALSA speaker volume (0-151, -1 = don't set) |
 | `mic_volume` | `-1` | ALSA mic volume (0-16, -1 = don't set) |
 | `agc` | (unset) | ALSA AGC switch (`on` or `off`, unset = don't change) |
@@ -644,6 +647,63 @@ DTMF: `*0<digits>#` to dial, `*0#` to hang up. See [FREESWITCH.md](FREESWITCH.md
 
 Requires `librtlsdr-dev`. Tunes to a single channel at 240 kHz, FM demod with CTCSS/DCS/DTMF decoding.
 
+#### `[pocsag]` -- POCSAG Paging
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `off` | Enable POCSAG paging encoder |
+
+Requires [libpocsag](https://github.com/briankwest/libpocsag) (detected by pkg-config at build time).
+
+CLI commands:
+
+```
+kerchunk> pocsag send 1234567 "Meeting at 3pm"   # Send alphanumeric page
+kerchunk> pocsag numeric 1234567 5551234          # Send numeric page
+kerchunk> pocsag tone 1234567                     # Send tone-only page
+kerchunk> pocsag status                           # Show POCSAG status
+```
+
+#### `[flex]` -- FLEX Paging
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `off` | Enable FLEX paging encoder |
+
+Requires [libflex](https://github.com/briankwest/libflex) (detected by pkg-config at build time).
+
+CLI commands:
+
+```
+kerchunk> flex send 1234567 "Meeting at 3pm"      # Send alphanumeric page
+kerchunk> flex numeric 1234567 5551234             # Send numeric page
+kerchunk> flex tone 1234567                        # Send tone-only page
+kerchunk> flex status                              # Show FLEX status
+```
+
+#### `[aprs]` -- APRS Position/Telemetry
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `off` | Enable APRS module |
+| `rx_enabled` | `on` | Decode APRS packets from SDR audio |
+| `tx_enabled` | `off` | Transmit position beacons |
+| `tx_interval` | `600` | Seconds between beacons (600 for GMRS, 120 for HAM) |
+| `tx_path` | `WIDE1-1` | Digipeater path |
+| `tx_comment` | `kerchunkd repeater` | Beacon comment string |
+| `tx_symbol` | `/r` | APRS symbol |
+| `rx_log_file` | `aprs_rx.csv` | RX decode log file |
+
+Requires [libaprs](https://github.com/briankwest/libaprs) (detected by pkg-config at build time). See [APRS.md](APRS.md) for architecture details.
+
+CLI commands:
+
+```
+kerchunk> aprs beacon                              # Force immediate beacon
+kerchunk> aprs send "Hello from the repeater"      # Send APRS message
+kerchunk> aprs status                              # Show APRS status
+```
+
 ### FCC Compliance Settings
 
 kerchunkd includes several features for FCC compliance. These are the key settings administrators should be aware of:
@@ -850,6 +910,15 @@ Features: tab completion, command history, live log streaming, auto-reconnect.
 ```
 kerchunk> status                   # Daemon status
 kerchunk> help                     # List all commands
+kerchunk> version                  # Version and git hash (e.g. 1.0.1+abc1234)
+kerchunk> uptime                   # Daemon uptime
+kerchunk> audio                    # Audio device and sample rate info
+kerchunk> hid                      # HID device status
+kerchunk> user                     # Current user info
+kerchunk> log                      # Log level control
+kerchunk> diag                     # Diagnostics
+kerchunk> play sounds/test.wav     # Play a WAV file
+kerchunk> tone 800 500             # Generate a tone (freq duration_ms)
 kerchunk> stats                    # Channel statistics
 kerchunk> stats user Brian         # Per-user statistics
 kerchunk> caller                   # Current caller info
@@ -858,6 +927,9 @@ kerchunk> otp                      # OTP session status
 kerchunk> voicemail status         # Voicemail status
 kerchunk> cwid now                 # Send CW ID immediately
 kerchunk> dtmfcmd                  # Show DTMF command table
+kerchunk> pocsag send 1234 "Test"  # Send POCSAG page
+kerchunk> flex send 1234 "Test"    # Send FLEX page
+kerchunk> aprs beacon              # Force APRS beacon
 kerchunk> /log debug               # Start log streaming at debug level
 kerchunk> /nolog                   # Stop log streaming
 ```

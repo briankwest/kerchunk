@@ -2,21 +2,24 @@
 
 ## What Exists Today
 
-20 modules, 4 external API integrations (weatherapi.com, NWS, ElevenLabs TTS, Google Maps),
+27 modules, 4 external API integrations (weatherapi.com, NWS, ElevenLabs TTS, Google Maps),
 REST/WebSocket/SSE web dashboard, DTMF command system (16 commands), user/group management,
 CW ID with quiet hours, voicemail, recording, CDR, emergency mode, GPIO control, TOTP auth,
-closed repeater mode, software relay, coverage planner.
+closed repeater mode, software relay, coverage planner, POCSAG paging, FLEX paging, APRS
+position reporting/telemetry.
 
 ---
 
 ## API Integrations Worth Adding
 
-### APRS Gateway (aprs.fi / APRS-IS)
-- Report repeater position to APRS network as an object
-- Show nearby APRS stations on the coverage map
-- Announce APRS messages addressed to the repeater callsign via TTS
-- DTMF command to query position of a callsign (`*97<call>#`)
-- Config: `[aprs]` with callsign, passcode, server, symbol
+### ~~APRS Gateway (aprs.fi / APRS-IS)~~ -- IMPLEMENTED as mod_aprs
+- ~~Report repeater position to APRS network as an object~~
+- ~~Show nearby APRS stations on the coverage map~~
+- ~~Announce APRS messages addressed to the repeater callsign via TTS~~
+- ~~DTMF command to query position of a callsign (`*97<call>#`)~~
+- ~~Config: `[aprs]` with callsign, passcode, server, symbol~~
+- See [APRS.md](APRS.md) for full architecture. CLI: `aprs beacon`, `aprs send`, `aprs status`. DTMF: `*98#` force beacon, `*980#` status.
+- Also implemented: **mod_pocsag** (POCSAG paging via libpocsag) and **mod_flex** (FLEX paging via libflex)
 
 ### Reverse Autopatch / SIP Gateway
 - Outbound SIP/VoIP calls triggered by DTMF sequence
@@ -137,7 +140,7 @@ closed repeater mode, software relay, coverage planner.
 | High | Email/SMS notifications | Medium | Know when something happens without watching |
 | High | MQTT integration | Small | Bridges to entire IoT/automation ecosystem |
 | Medium | Scheduled announcements | Small | Community engagement, net reminders |
-| Medium | APRS gateway | Medium | Ham/GMRS crossover visibility |
+| ~~Medium~~ | ~~APRS gateway~~ | ~~Medium~~ | **DONE** — implemented as mod_aprs (position reporting, packet decoding, AFSK 1200) |
 | Medium | Sunrise/sunset quiet hours | Small | Smarter quiet hour scheduling |
 | Medium | Automatic logbook web page | Medium | Compliance, dispute resolution |
 | Low | SIP gateway | Large | Full autopatch — complex but high value |

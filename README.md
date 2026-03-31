@@ -4,9 +4,9 @@
 
 # kerchunkd — GMRS / Amateur / Part 90 Repeater Controller Daemon
 
-A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode). Supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) operation.
+A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 or AIOC (All-In-One-Cable) USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode). Supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) operation.
 
-**24 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs), parrot/echo, CDR, statistics, recording, TX encoding, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch.
+**27 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs), parrot/echo, CDR, statistics, recording, TX encoding, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry.
 
 **234 tests** — unit + integration test coverage with mock core vtable.
 
@@ -60,6 +60,9 @@ A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 f
   - [mod_sdr — SDR Channel Monitor](#mod_sdr--sdr-channel-monitor)
   - [mod_gpio — GPIO Relay Control](#mod_gpio--gpio-relay-control)
   - [mod_logger — Event Logger](#mod_logger--event-logger)
+  - [mod_pocsag — POCSAG Paging](#mod_pocsag--pocsag-paging)
+  - [mod_flex — FLEX Paging](#mod_flex--flex-paging)
+  - [mod_aprs — APRS Position/Telemetry](#mod_aprs--aprs-positiontelemetry)
 - [General Config](#general-config)
 - [Audio Config](#audio-config)
 - [HID Config](#hid-config)
@@ -99,6 +102,9 @@ kerchunkd supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (
 | **Web PTT (transmit)** | **N** | Y | Y | GMRS: no remote/internet TX |
 | **Voice scrambler** | **N** | **N** | **Y** | Part 90 only — prohibited on GMRS (FCC 95.333) and Amateur (FCC 97.113(a)(4)) |
 | **AutoPatch (FreeSWITCH)** | **N** | Y | Y | GMRS: interconnection ambiguous |
+| POCSAG paging | Y | Y | Y | Brief data transmission |
+| FLEX paging | Y | Y | Y | Brief data transmission |
+| APRS position/telemetry | Y | Y | Y | Brief data transmission, COR gated |
 
 ### Regulatory Notes
 
@@ -186,7 +192,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  └──────────┘  └──────────┘  └──────────┘                     │
 │                                                               │
 │  ┌──────────────────────────────────────────────────────────┐ │
-│  │                  Loaded Modules (24)                     │ │
+│  │                  Loaded Modules (27)                     │ │
 │  │                                                          │ │
 │  │  mod_repeater   RX state machine (IDLE/RECV/TAIL/HANG)   │ │
 │  │  mod_cwid       Morse CW ID + voice ID via TTS           │ │
@@ -212,6 +218,9 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_scrambler  Frequency inversion voice scrambler      │ │
 │  │  mod_sdr        RTL-SDR single-channel monitor           │ │
 │  │  mod_freeswitch FreeSWITCH AutoPatch (Ham only)          │ │
+│  │  mod_pocsag     POCSAG paging encoder/transmitter        │ │
+│  │  mod_flex        FLEX paging encoder/transmitter          │ │
+│  │  mod_aprs       APRS position reporting/telemetry        │ │
 │  └──────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────┘
 ```
@@ -328,15 +337,16 @@ Both state machines are visible in the web dashboard and reported via `/api/stat
 - **PTT refcounting** — multiple modules can hold PTT simultaneously; hardware releases only when all refs drop to zero
 - **Queue auto-PTT** — audio thread asserts PTT when draining, releases when empty
 - **CTCSS/DCS continuous** — tone mixed into TX delay, all audio, TX tail, and relay
-- **Hardware rate adaptation** — `hw_rate` forces PortAudio to device-native sample rate (e.g. 48kHz for USB), with software resampling to/from 8kHz
+- **Configurable sample rate** — internal sample rate defaults to 48kHz (`sample_rate` in `[audio]`, valid: 8000/16000/32000/48000). `hw_rate` forces PortAudio to device-native rate with automatic resampling
+- **WAV resampling** — queued WAV files are automatically resampled at load time via `kerchunk_resample()` to match the configured sample rate
 - **Full-duplex stream** — single PortAudio stream when capture and playback are the same device (shared clock, no drift)
 
 ## Hardware
 
 ```
-RT97L DB9 <──> RIM-Lite v2 (CM108AH USB) <──> Raspberry Pi / Linux / Mac
-                                               ├── PortAudio: audio I/O
-                                               └── HID (hidraw): COR input / PTT output
+RT97L DB9 <──> RIM-Lite v2 / AIOC (CM108AH USB) <──> Raspberry Pi / Linux / Mac
+                                                     ├── PortAudio: audio I/O
+                                                     └── HID (hidraw): COR input / PTT output
 ```
 
 | RIM-Lite | Signal | RT-97S | Notes |
@@ -391,6 +401,9 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="013a", \
 | OpenFst | Optional: TTS text normalization | `brew install openfst` | `apt install libfst-dev` |
 | [libnemo_normalize](https://github.com/briankwest/libnemo_normalize) | Optional: NeMo text normalization | `make install` or .deb | `sudo dpkg -i libnemo-normalize_*.deb` |
 | librtlsdr | Optional: SDR channel monitor | `brew install librtlsdr` | `apt install librtlsdr-dev` |
+| [libpocsag](https://github.com/briankwest/libpocsag) | Optional: POCSAG paging | `make install` or .deb | `sudo dpkg -i libpocsag-dev_*.deb` |
+| [libflex](https://github.com/briankwest/libflex) | Optional: FLEX paging | `make install` or .deb | `sudo dpkg -i libflex-dev_*.deb` |
+| [libaprs](https://github.com/briankwest/libaprs) | Optional: APRS position/telemetry | `make install` or .deb | `sudo dpkg -i libaprs-dev_*.deb` |
 | pkg-config | Build system | (included with Xcode) | `apt install pkg-config` |
 
 ## Building
@@ -407,6 +420,11 @@ sudo apt install librtlsdr-dev
 
 # Optional: TTS text normalization (libnemo-normalize)
 sudo apt install libnemo-normalize-dev libfst-dev
+
+# Optional: Paging and APRS (detected by pkg-config)
+sudo dpkg -i libpocsag-dev_*.deb   # POCSAG paging (mod_pocsag)
+sudo dpkg -i libflex-dev_*.deb     # FLEX paging (mod_flex)
+sudo dpkg -i libaprs-dev_*.deb     # APRS position/telemetry (mod_aprs)
 ```
 
 Build with autotools:
@@ -425,7 +443,7 @@ sudo make install
 Build outputs:
 - `kerchunkd` — the daemon
 - `kerchunk` — interactive CLI
-- `modules/*.so` — 24 loadable modules
+- `modules/*.so` — 27 loadable modules
 - `test_kerchunk` — test suite
 
 ### Linux Setup
@@ -441,6 +459,9 @@ sudo apt install libnemo-normalize-dev libfst-dev
 
 # Optional: for SDR channel monitor
 sudo apt install librtlsdr-dev
+
+# Optional: for paging and APRS (detected by pkg-config)
+sudo dpkg -i libpocsag-dev_*.deb libflex-dev_*.deb libaprs-dev_*.deb
 ```
 
 **Audio group** — PortAudio needs access to ALSA devices (`/dev/snd/*`), which are owned by the `audio` group:
@@ -484,10 +505,21 @@ Features: tab completion, command history, live log streaming, auto-reconnect.
 ```
 kerchunk> status                   # Daemon status (RX/TX state, PTT, COR)
 kerchunk> help                     # Show all commands
+kerchunk> version                  # Version and git hash (e.g. 1.0.1+abc1234)
+kerchunk> uptime                   # Daemon uptime
+kerchunk> audio                    # Audio device and sample rate info
+kerchunk> hid                      # HID device status
+kerchunk> user                     # Current user info
+kerchunk> log                      # Log level control
+kerchunk> diag                     # Diagnostics
+kerchunk> play <file>              # Play a WAV file
+kerchunk> tone <freq> <dur>        # Generate a tone
 kerchunk> /log debug               # Start log streaming
 kerchunk> /nolog                   # Stop log streaming
 kerchunk> exit                     # Exit console
 ```
+
+17 core commands: status, help, version, uptime, audio, hid, user, log, diag, play, tone, sim, tts, cwid, caller, emergency, dtmfcmd.
 
 ### One-shot and Scripting
 
@@ -501,7 +533,7 @@ kerchunk> exit                     # Exit console
 
 ```bash
 ./kerchunk -j status
-{"rx_state":"IDLE","tx_state":"TX_IDLE","ptt":false,"cor":false,"queue":0,"modules":20,"users":2,"emergency":false}
+{"rx_state":"IDLE","tx_state":"TX_IDLE","ptt":false,"cor":false,"queue":0,"modules":27,"users":2,"emergency":false}
 
 ./kerchunk -j stats | jq .channel.duty_pct
 
@@ -541,6 +573,8 @@ kerchunk> sim tx sounds/test.wav   # Queue a WAV file
 | `*97#` | Toggle scrambler on/off | mod_scrambler |
 | `*970#` | Disable scrambler | mod_scrambler |
 | `*971#`-`*978#` | Set scrambler code 1-8 | mod_scrambler |
+| `*98#` | Force immediate APRS beacon | mod_aprs |
+| `*980#` | APRS status report | mod_aprs |
 
 ## Modules
 
@@ -710,7 +744,7 @@ Config section: `[cdr]`
 
 ### mod_tts — Text-to-Speech (ElevenLabs)
 
-Async worker thread. Posts to ElevenLabs, receives PCM at 16kHz, decimates to 8kHz. Responses cached as WAV files keyed by text hash in `<sounds_dir>/cache/tts/`. Use `tts cache-clear` to flush.
+Async worker thread. Posts to ElevenLabs, receives PCM and resamples to the configured sample rate. Responses cached as WAV files keyed by text hash in `<sounds_dir>/cache/tts/`. Use `tts cache-clear` to flush.
 
 Optional text normalization via [libnemo_normalize](https://github.com/briankwest/libnemo_normalize) (requires OpenFst). Normalizes numbers, times, dates, and abbreviations before synthesis so TTS speaks them correctly (e.g., "3:45 PM" → "three forty five PM"). Configure `normalize_far_dir` in `[tts]` to enable.
 
@@ -863,6 +897,24 @@ COR/PTT uses the CM119 USB HID interface, not GPIO — no pin conflicts.
 
 Config section: `[logger]`
 
+### mod_pocsag — POCSAG Paging
+
+Encodes and transmits POCSAG paging messages via the repeater's TX audio path. Requires [libpocsag](https://github.com/briankwest/libpocsag) (detected by pkg-config at build time).
+
+Config section: `[pocsag]`. CLI: `pocsag send <capcode> <message>`, `pocsag numeric <capcode> <digits>`, `pocsag tone <capcode>`, `pocsag status`.
+
+### mod_flex — FLEX Paging
+
+Encodes and transmits FLEX paging messages via the repeater's TX audio path. Requires [libflex](https://github.com/briankwest/libflex) (detected by pkg-config at build time).
+
+Config section: `[flex]`. CLI: `flex send <capcode> <message>`, `flex numeric <capcode> <digits>`, `flex tone <capcode>`, `flex status`.
+
+### mod_aprs — APRS Position/Telemetry
+
+APRS position reporting and packet decoding. TX path generates AFSK 1200 position beacons queued into the audio pipeline. RX path decodes APRS packets from mod_sdr audio. Requires [libaprs](https://github.com/briankwest/libaprs) (detected by pkg-config at build time).
+
+Config section: `[aprs]`. CLI: `aprs beacon`, `aprs send <message>`, `aprs status`. See [APRS.md](APRS.md) for architecture details.
+
 ## General Config
 
 | Key | Type | Default | Description |
@@ -870,7 +922,7 @@ Config section: `[logger]`
 | `callsign` | string | | FCC callsign for CW ID |
 | `frequency` | string | | Output frequency (for display/voice ID) |
 | `offset` | string | | Input offset (for display) |
-| `sample_rate` | int | `8000` | Audio sample rate |
+| `sample_rate` | int | `48000` | Internal audio sample rate (valid: 8000, 16000, 32000, 48000). Moved to `[audio]` section — see Audio Config |
 | `log_level` | string | `info` | `error`, `warn`, `info`, `debug` |
 | `sounds_dir` | string | `./sounds` | WAV file base path |
 | `socket_path` | string | `/tmp/kerchunk.sock` | CLI socket path |
@@ -888,9 +940,11 @@ Config section: `[general]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `sample_rate` | int | `48000` | Internal audio sample rate (valid: 8000, 16000, 32000, 48000) |
 | `capture_device` | string | `default` | PortAudio capture device |
 | `playback_device` | string | `default` | PortAudio playback device |
 | `hw_rate` | int | `0` | Force hardware sample rate (0=auto, 48000 recommended for USB) |
+| `tx_encode` | on/off | `off` | Mix CTCSS/DCS encoding into TX audio. Default off (repeater handles encoding) |
 | `preemphasis` | on/off | `off` | Pre-emphasis filter |
 | `preemphasis_alpha` | float | `0.95` | Pre-emphasis filter coefficient |
 | `speaker_volume` | int | `-1` | ALSA speaker playback volume (0-151, -1=don't set) |

@@ -1,8 +1,10 @@
-# mod_aprs Integration Plan
+# mod_aprs -- APRS Position Reporting and Packet Decoding
 
 ## Overview
 
-Integrate [libaprs](https://github.com/briankwest/libaprs) into kerchunkd for APRS-like position reporting and packet decoding on GMRS and HAM repeaters. Two modes: **receive** (decode APRS packets from SDR) and **transmit** (send short position/telemetry beacons via the repeater's TX audio path).
+mod_aprs integrates [libaprs](https://github.com/briankwest/libaprs) into kerchunkd for APRS position reporting and packet decoding on GMRS and HAM repeaters. Two modes: **receive** (decode APRS packets from SDR) and **transmit** (send short position/telemetry beacons via the repeater's TX audio path).
+
+> **Status:** Implemented. mod_aprs is built when libaprs is detected by pkg-config. Load it by adding `mod_aprs` to the module load list in `[modules]`.
 
 ## Table of Contents
 
@@ -14,9 +16,10 @@ Integrate [libaprs](https://github.com/briankwest/libaprs) into kerchunkd for AP
 - [6. Changes Required](#6-changes-required)
 - [7. Dependencies](#7-dependencies)
 - [8. Web Dashboard Integration](#8-web-dashboard-integration)
-- [9. DTMF Commands](#9-dtmf-commands)
-- [10. Testing](#10-testing)
-- [11. Future Work](#11-future-work)
+- [9. CLI Commands](#9-cli-commands)
+- [10. DTMF Commands](#10-dtmf-commands)
+- [11. Testing](#11-testing)
+- [12. Future Work](#12-future-work)
 
 ## 1. Architecture
 
@@ -210,7 +213,15 @@ TX-only mode works without an SDR -- it just generates and queues audio.
 - **Map overlay** -- decoded station positions plotted on the existing Google Maps coverage page
 - **Activity table** -- callsign, position, timestamp, packet type, SSID
 
-## 9. DTMF Commands
+## 9. CLI Commands
+
+```
+kerchunk> aprs beacon                              # Force immediate position beacon
+kerchunk> aprs send "Hello from the repeater"      # Send an APRS message
+kerchunk> aprs status                              # Show APRS status (packets decoded, last beacon, TX/RX counts)
+```
+
+## 10. DTMF Commands
 
 mod_aprs self-registers via `core->dtmf_register()`:
 
@@ -219,7 +230,7 @@ mod_aprs self-registers via `core->dtmf_register()`:
 | `*98#` | Force immediate beacon (TX if enabled) |
 | `*980#` | Report APRS status (packets decoded, last beacon time) |
 
-## 10. Testing
+## 11. Testing
 
 | Test | Description |
 |------|------------|
@@ -227,9 +238,9 @@ mod_aprs self-registers via `core->dtmf_register()`:
 | Synthetic RX | Feed pre-generated AFSK audio into `sdr_audio_cb`, verify decode |
 | COR gating | Mock COR assert before beacon timer, verify beacon deferred |
 | Config parsing | Verify all `[aprs]` keys parsed with correct defaults |
-| TX audio output | Verify modulated audio is 8 kHz 16-bit mono, correct duration |
+| TX audio output | Verify modulated audio is correct sample rate, 16-bit mono, correct duration |
 
-## 11. Future Work
+## 12. Future Work
 
 - **APRS-IS gateway** -- forward decoded packets to the APRS Internet System (libaprs already has `aprs_is_connect()`)
 - **Two-way messaging** -- receive and respond to APRS messages via DTMF or web UI
