@@ -187,7 +187,6 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
 static int mod_load(kerchunk_core_t *core)
 {
 	g_core = core;
-	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "loaded");
 	return 0;
 }
 
