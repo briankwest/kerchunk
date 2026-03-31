@@ -291,7 +291,10 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "time", "time [now]", "Time status or announce", cli_time },
+    { .name = "time", .usage = "time [now]", .description = "Time status or announce",
+      .handler = cli_time,
+      .category = "Announcements", .ui_label = "Time", .ui_type = CLI_UI_BUTTON,
+      .ui_command = "time now" },
 };
 
 static kerchunk_module_def_t mod_time = {

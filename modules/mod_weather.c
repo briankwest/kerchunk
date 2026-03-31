@@ -624,7 +624,14 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "weather", "weather [now|forecast]", "Weather status/current/forecast", cli_weather },
+    { .name = "weather", .usage = "weather [now|forecast]", .description = "Weather announcements",
+      .handler = cli_weather,
+      .category = "Announcements", .ui_label = "Weather", .ui_type = CLI_UI_BUTTON,
+      .ui_command = "weather now" },
+    { .name = "weather", .usage = "weather forecast", .description = "Weather forecast",
+      .handler = cli_weather,
+      .category = "Announcements", .ui_label = "Forecast", .ui_type = CLI_UI_BUTTON,
+      .ui_command = "weather forecast" },
 };
 
 static kerchunk_module_def_t mod_weather = {
@@ -635,7 +642,7 @@ static kerchunk_module_def_t mod_weather = {
     .configure        = weather_configure,
     .unload           = weather_unload,
     .cli_commands     = cli_cmds,
-    .num_cli_commands = 1,
+    .num_cli_commands = 2,
 };
 
 KERCHUNK_MODULE_DEFINE(mod_weather);

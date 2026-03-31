@@ -514,8 +514,15 @@ usage:
     return -1;
 }
 
+static const kerchunk_ui_field_t tts_fields[] = {
+    { "text", "Text", "text", NULL, "Hello world" },
+};
+
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "tts", "tts say <text> | status | cache-clear", "Text-to-speech (ElevenLabs)", cli_tts },
+    { .name = "tts", .usage = "tts say <text> | status | cache-clear",
+      .description = "Text-to-speech (ElevenLabs)", .handler = cli_tts,
+      .category = "Announcements", .ui_label = "TTS Speak", .ui_type = CLI_UI_FORM,
+      .ui_command = "tts say", .ui_fields = tts_fields, .num_ui_fields = 1 },
 };
 
 static kerchunk_module_def_t mod_tts = {

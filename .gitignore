@@ -84,3 +84,4 @@ sounds/cache/
 *.ddeb
 *.buildinfo
 *.changes
+.dirstamp

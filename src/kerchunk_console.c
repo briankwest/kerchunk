@@ -30,7 +30,7 @@ extern volatile sig_atomic_t g_running;
 
 /* Iteration functions for tab completion */
 extern void kerchunk_socket_iter_core_commands(
-    void (*cb)(const char *name, const char *usage, const char *desc, void *ud),
+    void (*cb)(const kerchunk_cli_cmd_t *cmd, void *ud),
     void *ud);
 
 /* ── Static state ──────────────────────────────────────────────────── */
@@ -76,12 +76,11 @@ static int console_parse_cmd(char *line, const char **argv, int max_argv)
 
 /* ── Tab completion ────────────────────────────────────────────────── */
 
-static void collect_cmd_cb(const char *name, const char *usage,
-                           const char *desc, void *ud)
+static void collect_cmd_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
 {
-    (void)usage; (void)desc; (void)ud;
+    (void)ud;
     if (g_num_cmds < MAX_CMDS) {
-        snprintf(g_cmd_names[g_num_cmds], sizeof(g_cmd_names[0]), "%s", name);
+        snprintf(g_cmd_names[g_num_cmds], sizeof(g_cmd_names[0]), "%s", cmd->name);
         g_num_cmds++;
     }
 }
@@ -119,19 +118,20 @@ typedef struct {
     int         found;
 } help_ctx_t;
 
-static void help_show_cb(const char *name, const char *usage,
-                         const char *desc, void *ud)
+static void help_show_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
 {
     help_ctx_t *ctx = (help_ctx_t *)ud;
     if (ctx->topic) {
-        if (strcmp(ctx->topic, name) == 0) {
-            printf("  %-12s %s\n", "Command:", name);
-            printf("  %-12s %s\n", "Usage:", usage ? usage : name);
-            printf("  %-12s %s\n", "Description:", desc ? desc : "");
+        if (strcmp(ctx->topic, cmd->name) == 0) {
+            printf("  %-12s %s\n", "Command:", cmd->name);
+            printf("  %-12s %s\n", "Usage:", cmd->usage ? cmd->usage : cmd->name);
+            printf("  %-12s %s\n", "Description:", cmd->description ? cmd->description : "");
             ctx->found = 1;
         }
     } else {
-        printf("%-20s %-35s %s\n", name, usage ? usage : name, desc ? desc : "");
+        printf("%-20s %-35s %s\n", cmd->name,
+               cmd->usage ? cmd->usage : cmd->name,
+               cmd->description ? cmd->description : "");
     }
 }
 

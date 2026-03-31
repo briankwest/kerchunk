@@ -399,9 +399,31 @@ static void txcode_unload(void)
 	destroy_encoder();
 }
 
+static const kerchunk_ui_field_t dtmf_fields[] = {
+	{ "digits", "Digits", "text", NULL, "5551234" },
+};
+static const kerchunk_ui_field_t burst_fields[] = {
+	{ "freq", "Frequency", "number", NULL, "1750" },
+	{ "dur",  "Duration (ms)", "number", NULL, "500" },
+};
+static const kerchunk_ui_field_t selcall_fields[] = {
+	{ "digits", "Address", "text", NULL, "12345" },
+	{ "std",    "Standard", "select", "zvei1,ccir,eia", NULL },
+};
+
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ "txcode", "txcode <dtmf|twotone|selcall|burst|mdc|cwid>",
-	  "TX tone encoder and burst tone toolbox", cli_txcode },
+	{ .name = "txcode", .usage = "txcode <dtmf|twotone|selcall|burst|mdc|cwid>",
+	  .description = "TX tone encoder and burst tone toolbox", .handler = cli_txcode,
+	  .category = "Tones", .ui_label = "DTMF", .ui_type = CLI_UI_FORM,
+	  .ui_command = "txcode dtmf", .ui_fields = dtmf_fields, .num_ui_fields = 1 },
+	{ .name = "txcode", .usage = "txcode burst <freq> <dur_ms>",
+	  .description = "Tone burst", .handler = cli_txcode,
+	  .category = "Tones", .ui_label = "Tone Burst", .ui_type = CLI_UI_FORM,
+	  .ui_command = "txcode burst", .ui_fields = burst_fields, .num_ui_fields = 2 },
+	{ .name = "txcode", .usage = "txcode selcall <digits> <std>",
+	  .description = "Selcall encoder", .handler = cli_txcode,
+	  .category = "Tones", .ui_label = "Selcall", .ui_type = CLI_UI_FORM,
+	  .ui_command = "txcode selcall", .ui_fields = selcall_fields, .num_ui_fields = 2 },
 };
 
 static kerchunk_module_def_t mod_txcode = {
@@ -412,7 +434,7 @@ static kerchunk_module_def_t mod_txcode = {
 	.configure        = txcode_configure,
 	.unload           = txcode_unload,
 	.cli_commands     = cli_cmds,
-	.num_cli_commands = 1,
+	.num_cli_commands = 3,
 };
 
 KERCHUNK_MODULE_DEFINE(mod_txcode);

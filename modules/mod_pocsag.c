@@ -161,9 +161,17 @@ usage:
 
 /* ── Module lifecycle ── */
 
+static const kerchunk_ui_field_t pocsag_fields[] = {
+	{ "addr", "Address", "number", NULL, "1234" },
+	{ "baud", "Baud", "select", "512,1200,2400", NULL },
+	{ "msg",  "Message", "text", NULL, "Hello" },
+};
+
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ "pocsag", "pocsag <send|numeric|tone|status> ...",
-	  "POCSAG paging transmitter", cli_pocsag },
+	{ .name = "pocsag", .usage = "pocsag <send|numeric|tone|status> ...",
+	  .description = "POCSAG paging transmitter", .handler = cli_pocsag,
+	  .category = "Paging", .ui_label = "POCSAG Send", .ui_type = CLI_UI_FORM,
+	  .ui_command = "pocsag send", .ui_fields = pocsag_fields, .num_ui_fields = 3 },
 };
 
 static int mod_load(kerchunk_core_t *core)

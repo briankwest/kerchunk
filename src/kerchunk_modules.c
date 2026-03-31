@@ -227,7 +227,7 @@ int kerchunk_module_dispatch_cli(const char *cmd_name, int argc, const char **ar
 }
 
 int kerchunk_module_iter_cli_commands(
-    void (*cb)(const char *name, const char *usage, const char *desc, void *ud),
+    void (*cb)(const kerchunk_cli_cmd_t *cmd, void *ud),
     void *ud)
 {
     int count = 0;
@@ -235,9 +235,8 @@ int kerchunk_module_iter_cli_commands(
         if (!g_modules[i].loaded || !g_modules[i].def->cli_commands)
             continue;
         for (int j = 0; j < g_modules[i].def->num_cli_commands; j++) {
-            const kerchunk_cli_cmd_t *cmd = &g_modules[i].def->cli_commands[j];
             if (cb)
-                cb(cmd->name, cmd->usage, cmd->description, ud);
+                cb(&g_modules[i].def->cli_commands[j], ud);
             count++;
         }
     }

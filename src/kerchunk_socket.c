@@ -38,16 +38,7 @@
 #define EVT_RING_SIZE 64
 #define EVT_LINE_MAX  520
 
-/* Core command handler (layout must match core_cmd_entry_t in main.c) */
-typedef int (*core_cmd_handler_t)(int argc, const char **argv,
-                                  kerchunk_resp_t *resp);
-
-typedef struct {
-    const char         *name;
-    core_cmd_handler_t  handler;
-    const char         *usage;
-    const char         *description;
-} core_cmd_t;
+/* Core commands — uses kerchunk_cli_cmd_t directly (from kerchunk_module.h) */
 
 /* Per-client connection state */
 typedef struct {
@@ -69,8 +60,8 @@ static client_slot_t   g_clients[MAX_CLIENTS];
 static pthread_mutex_t g_client_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char            g_socket_path[108] = "/run/kerchunk/kerchunk.sock";
 
-static const core_cmd_t *g_core_cmds;
-static int               g_num_core_cmds;
+static const kerchunk_cli_cmd_t *g_core_cmds;
+static int                       g_num_core_cmds;
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
@@ -201,13 +192,14 @@ static int parse_cmd(char *line, const char **argv, int max_argv)
 
 /* ── Meta-commands ─────────────────────────────────────────────────── */
 
-static void cmd_iter_cb(const char *name, const char *usage,
-                        const char *desc, void *ud)
+static void cmd_iter_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
 {
     client_slot_t *c = (client_slot_t *)ud;
     char line[512];
     int n = snprintf(line, sizeof(line), "R %s\t%s\t%s\n",
-                     name, usage ? usage : name, desc ? desc : "");
+                     cmd->name,
+                     cmd->usage ? cmd->usage : cmd->name,
+                     cmd->description ? cmd->description : "");
     write_all(c->fd, line, (size_t)n);
 }
 
@@ -475,22 +467,19 @@ void kerchunk_socket_shutdown(void)
     unlink(g_socket_path);
 }
 
-void kerchunk_socket_set_core_commands(const core_cmd_t *cmds, int count)
+void kerchunk_socket_set_core_commands(const kerchunk_cli_cmd_t *cmds, int count)
 {
     g_core_cmds     = cmds;
     g_num_core_cmds = count;
 }
 
 void kerchunk_socket_iter_core_commands(
-    void (*cb)(const char *name, const char *usage, const char *desc, void *ud),
+    void (*cb)(const kerchunk_cli_cmd_t *cmd, void *ud),
     void *ud)
 {
     if (!cb || !g_core_cmds) return;
     for (int i = 0; i < g_num_core_cmds; i++) {
-        cb(g_core_cmds[i].name,
-           g_core_cmds[i].usage ? g_core_cmds[i].usage : g_core_cmds[i].name,
-           g_core_cmds[i].description ? g_core_cmds[i].description : "",
-           ud);
+        cb(&g_core_cmds[i], ud);
     }
 }
 

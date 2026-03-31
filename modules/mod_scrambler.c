@@ -357,8 +357,10 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "scrambler", "scrambler [on|off|code <N>]",
-      "Voice scrambler status/control", cli_scrambler },
+    { .name = "scrambler", .usage = "scrambler [on|off|code <N>]",
+      .description = "Voice scrambler status/control", .handler = cli_scrambler,
+      .category = "Control", .ui_label = "Scrambler", .ui_type = CLI_UI_TOGGLE,
+      .ui_command = "scrambler" },
 };
 
 static kerchunk_module_def_t mod_scrambler = {

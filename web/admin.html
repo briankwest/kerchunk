@@ -92,6 +92,20 @@ input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: va
 input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px;
                                              background: var(--accent); border-radius: 50%;
                                              margin-top: -9px; }
+
+/* Dynamic controls */
+.ctrl-category { margin-top: 12px; }
+.ctrl-category h2 { font-size: 11px; color: var(--dim); text-transform: uppercase;
+                     letter-spacing: 1px; margin-bottom: 6px; }
+.ctrl-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.cmd-form { display: none; margin-top: 6px; padding: 8px; background: var(--bg);
+            border: 1px solid var(--border); border-radius: 5px; font-size: 12px; }
+.cmd-form.open { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cmd-form label { color: var(--dim); display: flex; align-items: center; gap: 4px; }
+.cmd-form input, .cmd-form select { padding: 4px 6px; background: var(--card); border: 1px solid var(--border);
+            color: var(--text); border-radius: 4px; font-size: 12px; }
+.cmd-form select { min-width: 80px; }
+.toggle-on { border-color: var(--green); color: var(--green); }
 </style>
 </head>
 <body>
@@ -153,23 +167,14 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
     <div id="hist" class="hist"></div>
   </div>
 
-  <!-- Controls & Alerts -->
+  <!-- Dynamic Controls -->
   <div class="card">
-    <h2>Controls</h2>
+    <h2>Simulation</h2>
     <div class="controls">
       <button class="btn" onclick="cmd('sim cor on')">COR On</button>
       <button class="btn" onclick="cmd('sim cor off')">COR Off</button>
-      <button class="btn" onclick="cmd('cwid now')">CW ID</button>
-      <button class="btn" onclick="cmd('weather now');setTimeout(refreshWeather,2000)">Weather</button>
-      <button class="btn" onclick="cmd('weather forecast');setTimeout(refreshWeather,2000)">Forecast</button>
-      <button class="btn" onclick="cmd('time now')">Time</button>
-      <button class="btn" onclick="cmd('nws announce');setTimeout(refreshAlerts,2000)">NWS Alerts</button>
-      <button class="btn" onclick="reloadConfig()">Reload Config</button>
     </div>
-    <div class="tts-row">
-      <input class="tts-input" id="tts-text" placeholder="TTS text..." onkeydown="if(event.key==='Enter')ttsSpeak()">
-      <button class="btn" onclick="ttsSpeak()">Speak</button>
-    </div>
+    <div id="dynamic-controls"></div>
     <h2 style="margin-top:12px">NWS Alerts</h2>
     <div id="alerts" style="font-size:12px">None</div>
     <h2 style="margin-top:12px">Users</h2>
@@ -228,6 +233,106 @@ async function cmd(c) {
 function ttsSpeak() {
   const t=document.getElementById('tts-text').value;
   if(t){cmd('tts say "'+t.replace(/"/g,'')+'"');document.getElementById('tts-text').value='';}
+}
+
+/* ── Dynamic controls from /api/commands ── */
+
+function toggleForm(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('open');
+}
+
+function submitForm(btn, uiCmd) {
+  const form = btn.closest('.cmd-form');
+  const inputs = form.querySelectorAll('[data-field]');
+  let args = [];
+  inputs.forEach(inp => {
+    const v = inp.value.trim();
+    if (v) args.push(v.indexOf(' ') >= 0 ? '"' + v.replace(/"/g, '') + '"' : v);
+  });
+  cmd(uiCmd + ' ' + args.join(' '));
+  // Flash button
+  btn.textContent = 'Sent';
+  setTimeout(() => { btn.textContent = 'Send'; }, 800);
+}
+
+function toggleCmd(uiCmd, btn) {
+  const isOn = btn.classList.contains('toggle-on');
+  const newState = isOn ? 'off' : 'on';
+  cmd(uiCmd + ' ' + newState);
+  btn.classList.toggle('toggle-on');
+  btn.textContent = btn.dataset.label + ' ' + (isOn ? 'OFF' : 'ON');
+}
+
+async function buildDynamicControls() {
+  try {
+    const d = await fetchJSON('/api/commands');
+    if (!d.commands) return;
+
+    // Filter commands with ui_type > 0
+    const uiCmds = d.commands.filter(c => c.ui_type && c.ui_type > 0);
+    if (uiCmds.length === 0) return;
+
+    // Group by category
+    const groups = {};
+    uiCmds.forEach(c => {
+      const cat = c.category || 'Other';
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(c);
+    });
+
+    // Desired category order
+    const order = ['Identification','Announcements','Paging','Tones','Audio','Control'];
+    const cats = order.filter(c => groups[c]);
+    Object.keys(groups).forEach(c => { if (cats.indexOf(c) < 0) cats.push(c); });
+
+    let html = '';
+    let formId = 0;
+
+    cats.forEach(cat => {
+      html += '<div class="ctrl-category"><h2>' + cat + '</h2><div class="ctrl-group">';
+      groups[cat].forEach(c => {
+        const fid = 'dform-' + (formId++);
+        if (c.ui_type === 1) {
+          // BUTTON
+          html += '<button class="btn" onclick="cmd(\'' + c.ui_command + '\')">'
+                + c.ui_label + '</button>';
+        } else if (c.ui_type === 2) {
+          // FORM — show/hide toggle button + inline form
+          html += '<button class="btn" onclick="toggleForm(\'' + fid + '\')">'
+                + c.ui_label + '</button>';
+          html += '<div class="cmd-form" id="' + fid + '">';
+          if (c.fields) {
+            c.fields.forEach(f => {
+              html += '<label>' + f.label + ': ';
+              if (f.type === 'select' && f.options) {
+                html += '<select data-field="' + f.name + '">';
+                f.options.split(',').forEach(o => { html += '<option>' + o + '</option>'; });
+                html += '</select>';
+              } else if (f.type === 'number') {
+                html += '<input type="number" data-field="' + f.name + '" placeholder="'
+                      + (f.placeholder || '') + '" style="width:80px">';
+              } else {
+                html += '<input type="text" data-field="' + f.name + '" placeholder="'
+                      + (f.placeholder || '') + '" style="width:150px">';
+              }
+              html += '</label>';
+            });
+          }
+          html += '<button class="btn" onclick="submitForm(this,\'' + c.ui_command + '\')">Send</button>';
+          html += '</div>';
+        } else if (c.ui_type === 3) {
+          // TOGGLE
+          html += '<button class="btn" data-label="' + c.ui_label
+                + '" onclick="toggleCmd(\'' + c.ui_command + '\',this)">'
+                + c.ui_label + '</button>';
+        }
+      });
+      html += '</div></div>';
+    });
+
+    document.getElementById('dynamic-controls').innerHTML = html;
+  } catch(e) { /* commands endpoint unavailable */ }
 }
 
 function fmtMs(ms) {
@@ -676,6 +781,7 @@ function setAudioVolume(v) {
   refreshAlerts();
   refreshWeather();
   refreshUsers();
+  buildDynamicControls();
   connectSSE();
   setInterval(renderStats,1000);   // live tick — uptime + active timers
   setInterval(refreshStats,30000); // full server sync

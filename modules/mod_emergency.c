@@ -166,7 +166,10 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "emergency", "emergency", "Emergency mode status", cli_emergency },
+    { .name = "emergency", .usage = "emergency", .description = "Emergency mode status",
+      .handler = cli_emergency,
+      .category = "Control", .ui_label = "Emergency", .ui_type = CLI_UI_TOGGLE,
+      .ui_command = "emergency" },
 };
 
 static kerchunk_module_def_t mod_emergency = {

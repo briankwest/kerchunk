@@ -169,9 +169,17 @@ usage:
 	return -1;
 }
 
+static const kerchunk_ui_field_t flex_fields[] = {
+	{ "capcode", "Capcode", "number", NULL, "101000" },
+	{ "speed",   "Speed",   "select", "1600,3200", NULL },
+	{ "msg",     "Message", "text", NULL, "Hello FLEX" },
+};
+
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ "flex", "flex <send|numeric|tone|status> ...",
-	  "FLEX paging transmitter", cli_flex },
+	{ .name = "flex", .usage = "flex <send|numeric|tone|status> ...",
+	  .description = "FLEX paging transmitter", .handler = cli_flex,
+	  .category = "Paging", .ui_label = "FLEX Send", .ui_type = CLI_UI_FORM,
+	  .ui_command = "flex send", .ui_fields = flex_fields, .num_ui_fields = 3 },
 };
 
 static int mod_load(kerchunk_core_t *core)

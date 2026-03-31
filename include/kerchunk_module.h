@@ -11,12 +11,35 @@
 typedef struct kerchunk_core kerchunk_core_t;
 typedef struct kerchunk_config kerchunk_config_t;
 
+/* UI widget types for dashboard auto-generation */
+#define CLI_UI_NONE    0   /* don't show in dashboard */
+#define CLI_UI_BUTTON  1   /* simple button, fires command directly */
+#define CLI_UI_FORM    2   /* button that opens input form with fields */
+#define CLI_UI_TOGGLE  3   /* on/off toggle switch */
+
+/* Input field descriptor for CLI_UI_FORM commands */
+typedef struct {
+    const char *name;       /* field name (used in command string) */
+    const char *label;      /* display label */
+    const char *type;       /* "text", "number", "select" */
+    const char *options;    /* comma-separated for select, NULL otherwise */
+    const char *placeholder;/* hint text, NULL for none */
+} kerchunk_ui_field_t;
+
 /* CLI command handler — populates a response object (struct kerchunk_resp from kerchunk.h) */
 typedef struct {
     const char *name;
     const char *usage;
     const char *description;
     int (*handler)(int argc, const char **argv, struct kerchunk_resp *resp);
+
+    /* UI hints (all optional — NULL/0 = not shown in dashboard) */
+    const char *category;                  /* grouping label */
+    const char *ui_label;                  /* short button label */
+    int         ui_type;                   /* CLI_UI_BUTTON / FORM / TOGGLE */
+    const char *ui_command;                /* command string to fire */
+    const kerchunk_ui_field_t *ui_fields;  /* input fields for FORM */
+    int         num_ui_fields;
 } kerchunk_cli_cmd_t;
 
 /* Module descriptor */
@@ -63,7 +86,7 @@ int  kerchunk_module_dispatch_cli(const char *cmd_name, int argc, const char **a
 
 /* Iterate all CLI commands from loaded modules */
 int  kerchunk_module_iter_cli_commands(
-    void (*cb)(const char *name, const char *usage, const char *desc, void *ud),
+    void (*cb)(const kerchunk_cli_cmd_t *cmd, void *ud),
     void *ud);
 
 #endif /* KERCHUNK_MODULE_H */

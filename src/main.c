@@ -679,35 +679,67 @@ static int cmd_sim(int argc, const char **argv, kerchunk_resp_t *r)
     return 0;
 }
 
-typedef struct {
-    const char *name;
-    int (*handler)(int argc, const char **argv, kerchunk_resp_t *resp);
-    const char *usage;
-    const char *description;
-} core_cmd_entry_t;
+/* UI field descriptors for core FORM commands */
+static const kerchunk_ui_field_t tone_fields[] = {
+    { "freq",     "Frequency (Hz)", "number", NULL, "1000" },
+    { "duration", "Duration (ms)",  "number", NULL, "500" },
+};
+static const kerchunk_ui_field_t play_fields[] = {
+    { "path", "File Path", "text", NULL, "/path/to/file.wav" },
+};
+static const kerchunk_ui_field_t log_fields[] = {
+    { "level", "Level", "select", "error,warn,info,debug", NULL },
+};
 
-static const core_cmd_entry_t g_core_cmds[] = {
-    { "status",   cmd_status,   "status",                          "Show daemon status" },
-    { "version",  cmd_version,  "version",                         "Show version and build info" },
-    { "uptime",   cmd_uptime,   "uptime",                          "Show uptime and summary" },
-    { "audio",    cmd_audio,    "audio",                           "Show audio device info" },
-    { "hid",      cmd_hid,      "hid",                             "Show HID device status" },
-    { "user",     cmd_user,     "user list|lookup <id|ani>",       "User database" },
-    { "log",      cmd_log,      "log level [error|warn|info|debug]", "Get/set log level" },
-    { "diag",     cmd_diag,     "diag",                            "Quick system health check" },
-    { "play",     cmd_play,     "play <path.wav>",                 "Play a WAV file" },
-    { "tone",     cmd_tone,     "tone <freq_hz> <duration_ms>",    "Play a test tone" },
-    { "ptt",      cmd_ptt,      "ptt on|off",                      "Manual PTT control" },
-    { "queue",    cmd_queue,    "queue list|inject <path>|flush",   "Audio queue management" },
-    { "module",   cmd_module,   "module list|load|unload|reload <name>", "Module management" },
-    { "event",    cmd_event,    "event list",                       "Show event subscriptions" },
-    { "config",   cmd_config,   "config reload",                    "Reload configuration" },
-    { "sim",      cmd_sim,      "sim cor|dtmf|tx <args>",            "Simulate radio events" },
-    { "shutdown", cmd_shutdown, "shutdown",                          "Stop the daemon" },
+static const kerchunk_cli_cmd_t g_core_cmds[] = {
+    { .name = "status",   .usage = "status",                          .description = "Show daemon status",
+      .handler = cmd_status },
+    { .name = "version",  .usage = "version",                         .description = "Show version and build info",
+      .handler = cmd_version },
+    { .name = "uptime",   .usage = "uptime",                          .description = "Show uptime and summary",
+      .handler = cmd_uptime },
+    { .name = "audio",    .usage = "audio",                           .description = "Show audio device info",
+      .handler = cmd_audio },
+    { .name = "hid",      .usage = "hid",                             .description = "Show HID device status",
+      .handler = cmd_hid },
+    { .name = "user",     .usage = "user list|lookup <id|ani>",       .description = "User database",
+      .handler = cmd_user },
+    { .name = "log",      .usage = "log level [error|warn|info|debug]", .description = "Get/set log level",
+      .handler = cmd_log,
+      .category = "Control", .ui_label = "Log Level", .ui_type = CLI_UI_FORM,
+      .ui_command = "log level", .ui_fields = log_fields, .num_ui_fields = 1 },
+    { .name = "diag",     .usage = "diag",                            .description = "Quick system health check",
+      .handler = cmd_diag },
+    { .name = "play",     .usage = "play <path.wav>",                 .description = "Play a WAV file",
+      .handler = cmd_play,
+      .category = "Audio", .ui_label = "Play File", .ui_type = CLI_UI_FORM,
+      .ui_command = "play", .ui_fields = play_fields, .num_ui_fields = 1 },
+    { .name = "tone",     .usage = "tone <freq_hz> <duration_ms>",    .description = "Play a test tone",
+      .handler = cmd_tone,
+      .category = "Tones", .ui_label = "Test Tone", .ui_type = CLI_UI_FORM,
+      .ui_command = "tone", .ui_fields = tone_fields, .num_ui_fields = 2 },
+    { .name = "ptt",      .usage = "ptt on|off",                      .description = "Manual PTT control",
+      .handler = cmd_ptt,
+      .category = "Control", .ui_label = "PTT", .ui_type = CLI_UI_TOGGLE,
+      .ui_command = "ptt" },
+    { .name = "queue",    .usage = "queue list|inject <path>|flush",   .description = "Audio queue management",
+      .handler = cmd_queue },
+    { .name = "module",   .usage = "module list|load|unload|reload <name>", .description = "Module management",
+      .handler = cmd_module },
+    { .name = "event",    .usage = "event list",                       .description = "Show event subscriptions",
+      .handler = cmd_event },
+    { .name = "config",   .usage = "config reload",                    .description = "Reload configuration",
+      .handler = cmd_config,
+      .category = "Control", .ui_label = "Reload Config", .ui_type = CLI_UI_BUTTON,
+      .ui_command = "config reload" },
+    { .name = "sim",      .usage = "sim cor|dtmf|tx <args>",            .description = "Simulate radio events",
+      .handler = cmd_sim },
+    { .name = "shutdown", .usage = "shutdown",                          .description = "Stop the daemon",
+      .handler = cmd_shutdown },
 };
 #define NUM_CORE_CMDS (int)(sizeof(g_core_cmds) / sizeof(g_core_cmds[0]))
 
-extern void kerchunk_socket_set_core_commands(const core_cmd_entry_t *cmds, int count);
+extern void kerchunk_socket_set_core_commands(const kerchunk_cli_cmd_t *cmds, int count);
 
 /* ════════════════════════════════════════════════════════════════════
  *  Audio thread — runs DSP + queue drain on a tight cadence

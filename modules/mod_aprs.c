@@ -191,9 +191,20 @@ usage:
 	return -1;
 }
 
+static const kerchunk_ui_field_t aprs_send_fields[] = {
+	{ "callsign", "Callsign", "text", NULL, "W3ADO-1" },
+	{ "msg",      "Message",  "text", NULL, "Hello" },
+};
+
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ "aprs", "aprs <beacon|send|status> ...",
-	  "APRS beacon and message transmitter", cli_aprs },
+	{ .name = "aprs", .usage = "aprs <beacon|send|status>", .description = "APRS beacon",
+	  .handler = cli_aprs,
+	  .category = "Paging", .ui_label = "APRS Beacon", .ui_type = CLI_UI_BUTTON,
+	  .ui_command = "aprs beacon" },
+	{ .name = "aprs", .usage = "aprs send <call> <msg>", .description = "APRS message",
+	  .handler = cli_aprs,
+	  .category = "Paging", .ui_label = "APRS Send", .ui_type = CLI_UI_FORM,
+	  .ui_command = "aprs send", .ui_fields = aprs_send_fields, .num_ui_fields = 2 },
 };
 
 static int mod_load(kerchunk_core_t *core)
@@ -238,7 +249,7 @@ static const kerchunk_module_def_t mod_def = {
 	.configure    = mod_configure,
 	.unload       = mod_unload,
 	.cli_commands     = cli_cmds,
-	.num_cli_commands = sizeof(cli_cmds) / sizeof(cli_cmds[0]),
+	.num_cli_commands = 2,
 };
 
 KERCHUNK_MODULE_DEFINE(mod_def);

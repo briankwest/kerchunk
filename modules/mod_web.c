@@ -467,10 +467,12 @@ static const api_special_route_t g_special_routes[] = {
 
 /* Core command iteration (provided by kerchunk_socket.c) */
 extern void kerchunk_socket_iter_core_commands(
-    void (*cb)(const char *name, const char *usage, const char *desc, void *ud),
+    void (*cb)(const kerchunk_cli_cmd_t *cmd, void *ud),
     void *ud);
 
 /* ── /api/commands — list all available API commands ── */
+
+#define CMD_LIST_MAX 16384
 
 typedef struct {
     char *buf;
@@ -479,21 +481,57 @@ typedef struct {
     int   first;
 } cmd_list_ctx_t;
 
-static void cmd_list_cb(const char *name, const char *usage,
-                         const char *desc, void *ud)
+static void cmd_list_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
 {
     cmd_list_ctx_t *ctx = (cmd_list_ctx_t *)ud;
-    if (ctx->off >= ctx->max - 128) return;
+    if (ctx->off >= ctx->max - 256) return;
     if (!ctx->first) ctx->buf[ctx->off++] = ',';
     ctx->first = 0;
+
     ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
-        "{\"name\":\"%s\",\"usage\":\"%s\",\"description\":\"%s\"}",
-        name, usage ? usage : name, desc ? desc : "");
+        "{\"name\":\"%s\",\"usage\":\"%s\",\"description\":\"%s\"",
+        cmd->name, cmd->usage ? cmd->usage : cmd->name,
+        cmd->description ? cmd->description : "");
+
+    if (cmd->category)
+        ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
+            ",\"category\":\"%s\"", cmd->category);
+    if (cmd->ui_label)
+        ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
+            ",\"ui_label\":\"%s\"", cmd->ui_label);
+    if (cmd->ui_type)
+        ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
+            ",\"ui_type\":%d", cmd->ui_type);
+    if (cmd->ui_command)
+        ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
+            ",\"ui_command\":\"%s\"", cmd->ui_command);
+
+    /* Serialize fields array for FORM types */
+    if (cmd->ui_fields && cmd->num_ui_fields > 0) {
+        ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off, ",\"fields\":[");
+        for (int i = 0; i < cmd->num_ui_fields; i++) {
+            const kerchunk_ui_field_t *f = &cmd->ui_fields[i];
+            if (i > 0) ctx->buf[ctx->off++] = ',';
+            ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
+                "{\"name\":\"%s\",\"label\":\"%s\",\"type\":\"%s\"",
+                f->name, f->label, f->type);
+            if (f->options)
+                ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
+                    ",\"options\":\"%s\"", f->options);
+            if (f->placeholder)
+                ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
+                    ",\"placeholder\":\"%s\"", f->placeholder);
+            ctx->buf[ctx->off++] = '}';
+        }
+        ctx->buf[ctx->off++] = ']';
+    }
+
+    ctx->buf[ctx->off++] = '}';
 }
 
 static void handle_api_commands(struct mg_connection *c)
 {
-    char buf[RESP_MAX];
+    char buf[CMD_LIST_MAX];
     int off = snprintf(buf, sizeof(buf), "{\"commands\":[");
     cmd_list_ctx_t ctx = { buf, off, (int)sizeof(buf), 1 };
 
