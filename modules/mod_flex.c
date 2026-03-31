@@ -2,13 +2,10 @@
  * mod_flex.c — FLEX paging transmitter
  *
  * CLI:
- *   flex send <capcode> <message>           Send alphanumeric page (1600/2)
- *   flex send <capcode> <speed> <message>   Send with explicit speed
+ *   flex send <capcode> [speed] <message>   Send alphanumeric page
  *   flex tone <capcode>                     Send tone-only page
  *   flex numeric <capcode> <digits>         Send numeric page
  *   flex status                             Show module status
- *
- * Speed: 1600, 3200 (default 1600)
  *
  * Config [flex]:
  *   enabled = on
@@ -30,8 +27,6 @@ static int g_enabled = 1;
 static int g_tx_count = 0;
 static flex_speed_t g_default_speed = FLEX_SPEED_1600_2;
 
-/* ── Transmit a FLEX page ── */
-
 static int flex_tx(uint32_t capcode, flex_msg_type_t type,
                    flex_speed_t speed, const char *text)
 {
@@ -48,7 +43,6 @@ static int flex_tx(uint32_t capcode, flex_msg_type_t type,
 		return -1;
 	}
 
-	/* baseband at 8 kHz (kerchunk internal rate) */
 	float fbuf[512000];
 	size_t ns = 0;
 	err = flex_baseband(bitbuf, bits, speed,
@@ -86,98 +80,82 @@ static flex_speed_t parse_speed(const char *s)
 	}
 }
 
-/* ── CLI handlers ── */
-
-static int cmd_send(int argc, const char **argv, kerchunk_resp_t *resp)
+static int cli_flex(int argc, const char **argv, kerchunk_resp_t *resp)
 {
-	if (argc < 3) {
-		resp_str(resp, "error", "usage: flex send <capcode> [speed] <message>");
-		resp_finish(resp);
-		return -1;
-	}
+	if (argc < 2) goto usage;
 
-	uint32_t capcode = (uint32_t)strtoul(argv[1], NULL, 10);
-	flex_speed_t speed = g_default_speed;
-	int msg_start = 2;
+	const char *sub = argv[1];
 
-	/* check if argv[2] is a speed number */
-	if (argc >= 4) {
-		int maybe_speed = atoi(argv[2]);
-		if (maybe_speed == 1600 || maybe_speed == 3200) {
-			speed = parse_speed(argv[2]);
-			msg_start = 3;
+	if (strcmp(sub, "send") == 0) {
+		if (argc < 4) {
+			resp_str(resp, "error", "usage: flex send <capcode> [speed] <message>");
+			resp_finish(resp);
+			return -1;
 		}
+		uint32_t capcode = (uint32_t)strtoul(argv[2], NULL, 10);
+		flex_speed_t speed = g_default_speed;
+		int msg_start = 3;
+
+		if (argc >= 5) {
+			int maybe = atoi(argv[3]);
+			if (maybe == 1600 || maybe == 3200) {
+				speed = parse_speed(argv[3]);
+				msg_start = 4;
+			}
+		}
+
+		char msg[512] = {0};
+		for (int i = msg_start; i < argc; i++) {
+			if (i > msg_start) strncat(msg, " ", sizeof(msg) - strlen(msg) - 1);
+			strncat(msg, argv[i], sizeof(msg) - strlen(msg) - 1);
+		}
+
+		int rc = flex_tx(capcode, FLEX_MSG_ALPHA, speed, msg);
+		resp_str(resp, "status", rc == 0 ? "queued" : "error");
+		if (rc == 0) {
+			resp_int(resp, "capcode", (int)capcode);
+			resp_int(resp, "speed", flex_speed_bps(speed));
+			resp_str(resp, "message", msg);
+		}
+	} else if (strcmp(sub, "numeric") == 0) {
+		if (argc < 4) {
+			resp_str(resp, "error", "usage: flex numeric <capcode> <digits>");
+			resp_finish(resp);
+			return -1;
+		}
+		uint32_t capcode = (uint32_t)strtoul(argv[2], NULL, 10);
+		int rc = flex_tx(capcode, FLEX_MSG_NUMERIC, g_default_speed, argv[3]);
+		resp_str(resp, "status", rc == 0 ? "queued" : "error");
+	} else if (strcmp(sub, "tone") == 0) {
+		if (argc < 3) {
+			resp_str(resp, "error", "usage: flex tone <capcode>");
+			resp_finish(resp);
+			return -1;
+		}
+		uint32_t capcode = (uint32_t)strtoul(argv[2], NULL, 10);
+		int rc = flex_tx(capcode, FLEX_MSG_TONE_ONLY, g_default_speed, NULL);
+		resp_str(resp, "status", rc == 0 ? "queued" : "error");
+	} else if (strcmp(sub, "status") == 0) {
+		resp_str(resp, "module", "mod_flex");
+		resp_bool(resp, "enabled", g_enabled);
+		resp_int(resp, "tx_count", g_tx_count);
+		resp_int(resp, "default_speed", flex_speed_bps(g_default_speed));
+	} else {
+		goto usage;
 	}
 
-	char msg[512] = {0};
-	for (int i = msg_start; i < argc; i++) {
-		if (i > msg_start) strncat(msg, " ", sizeof(msg) - strlen(msg) - 1);
-		strncat(msg, argv[i], sizeof(msg) - strlen(msg) - 1);
-	}
-
-	int rc = flex_tx(capcode, FLEX_MSG_ALPHA, speed, msg);
-	resp_str(resp, "status", rc == 0 ? "queued" : "error");
-	if (rc == 0) {
-		resp_int(resp, "capcode", (int)capcode);
-		resp_int(resp, "speed", flex_speed_bps(speed));
-		resp_str(resp, "message", msg);
-	}
-	resp_finish(resp);
-	return rc;
-}
-
-static int cmd_numeric(int argc, const char **argv, kerchunk_resp_t *resp)
-{
-	if (argc < 3) {
-		resp_str(resp, "error", "usage: flex numeric <capcode> <digits>");
-		resp_finish(resp);
-		return -1;
-	}
-	uint32_t capcode = (uint32_t)strtoul(argv[1], NULL, 10);
-
-	int rc = flex_tx(capcode, FLEX_MSG_NUMERIC, g_default_speed, argv[2]);
-	resp_str(resp, "status", rc == 0 ? "queued" : "error");
-	resp_finish(resp);
-	return rc;
-}
-
-static int cmd_tone(int argc, const char **argv, kerchunk_resp_t *resp)
-{
-	if (argc < 2) {
-		resp_str(resp, "error", "usage: flex tone <capcode>");
-		resp_finish(resp);
-		return -1;
-	}
-	uint32_t capcode = (uint32_t)strtoul(argv[1], NULL, 10);
-
-	int rc = flex_tx(capcode, FLEX_MSG_TONE_ONLY, g_default_speed, NULL);
-	resp_str(resp, "status", rc == 0 ? "queued" : "error");
-	resp_finish(resp);
-	return rc;
-}
-
-static int cmd_status(int argc, const char **argv, kerchunk_resp_t *resp)
-{
-	(void)argc; (void)argv;
-	resp_str(resp, "module", "flex");
-	resp_bool(resp, "enabled", g_enabled);
-	resp_int(resp, "tx_count", g_tx_count);
-	resp_int(resp, "default_speed", flex_speed_bps(g_default_speed));
 	resp_finish(resp);
 	return 0;
+
+usage:
+	resp_str(resp, "error", "usage: flex <send|numeric|tone|status> ...");
+	resp_finish(resp);
+	return -1;
 }
 
-/* ── Module lifecycle ── */
-
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ "flex send",    "flex send <capcode> [speed] <message>",
-	  "Send FLEX alphanumeric page",  cmd_send },
-	{ "flex numeric", "flex numeric <capcode> <digits>",
-	  "Send FLEX numeric page",       cmd_numeric },
-	{ "flex tone",    "flex tone <capcode>",
-	  "Send FLEX tone-only page",     cmd_tone },
-	{ "flex status",  "flex status",
-	  "Show FLEX module status",      cmd_status },
+	{ "flex", "flex <send|numeric|tone|status> ...",
+	  "FLEX paging transmitter", cli_flex },
 };
 
 static int mod_load(kerchunk_core_t *core)
@@ -190,7 +168,8 @@ static int mod_load(kerchunk_core_t *core)
 static int mod_configure(const kerchunk_config_t *cfg)
 {
 	(void)cfg;
-	const char *v = g_core->config_get("flex", "enabled");
+	const char *v;
+	v = g_core->config_get("flex", "enabled");
 	if (v && (strcmp(v, "off") == 0 || strcmp(v, "0") == 0))
 		g_enabled = 0;
 	v = g_core->config_get("flex", "default_speed");
@@ -204,7 +183,7 @@ static void mod_unload(void)
 }
 
 static const kerchunk_module_def_t mod_def = {
-	.name         = "flex",
+	.name         = "mod_flex",
 	.version      = "1.0.0",
 	.description  = "FLEX paging transmitter",
 	.load         = mod_load,

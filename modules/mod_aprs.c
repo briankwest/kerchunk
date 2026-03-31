@@ -33,7 +33,6 @@ static kerchunk_core_t *g_core;
 static int g_enabled = 1;
 static int g_tx_count = 0;
 
-/* Config */
 static char g_callsign[16] = "N0CALL-9";
 static double g_lat = 35.21;
 static double g_lon = -97.50;
@@ -42,7 +41,6 @@ static char g_symbol_table = '/';
 static char g_comment[128] = "Kerchunk APRS gateway";
 static char g_path_str[64] = "WIDE1-1,WIDE2-1";
 
-/* Parsed path */
 static const char *g_path[MAX_PATH_HOPS];
 static size_t g_path_len = 0;
 
@@ -58,8 +56,6 @@ static void parse_path(void)
 		tok = strtok(NULL, ",");
 	}
 }
-
-/* ── Transmit an AX.25 frame as AFSK1200 ── */
 
 static int aprs_tx_frame(const uint8_t *frame, size_t frame_len)
 {
@@ -91,135 +87,101 @@ static int aprs_tx_frame(const uint8_t *frame, size_t frame_len)
 	return 0;
 }
 
-/* ── Build and transmit a position beacon ── */
+static int build_and_tx(aprs_packet_t *pkt)
+{
+	ax25_ui_frame_t ax;
+	aprs_err_t err = ax25_from_aprs(pkt, &ax);
+	if (err != APRS_OK) return -1;
+
+	uint8_t frame[512];
+	size_t frame_len = 0;
+	err = ax25_encode_ui_frame(&ax, frame, sizeof(frame), &frame_len);
+	if (err != APRS_OK) return -1;
+
+	return aprs_tx_frame(frame, frame_len);
+}
 
 static int do_beacon(void)
 {
 	aprs_packet_t pkt;
 	aprs_packet_init(&pkt);
-
 	aprs_err_t err = aprs_build_position(&pkt, g_callsign, "APRS",
 	                                     g_path, g_path_len,
 	                                     g_lat, g_lon,
 	                                     g_symbol_table, g_symbol,
 	                                     g_comment);
-	if (err != APRS_OK) {
-		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
-		            "build position failed: %d", (int)err);
-		return -1;
-	}
-
-	ax25_ui_frame_t ax;
-	err = ax25_from_aprs(&pkt, &ax);
-	if (err != APRS_OK) {
-		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
-		            "ax25_from_aprs failed: %d", (int)err);
-		return -1;
-	}
-
-	uint8_t frame[512];
-	size_t frame_len = 0;
-	err = ax25_encode_ui_frame(&ax, frame, sizeof(frame), &frame_len);
-	if (err != APRS_OK) {
-		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
-		            "ax25 encode failed: %d", (int)err);
-		return -1;
-	}
-
-	return aprs_tx_frame(frame, frame_len);
+	if (err != APRS_OK) return -1;
+	return build_and_tx(&pkt);
 }
-
-/* ── Build and transmit an APRS message ── */
 
 static int do_message(const char *to_call, const char *text)
 {
 	aprs_packet_t pkt;
 	aprs_packet_init(&pkt);
-
 	aprs_err_t err = aprs_build_message(&pkt, g_callsign, "APRS",
 	                                    g_path, g_path_len,
 	                                    to_call, text, NULL);
-	if (err != APRS_OK) {
-		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
-		            "build message failed: %d", (int)err);
-		return -1;
-	}
-
-	ax25_ui_frame_t ax;
-	err = ax25_from_aprs(&pkt, &ax);
 	if (err != APRS_OK) return -1;
-
-	uint8_t frame[512];
-	size_t frame_len = 0;
-	err = ax25_encode_ui_frame(&ax, frame, sizeof(frame), &frame_len);
-	if (err != APRS_OK) return -1;
-
-	return aprs_tx_frame(frame, frame_len);
+	return build_and_tx(&pkt);
 }
 
-/* ── CLI handlers ── */
+/* ── CLI handler ── */
 
-static int cmd_beacon(int argc, const char **argv, kerchunk_resp_t *resp)
+static int cli_aprs(int argc, const char **argv, kerchunk_resp_t *resp)
 {
-	(void)argc; (void)argv;
-	int rc = do_beacon();
-	resp_str(resp, "status", rc == 0 ? "queued" : "error");
-	if (rc == 0) {
+	if (argc < 2) goto usage;
+
+	const char *sub = argv[1];
+
+	if (strcmp(sub, "beacon") == 0) {
+		int rc = do_beacon();
+		resp_str(resp, "status", rc == 0 ? "queued" : "error");
+		if (rc == 0) {
+			resp_str(resp, "callsign", g_callsign);
+			resp_float(resp, "lat", g_lat);
+			resp_float(resp, "lon", g_lon);
+		}
+	} else if (strcmp(sub, "send") == 0) {
+		if (argc < 4) {
+			resp_str(resp, "error", "usage: aprs send <callsign> <message>");
+			resp_finish(resp);
+			return -1;
+		}
+		const char *to_call = argv[2];
+		char msg[256] = {0};
+		for (int i = 3; i < argc; i++) {
+			if (i > 3) strncat(msg, " ", sizeof(msg) - strlen(msg) - 1);
+			strncat(msg, argv[i], sizeof(msg) - strlen(msg) - 1);
+		}
+		int rc = do_message(to_call, msg);
+		resp_str(resp, "status", rc == 0 ? "queued" : "error");
+		if (rc == 0) {
+			resp_str(resp, "to", to_call);
+			resp_str(resp, "message", msg);
+		}
+	} else if (strcmp(sub, "status") == 0) {
+		resp_str(resp, "module", "mod_aprs");
+		resp_bool(resp, "enabled", g_enabled);
 		resp_str(resp, "callsign", g_callsign);
 		resp_float(resp, "lat", g_lat);
 		resp_float(resp, "lon", g_lon);
-	}
-	resp_finish(resp);
-	return rc;
-}
-
-static int cmd_send(int argc, const char **argv, kerchunk_resp_t *resp)
-{
-	if (argc < 3) {
-		resp_str(resp, "error", "usage: aprs send <callsign> <message>");
-		resp_finish(resp);
-		return -1;
-	}
-	const char *to_call = argv[1];
-
-	char msg[256] = {0};
-	for (int i = 2; i < argc; i++) {
-		if (i > 2) strncat(msg, " ", sizeof(msg) - strlen(msg) - 1);
-		strncat(msg, argv[i], sizeof(msg) - strlen(msg) - 1);
+		resp_int(resp, "tx_count", g_tx_count);
+	} else {
+		goto usage;
 	}
 
-	int rc = do_message(to_call, msg);
-	resp_str(resp, "status", rc == 0 ? "queued" : "error");
-	if (rc == 0) {
-		resp_str(resp, "to", to_call);
-		resp_str(resp, "message", msg);
-	}
-	resp_finish(resp);
-	return rc;
-}
-
-static int cmd_status(int argc, const char **argv, kerchunk_resp_t *resp)
-{
-	(void)argc; (void)argv;
-	resp_str(resp, "module", "aprs");
-	resp_bool(resp, "enabled", g_enabled);
-	resp_str(resp, "callsign", g_callsign);
-	resp_float(resp, "lat", g_lat);
-	resp_float(resp, "lon", g_lon);
-	resp_int(resp, "tx_count", g_tx_count);
 	resp_finish(resp);
 	return 0;
+
+usage:
+	resp_str(resp, "error", "usage: aprs <beacon|send|status> ...");
+	resp_finish(resp);
+	return -1;
 }
 
-/* ── Module lifecycle ── */
-
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ "aprs beacon",  "aprs beacon",
-	  "Transmit APRS position beacon",   cmd_beacon },
-	{ "aprs send",    "aprs send <callsign> <message>",
-	  "Send APRS message",               cmd_send },
-	{ "aprs status",  "aprs status",
-	  "Show APRS module status",         cmd_status },
+	{ "aprs", "aprs <beacon|send|status> ...",
+	  "APRS beacon and message transmitter", cli_aprs },
 };
 
 static int mod_load(kerchunk_core_t *core)
@@ -233,29 +195,21 @@ static int mod_configure(const kerchunk_config_t *cfg)
 {
 	(void)cfg;
 	const char *v;
-
 	v = g_core->config_get("aprs", "enabled");
 	if (v && (strcmp(v, "off") == 0 || strcmp(v, "0") == 0))
 		g_enabled = 0;
-
 	v = g_core->config_get("aprs", "callsign");
 	if (v) strncpy(g_callsign, v, sizeof(g_callsign) - 1);
-
 	v = g_core->config_get("aprs", "lat");
 	if (v) g_lat = atof(v);
-
 	v = g_core->config_get("aprs", "lon");
 	if (v) g_lon = atof(v);
-
 	v = g_core->config_get("aprs", "symbol");
 	if (v && v[0]) g_symbol = v[0];
-
 	v = g_core->config_get("aprs", "comment");
 	if (v) strncpy(g_comment, v, sizeof(g_comment) - 1);
-
 	v = g_core->config_get("aprs", "path");
 	if (v) strncpy(g_path_str, v, sizeof(g_path_str) - 1);
-
 	parse_path();
 	return 0;
 }
@@ -266,7 +220,7 @@ static void mod_unload(void)
 }
 
 static const kerchunk_module_def_t mod_def = {
-	.name         = "aprs",
+	.name         = "mod_aprs",
 	.version      = "1.0.0",
 	.description  = "APRS beacon and message transmitter",
 	.load         = mod_load,

@@ -50,7 +50,6 @@ static int pocsag_tx(uint32_t addr, uint32_t baud, pocsag_func_t func,
 		return -1;
 	}
 
-	/* baseband at 8 kHz (kerchunk internal rate) */
 	float fbuf[256000];
 	size_t ns = 0;
 	err = pocsag_baseband(bitstream, bs_bits, KERCHUNK_SAMPLE_RATE, baud,
@@ -61,7 +60,6 @@ static int pocsag_tx(uint32_t addr, uint32_t baud, pocsag_func_t func,
 		return -1;
 	}
 
-	/* convert float → int16 for the queue */
 	int16_t *pcm = malloc(ns * sizeof(int16_t));
 	if (!pcm) return -1;
 	for (size_t i = 0; i < ns; i++)
@@ -77,92 +75,79 @@ static int pocsag_tx(uint32_t addr, uint32_t baud, pocsag_func_t func,
 	return 0;
 }
 
-/* ── CLI handlers ── */
+/* ── CLI handler ── */
 
-static int cmd_send(int argc, const char **argv, kerchunk_resp_t *resp)
+static int cli_pocsag(int argc, const char **argv, kerchunk_resp_t *resp)
 {
-	if (argc < 4) {
-		resp_str(resp, "error", "usage: pocsag send <addr> <baud> <message>");
-		resp_finish(resp);
-		return -1;
+	if (argc < 2) goto usage;
+
+	const char *sub = argv[1];
+
+	if (strcmp(sub, "send") == 0) {
+		if (argc < 5) {
+			resp_str(resp, "error", "usage: pocsag send <addr> <baud> <message>");
+			resp_finish(resp);
+			return -1;
+		}
+		uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 10);
+		uint32_t baud = (uint32_t)strtoul(argv[3], NULL, 10);
+		char msg[512] = {0};
+		for (int i = 4; i < argc; i++) {
+			if (i > 4) strncat(msg, " ", sizeof(msg) - strlen(msg) - 1);
+			strncat(msg, argv[i], sizeof(msg) - strlen(msg) - 1);
+		}
+		int rc = pocsag_tx(addr, baud, POCSAG_FUNC_ALPHA,
+		                   POCSAG_MSG_ALPHA, msg);
+		resp_str(resp, "status", rc == 0 ? "queued" : "error");
+		if (rc == 0) {
+			resp_int(resp, "address", (int)addr);
+			resp_int(resp, "baud", (int)baud);
+			resp_str(resp, "message", msg);
+		}
+	} else if (strcmp(sub, "numeric") == 0) {
+		if (argc < 5) {
+			resp_str(resp, "error", "usage: pocsag numeric <addr> <baud> <digits>");
+			resp_finish(resp);
+			return -1;
+		}
+		uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 10);
+		uint32_t baud = (uint32_t)strtoul(argv[3], NULL, 10);
+		int rc = pocsag_tx(addr, baud, POCSAG_FUNC_NUMERIC,
+		                   POCSAG_MSG_NUMERIC, argv[4]);
+		resp_str(resp, "status", rc == 0 ? "queued" : "error");
+	} else if (strcmp(sub, "tone") == 0) {
+		if (argc < 4) {
+			resp_str(resp, "error", "usage: pocsag tone <addr> <baud>");
+			resp_finish(resp);
+			return -1;
+		}
+		uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 10);
+		uint32_t baud = (uint32_t)strtoul(argv[3], NULL, 10);
+		int rc = pocsag_tx(addr, baud, POCSAG_FUNC_TONE1,
+		                   POCSAG_MSG_TONE_ONLY, NULL);
+		resp_str(resp, "status", rc == 0 ? "queued" : "error");
+	} else if (strcmp(sub, "status") == 0) {
+		resp_str(resp, "module", "mod_pocsag");
+		resp_bool(resp, "enabled", g_enabled);
+		resp_int(resp, "tx_count", g_tx_count);
+	} else {
+		goto usage;
 	}
-	uint32_t addr = (uint32_t)strtoul(argv[1], NULL, 10);
-	uint32_t baud = (uint32_t)strtoul(argv[2], NULL, 10);
 
-	/* join remaining args as message */
-	char msg[512] = {0};
-	for (int i = 3; i < argc; i++) {
-		if (i > 3) strncat(msg, " ", sizeof(msg) - strlen(msg) - 1);
-		strncat(msg, argv[i], sizeof(msg) - strlen(msg) - 1);
-	}
-
-	int rc = pocsag_tx(addr, baud, POCSAG_FUNC_ALPHA,
-	                   POCSAG_MSG_ALPHA, msg);
-	resp_str(resp, "status", rc == 0 ? "queued" : "error");
-	if (rc == 0) {
-		resp_int(resp, "address", (int)addr);
-		resp_int(resp, "baud", (int)baud);
-		resp_str(resp, "message", msg);
-	}
-	resp_finish(resp);
-	return rc;
-}
-
-static int cmd_numeric(int argc, const char **argv, kerchunk_resp_t *resp)
-{
-	if (argc < 4) {
-		resp_str(resp, "error", "usage: pocsag numeric <addr> <baud> <digits>");
-		resp_finish(resp);
-		return -1;
-	}
-	uint32_t addr = (uint32_t)strtoul(argv[1], NULL, 10);
-	uint32_t baud = (uint32_t)strtoul(argv[2], NULL, 10);
-
-	int rc = pocsag_tx(addr, baud, POCSAG_FUNC_NUMERIC,
-	                   POCSAG_MSG_NUMERIC, argv[3]);
-	resp_str(resp, "status", rc == 0 ? "queued" : "error");
-	resp_finish(resp);
-	return rc;
-}
-
-static int cmd_tone(int argc, const char **argv, kerchunk_resp_t *resp)
-{
-	if (argc < 3) {
-		resp_str(resp, "error", "usage: pocsag tone <addr> <baud>");
-		resp_finish(resp);
-		return -1;
-	}
-	uint32_t addr = (uint32_t)strtoul(argv[1], NULL, 10);
-	uint32_t baud = (uint32_t)strtoul(argv[2], NULL, 10);
-
-	int rc = pocsag_tx(addr, baud, POCSAG_FUNC_TONE1,
-	                   POCSAG_MSG_TONE_ONLY, NULL);
-	resp_str(resp, "status", rc == 0 ? "queued" : "error");
-	resp_finish(resp);
-	return rc;
-}
-
-static int cmd_status(int argc, const char **argv, kerchunk_resp_t *resp)
-{
-	(void)argc; (void)argv;
-	resp_str(resp, "module", "pocsag");
-	resp_bool(resp, "enabled", g_enabled);
-	resp_int(resp, "tx_count", g_tx_count);
 	resp_finish(resp);
 	return 0;
+
+usage:
+	resp_str(resp, "error", "usage: pocsag <send|numeric|tone|status> ...");
+	resp_finish(resp);
+	return -1;
 }
 
 /* ── Module lifecycle ── */
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ "pocsag send",    "pocsag send <addr> <baud> <message>",
-	  "Send POCSAG alphanumeric page",  cmd_send },
-	{ "pocsag numeric", "pocsag numeric <addr> <baud> <digits>",
-	  "Send POCSAG numeric page",       cmd_numeric },
-	{ "pocsag tone",    "pocsag tone <addr> <baud>",
-	  "Send POCSAG tone-only page",     cmd_tone },
-	{ "pocsag status",  "pocsag status",
-	  "Show POCSAG module status",      cmd_status },
+	{ "pocsag", "pocsag <send|numeric|tone|status> ...",
+	  "POCSAG paging transmitter", cli_pocsag },
 };
 
 static int mod_load(kerchunk_core_t *core)
@@ -187,7 +172,7 @@ static void mod_unload(void)
 }
 
 static const kerchunk_module_def_t mod_def = {
-	.name         = "pocsag",
+	.name         = "mod_pocsag",
 	.version      = "1.0.0",
 	.description  = "POCSAG paging transmitter",
 	.load         = mod_load,
