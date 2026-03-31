@@ -161,17 +161,36 @@ usage:
 
 /* ── Module lifecycle ── */
 
-static const kerchunk_ui_field_t pocsag_fields[] = {
+static const kerchunk_ui_field_t pocsag_send_fields[] = {
 	{ "addr", "Address", "number", NULL, "1234" },
 	{ "baud", "Baud", "select", "512,1200,2400", NULL },
-	{ "msg",  "Message", "text", NULL, "Hello" },
+	{ "msg",  "Message", "text", NULL, "Hello from kerchunk" },
+};
+
+static const kerchunk_ui_field_t pocsag_numeric_fields[] = {
+	{ "addr", "Address", "number", NULL, "1234" },
+	{ "baud", "Baud", "select", "512,1200,2400", NULL },
+	{ "digits", "Digits", "text", NULL, "5551234" },
+};
+
+static const kerchunk_ui_field_t pocsag_tone_fields[] = {
+	{ "addr", "Address", "number", NULL, "1234" },
+	{ "baud", "Baud", "select", "512,1200,2400", NULL },
 };
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ .name = "pocsag", .usage = "pocsag <send|numeric|tone|status> ...",
-	  .description = "POCSAG paging transmitter", .handler = cli_pocsag,
-	  .category = "Paging", .ui_label = "POCSAG Send", .ui_type = CLI_UI_FORM,
-	  .ui_command = "pocsag send", .ui_fields = pocsag_fields, .num_ui_fields = 3 },
+	{ .name = "pocsag", .usage = "pocsag send <addr> <baud> <message>",
+	  .description = "POCSAG alpha page", .handler = cli_pocsag,
+	  .category = "Paging", .ui_label = "POCSAG Alpha", .ui_type = CLI_UI_FORM,
+	  .ui_command = "pocsag send", .ui_fields = pocsag_send_fields, .num_ui_fields = 3 },
+	{ .name = "pocsag", .usage = "pocsag numeric <addr> <baud> <digits>",
+	  .description = "POCSAG numeric page", .handler = cli_pocsag,
+	  .category = "Paging", .ui_label = "POCSAG Numeric", .ui_type = CLI_UI_FORM,
+	  .ui_command = "pocsag numeric", .ui_fields = pocsag_numeric_fields, .num_ui_fields = 3 },
+	{ .name = "pocsag", .usage = "pocsag tone <addr> <baud>",
+	  .description = "POCSAG tone-only page", .handler = cli_pocsag,
+	  .category = "Paging", .ui_label = "POCSAG Tone", .ui_type = CLI_UI_FORM,
+	  .ui_command = "pocsag tone", .ui_fields = pocsag_tone_fields, .num_ui_fields = 2 },
 };
 
 static int mod_load(kerchunk_core_t *core)

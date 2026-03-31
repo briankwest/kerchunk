@@ -169,17 +169,34 @@ usage:
 	return -1;
 }
 
-static const kerchunk_ui_field_t flex_fields[] = {
+static const kerchunk_ui_field_t flex_send_fields[] = {
 	{ "capcode", "Capcode", "number", NULL, "101000" },
 	{ "speed",   "Speed",   "select", "1600,3200", NULL },
 	{ "msg",     "Message", "text", NULL, "Hello FLEX" },
 };
 
+static const kerchunk_ui_field_t flex_numeric_fields[] = {
+	{ "capcode", "Capcode", "number", NULL, "101000" },
+	{ "digits",  "Digits",  "text", NULL, "5551234" },
+};
+
+static const kerchunk_ui_field_t flex_tone_fields[] = {
+	{ "capcode", "Capcode", "number", NULL, "101000" },
+};
+
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ .name = "flex", .usage = "flex <send|numeric|tone|status> ...",
-	  .description = "FLEX paging transmitter", .handler = cli_flex,
-	  .category = "Paging", .ui_label = "FLEX Send", .ui_type = CLI_UI_FORM,
-	  .ui_command = "flex send", .ui_fields = flex_fields, .num_ui_fields = 3 },
+	{ .name = "flex", .usage = "flex send <capcode> [speed] <message>",
+	  .description = "FLEX alpha page", .handler = cli_flex,
+	  .category = "Paging", .ui_label = "FLEX Alpha", .ui_type = CLI_UI_FORM,
+	  .ui_command = "flex send", .ui_fields = flex_send_fields, .num_ui_fields = 3 },
+	{ .name = "flex", .usage = "flex numeric <capcode> <digits>",
+	  .description = "FLEX numeric page", .handler = cli_flex,
+	  .category = "Paging", .ui_label = "FLEX Numeric", .ui_type = CLI_UI_FORM,
+	  .ui_command = "flex numeric", .ui_fields = flex_numeric_fields, .num_ui_fields = 2 },
+	{ .name = "flex", .usage = "flex tone <capcode>",
+	  .description = "FLEX tone-only page", .handler = cli_flex,
+	  .category = "Paging", .ui_label = "FLEX Tone", .ui_type = CLI_UI_FORM,
+	  .ui_command = "flex tone", .ui_fields = flex_tone_fields, .num_ui_fields = 1 },
 };
 
 static int mod_load(kerchunk_core_t *core)

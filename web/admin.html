@@ -94,17 +94,23 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
                                              margin-top: -9px; }
 
 /* Dynamic controls */
-.ctrl-category { margin-top: 12px; }
+.ctrl-category { margin-bottom: 16px; }
 .ctrl-category h2 { font-size: 11px; color: var(--dim); text-transform: uppercase;
-                     letter-spacing: 1px; margin-bottom: 6px; }
-.ctrl-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
-.cmd-form { display: none; margin-top: 6px; padding: 8px; background: var(--bg);
-            border: 1px solid var(--border); border-radius: 5px; font-size: 12px; }
-.cmd-form.open { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.cmd-form label { color: var(--dim); display: flex; align-items: center; gap: 4px; }
-.cmd-form input, .cmd-form select { padding: 4px 6px; background: var(--card); border: 1px solid var(--border);
-            color: var(--text); border-radius: 4px; font-size: 12px; }
-.cmd-form select { min-width: 80px; }
+                     letter-spacing: 1px; margin-bottom: 8px; border-bottom: 1px solid var(--border);
+                     padding-bottom: 4px; }
+.ctrl-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.ctrl-item { display: flex; flex-direction: column; gap: 4px; }
+.cmd-form { display: none; padding: 10px; background: var(--bg);
+            border: 1px solid var(--border); border-radius: 5px; font-size: 12px;
+            margin-top: 4px; margin-bottom: 8px; }
+.cmd-form.open { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cmd-form label { color: var(--dim); display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.cmd-form input, .cmd-form select { padding: 5px 8px; background: var(--card); border: 1px solid var(--border);
+            color: var(--text); border-radius: 4px; font-size: 13px; }
+.cmd-form input[type="text"] { min-width: 160px; }
+.cmd-form input[type="number"] { width: 90px; }
+.cmd-form select { min-width: 90px; }
+.cmd-form .btn { align-self: flex-end; margin-top: 14px; }
 .toggle-on { border-color: var(--green); color: var(--green); }
 </style>
 </head>
@@ -290,45 +296,52 @@ async function buildDynamicControls() {
     let formId = 0;
 
     cats.forEach(cat => {
-      html += '<div class="ctrl-category"><h2>' + cat + '</h2><div class="ctrl-group">';
+      html += '<div class="ctrl-category"><h2>' + cat + '</h2>';
+
+      /* First pass: collect buttons row */
+      let buttons = '';
+      let forms = '';
       groups[cat].forEach(c => {
         const fid = 'dform-' + (formId++);
         if (c.ui_type === 1) {
-          // BUTTON
-          html += '<button class="btn" onclick="cmd(\'' + c.ui_command + '\')">'
-                + c.ui_label + '</button>';
+          /* BUTTON */
+          buttons += '<button class="btn" onclick="cmd(\'' + c.ui_command + '\')">'
+                   + c.ui_label + '</button>';
         } else if (c.ui_type === 2) {
-          // FORM — show/hide toggle button + inline form
-          html += '<button class="btn" onclick="toggleForm(\'' + fid + '\')">'
-                + c.ui_label + '</button>';
-          html += '<div class="cmd-form" id="' + fid + '">';
+          /* FORM — button in row, form expands below */
+          buttons += '<button class="btn" onclick="toggleForm(\'' + fid + '\')">'
+                   + c.ui_label + '</button>';
+          forms += '<div class="cmd-form" id="' + fid + '">';
           if (c.fields) {
             c.fields.forEach(f => {
-              html += '<label>' + f.label + ': ';
+              forms += '<label>' + f.label;
               if (f.type === 'select' && f.options) {
-                html += '<select data-field="' + f.name + '">';
-                f.options.split(',').forEach(o => { html += '<option>' + o + '</option>'; });
-                html += '</select>';
+                forms += '<select data-field="' + f.name + '">';
+                f.options.split(',').forEach(o => { forms += '<option>' + o + '</option>'; });
+                forms += '</select>';
               } else if (f.type === 'number') {
-                html += '<input type="number" data-field="' + f.name + '" placeholder="'
-                      + (f.placeholder || '') + '" style="width:80px">';
+                forms += '<input type="number" data-field="' + f.name + '" placeholder="'
+                       + (f.placeholder || '') + '">';
               } else {
-                html += '<input type="text" data-field="' + f.name + '" placeholder="'
-                      + (f.placeholder || '') + '" style="width:150px">';
+                forms += '<input type="text" data-field="' + f.name + '" placeholder="'
+                       + (f.placeholder || '') + '">';
               }
-              html += '</label>';
+              forms += '</label>';
             });
           }
-          html += '<button class="btn" onclick="submitForm(this,\'' + c.ui_command + '\')">Send</button>';
-          html += '</div>';
+          forms += '<button class="btn" onclick="submitForm(this,\'' + c.ui_command + '\')">Send</button>';
+          forms += '</div>';
         } else if (c.ui_type === 3) {
-          // TOGGLE
-          html += '<button class="btn" data-label="' + c.ui_label
-                + '" onclick="toggleCmd(\'' + c.ui_command + '\',this)">'
-                + c.ui_label + '</button>';
+          /* TOGGLE */
+          buttons += '<button class="btn" data-label="' + c.ui_label
+                   + '" onclick="toggleCmd(\'' + c.ui_command + '\',this)">'
+                   + c.ui_label + '</button>';
         }
       });
-      html += '</div></div>';
+
+      if (buttons) html += '<div class="ctrl-buttons">' + buttons + '</div>';
+      html += forms;
+      html += '</div>';
     });
 
     document.getElementById('dynamic-controls').innerHTML = html;
