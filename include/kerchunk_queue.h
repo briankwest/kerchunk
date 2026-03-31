@@ -30,6 +30,9 @@ typedef struct kerchunk_queue_item {
     struct kerchunk_queue_item *next;
 } kerchunk_queue_item_t;
 
+/* Set the queue's internal sample rate (must be called before use) */
+void kerchunk_queue_set_rate(int sample_rate);
+
 /* Queue API */
 int  kerchunk_queue_init(void);
 void kerchunk_queue_shutdown(void);

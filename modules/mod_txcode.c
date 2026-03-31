@@ -14,7 +14,6 @@
 #include <stdlib.h>
 
 #define LOG_MOD "txcode"
-#define RATE    8000
 
 static kerchunk_core_t *g_core;
 
@@ -47,7 +46,7 @@ static void create_encoder(uint16_t ctcss_freq_x10, uint16_t dcs_code)
 
     if (ctcss_freq_x10 > 0) {
         plcode_ctcss_enc_t *enc = NULL;
-        if (plcode_ctcss_enc_create(&enc, RATE, ctcss_freq_x10, g_ctcss_amplitude) == PLCODE_OK) {
+        if (plcode_ctcss_enc_create(&enc, g_core->sample_rate, ctcss_freq_x10, g_ctcss_amplitude) == PLCODE_OK) {
             g_enc      = enc;
             g_enc_type = KERCHUNK_TX_ENC_CTCSS;
             kerchunk_core_set_tx_encoder(enc, KERCHUNK_TX_ENC_CTCSS);
@@ -57,7 +56,7 @@ static void create_encoder(uint16_t ctcss_freq_x10, uint16_t dcs_code)
         }
     } else if (dcs_code > 0) {
         plcode_dcs_enc_t *enc = NULL;
-        if (plcode_dcs_enc_create(&enc, RATE, dcs_code, 0, 1600) == PLCODE_OK) {
+        if (plcode_dcs_enc_create(&enc, g_core->sample_rate, dcs_code, 0, 1600) == PLCODE_OK) {
             g_enc      = enc;
             g_enc_type = KERCHUNK_TX_ENC_DCS;
             kerchunk_core_set_tx_encoder(enc, KERCHUNK_TX_ENC_DCS);

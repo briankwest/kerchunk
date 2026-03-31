@@ -13,7 +13,7 @@
 callsign = WRDP519              ; FCC callsign (used for CW ID)
 frequency = 462.550              ; Repeater output frequency (MHz, for display)
 offset = +5.000                  ; Input offset (MHz, for display)
-sample_rate = 8000               ; Audio sample rate (Hz) — must be 8000
+; sample_rate moved to [audio] section
 log_level = info                 ; error | warn | info | debug
 sounds_dir = /usr/share/kerchunk/sounds  ; Base path for WAV sound files
 socket_path = /run/kerchunk/kerchunk.sock  ; Unix socket for CLI control
@@ -48,6 +48,10 @@ load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voi
 ; For the RIM-Lite v2, this is typically plughw:1,0 on Linux.
 ; ----------------------------------------------------------------------------
 [audio]
+sample_rate = 48000              ; Internal audio sample rate (Hz)
+                                 ; Valid values: 8000, 16000, 32000, 48000
+                                 ; 48000 recommended — matches USB hardware rate,
+                                 ; eliminates PortAudio resampling overhead.
 capture_device = default         ; PortAudio capture device name
 playback_device = default        ; PortAudio playback device name
 ; hw_rate = 48000                ; Force hardware sample rate (0=auto)

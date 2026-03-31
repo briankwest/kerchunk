@@ -45,7 +45,7 @@ void kerchunk_audio_preemphasis(int16_t *buf, size_t n, float alpha)
 
 /* ── Lock-free SPSC ring buffer ── */
 
-#define RING_SIZE 16384         /* ~2s at 8 kHz, must be power of 2 */
+#define RING_SIZE 262144        /* ~5.5s at 48 kHz, must be power of 2 */
 #define RING_MASK (RING_SIZE - 1)
 
 typedef struct {
@@ -281,7 +281,11 @@ int kerchunk_audio_init(const kerchunk_audio_config_t *cfg)
 {
     if (!cfg) return -1;
 
-    g_rate         = cfg->sample_rate > 0 ? cfg->sample_rate : 8000;
+    g_rate         = cfg->sample_rate > 0 ? cfg->sample_rate : 48000;
+    if (g_rate != 8000 && g_rate != 16000 && g_rate != 32000 && g_rate != 48000) {
+        KERCHUNK_LOG_W(LOG_MOD, "invalid sample_rate %d, falling back to 48000", g_rate);
+        g_rate = 48000;
+    }
     g_preemph_on   = cfg->preemphasis;
     g_preemph_alpha = cfg->preemphasis_alpha;
     g_preemph_prev = 0;
@@ -531,6 +535,8 @@ size_t kerchunk_audio_playback_writable(void) { return ring_writable(&g_play_rin
 size_t kerchunk_audio_playback_pending(void)  { return ring_readable(&g_play_ring); }
 
 int kerchunk_audio_available(void) { return g_available; }
+
+int kerchunk_audio_get_rate(void) { return g_rate; }
 
 void kerchunk_audio_list_devices(void)
 {

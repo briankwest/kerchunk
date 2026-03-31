@@ -58,6 +58,8 @@ void test_end(void)
 extern void test_events(void);
 extern void test_config(void);
 extern void test_queue(void);
+extern void test_resample(void);
+extern void test_multirate(void);
 extern void test_repeater(void);
 extern void test_cwid(void);
 extern void test_resp(void);
@@ -76,6 +78,12 @@ int main(void)
 
     printf("\nQueue tests:\n");
     test_queue();
+
+    printf("\nResample tests:\n");
+    test_resample();
+
+    printf("\nMulti-rate tests:\n");
+    test_multirate();
 
     printf("\nRepeater state machine tests:\n");
     test_repeater();

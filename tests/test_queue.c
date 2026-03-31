@@ -2,6 +2,7 @@
  * test_queue.c — Outbound queue tests including concurrent stress
  */
 
+#include "kerchunk.h"
 #include "kerchunk_queue.h"
 #include "kerchunk_wav.h"
 #include "kerchunk_log.h"
@@ -38,6 +39,7 @@ static void *producer_fn(void *arg)
 
 void test_queue(void)
 {
+    kerchunk_queue_set_rate(8000);
     test_begin("init queue");
     test_assert(kerchunk_queue_init() == 0, "init failed");
     test_end();
@@ -346,4 +348,164 @@ void test_queue(void)
     test_end();
 
     kerchunk_queue_shutdown();
+}
+
+/* ── Resample and multi-rate tests ── */
+
+void test_resample(void)
+{
+    /* 1. Same-rate passthrough */
+    test_begin("resample: same rate passthrough");
+    {
+        int16_t src[] = {100, 200, 300, 400, 500};
+        int16_t *dst = NULL;
+        size_t dst_n = 0;
+        int rc = kerchunk_resample(src, 5, 8000, 8000, &dst, &dst_n);
+        test_assert(rc == 0, "resample failed");
+        test_assert(dst_n == 5, "wrong output count");
+        test_assert(dst[0] == 100 && dst[4] == 500, "data mismatch");
+        free(dst);
+    }
+    test_end();
+
+    /* 2. Upsample 8k → 48k (6x) */
+    test_begin("resample: 8k to 48k upsample");
+    {
+        int16_t src[80];
+        for (int i = 0; i < 80; i++) src[i] = (int16_t)(i * 100);
+        int16_t *dst = NULL;
+        size_t dst_n = 0;
+        int rc = kerchunk_resample(src, 80, 8000, 48000, &dst, &dst_n);
+        test_assert(rc == 0, "resample failed");
+        test_assert(dst_n == 480, "expected 480 samples");
+        /* first and last samples should match (endpoints) */
+        test_assert(dst[0] == 0, "first sample wrong");
+        /* sample 479 should be near src[79] = 7900 */
+        test_assert(dst[479] >= 7800 && dst[479] <= 7900, "last sample out of range");
+        free(dst);
+    }
+    test_end();
+
+    /* 3. Downsample 48k → 8k (6x) */
+    test_begin("resample: 48k to 8k downsample");
+    {
+        int16_t src[480];
+        for (int i = 0; i < 480; i++) src[i] = (int16_t)((i * 7900) / 479);
+        int16_t *dst = NULL;
+        size_t dst_n = 0;
+        int rc = kerchunk_resample(src, 480, 48000, 8000, &dst, &dst_n);
+        test_assert(rc == 0, "resample failed");
+        test_assert(dst_n == 80, "expected 80 samples");
+        test_assert(dst[0] == 0, "first sample wrong");
+        free(dst);
+    }
+    test_end();
+
+    /* 4. Upsample 8k → 16k (2x) */
+    test_begin("resample: 8k to 16k");
+    {
+        int16_t src[] = {0, 1000, 2000, 3000};
+        int16_t *dst = NULL;
+        size_t dst_n = 0;
+        int rc = kerchunk_resample(src, 4, 8000, 16000, &dst, &dst_n);
+        test_assert(rc == 0, "resample failed");
+        test_assert(dst_n == 8, "expected 8 samples");
+        /* interpolated midpoints should be ~500, ~1500, ~2500 */
+        test_assert(dst[1] >= 400 && dst[1] <= 600, "interpolation off");
+        free(dst);
+    }
+    test_end();
+
+    /* 5. Null/invalid inputs */
+    test_begin("resample: invalid inputs");
+    {
+        int16_t *dst = NULL;
+        size_t dst_n = 0;
+        test_assert(kerchunk_resample(NULL, 10, 8000, 48000, &dst, &dst_n) == -1,
+                    "null src not rejected");
+        int16_t src[1] = {0};
+        test_assert(kerchunk_resample(src, 1, 0, 48000, &dst, &dst_n) == -1,
+                    "zero src_rate not rejected");
+        test_assert(kerchunk_resample(src, 1, 8000, 0, &dst, &dst_n) == -1,
+                    "zero dst_rate not rejected");
+    }
+    test_end();
+}
+
+void test_multirate(void)
+{
+    static const int rates[] = {8000, 16000, 32000, 48000};
+
+    /* 1. Frame samples computation for each rate */
+    test_begin("multirate: frame samples at each rate");
+    for (int r = 0; r < 4; r++) {
+        int fs = rates[r] * 20 / 1000;
+        int expected[] = {160, 320, 640, 960};
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%dHz: expected %d got %d", rates[r], expected[r], fs);
+        test_assert(fs == expected[r], msg);
+    }
+    test_end();
+
+    /* 2. Queue works at each supported rate */
+    test_begin("multirate: queue tone at each rate");
+    for (int r = 0; r < 4; r++) {
+        kerchunk_queue_set_rate(rates[r]);
+        kerchunk_queue_init();
+
+        kerchunk_queue_add_tone(1000, 100, 8000, 1);  /* 100ms tone */
+        test_assert(kerchunk_queue_depth() == 1, "tone not queued");
+
+        int frame = rates[r] * 20 / 1000;
+        int16_t out[960];
+        int total = 0;
+        while (kerchunk_queue_drain(out, frame) > 0)
+            total += frame;
+
+        /* 100ms of tone at rate[r] = rate[r]/10 samples + gap */
+        int expected_min = rates[r] / 10;
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%dHz: got %d samples (min %d)", rates[r], total, expected_min);
+        test_assert(total >= expected_min, msg);
+
+        kerchunk_queue_shutdown();
+    }
+    test_end();
+
+    /* 3. Queue silence at each rate */
+    test_begin("multirate: queue silence at each rate");
+    for (int r = 0; r < 4; r++) {
+        kerchunk_queue_set_rate(rates[r]);
+        kerchunk_queue_init();
+
+        kerchunk_queue_add_silence(200, 1);  /* 200ms silence */
+        test_assert(kerchunk_queue_depth() == 1, "silence not queued");
+
+        int frame = rates[r] * 20 / 1000;
+        int16_t out[960];
+        int total = 0;
+        while (kerchunk_queue_drain(out, frame) > 0)
+            total += frame;
+
+        int expected_min = rates[r] * 200 / 1000;
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%dHz: got %d samples (min %d)", rates[r], total, expected_min);
+        test_assert(total >= expected_min, msg);
+
+        kerchunk_queue_shutdown();
+    }
+    test_end();
+
+    /* 4. Rate validation */
+    test_begin("multirate: rate validation");
+    {
+        /* Valid rates should be accepted (tested implicitly above) */
+        /* MAX_FRAME_SAMPLES covers 48kHz */
+        test_assert(KERCHUNK_MAX_FRAME_SAMPLES == 960, "MAX_FRAME_SAMPLES wrong");
+        test_assert(KERCHUNK_MAX_SAMPLE_RATE == 48000, "MAX_SAMPLE_RATE wrong");
+    }
+    test_end();
+
+    /* Restore default for any subsequent tests */
+    kerchunk_queue_set_rate(48000);
 }

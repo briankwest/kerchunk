@@ -52,7 +52,7 @@ static int pocsag_tx(uint32_t addr, uint32_t baud, pocsag_func_t func,
 
 	float fbuf[256000];
 	size_t ns = 0;
-	err = pocsag_baseband(bitstream, bs_bits, KERCHUNK_SAMPLE_RATE, baud,
+	err = pocsag_baseband(bitstream, bs_bits, g_core->sample_rate, baud,
 	                      fbuf, sizeof(fbuf) / sizeof(float), &ns);
 	if (err != POCSAG_OK) {
 		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,

@@ -211,3 +211,39 @@ int kerchunk_pcm_write(const char *path, const int16_t *buf, size_t n)
     fclose(fp);
     return 0;
 }
+
+int kerchunk_resample(const int16_t *src, size_t src_n, int src_rate,
+                      int dst_rate, int16_t **dst, size_t *dst_n)
+{
+    if (!src || !dst || !dst_n || src_rate <= 0 || dst_rate <= 0)
+        return -1;
+
+    if (src_rate == dst_rate) {
+        int16_t *out = malloc(src_n * sizeof(int16_t));
+        if (!out) return -1;
+        memcpy(out, src, src_n * sizeof(int16_t));
+        *dst = out;
+        *dst_n = src_n;
+        return 0;
+    }
+
+    size_t out_n = (size_t)((double)src_n * dst_rate / src_rate);
+    if (out_n == 0) out_n = 1;
+    int16_t *out = malloc(out_n * sizeof(int16_t));
+    if (!out) return -1;
+
+    double step = (double)src_rate / (double)dst_rate;
+    double pos = 0.0;
+    for (size_t i = 0; i < out_n; i++) {
+        size_t idx = (size_t)pos;
+        double frac = pos - (double)idx;
+        int16_t s0 = (idx < src_n) ? src[idx] : 0;
+        int16_t s1 = (idx + 1 < src_n) ? src[idx + 1] : s0;
+        out[i] = (int16_t)(s0 + frac * (s1 - s0));
+        pos += step;
+    }
+
+    *dst = out;
+    *dst_n = out_n;
+    return 0;
+}

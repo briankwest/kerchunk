@@ -98,7 +98,7 @@ void test_integ_parrot(void)
         };
         parrot_audio_tap(&e, NULL);
     }
-    test_assert(g_len <= (size_t)(RATE * g_max_duration_s),
+    test_assert(g_len <= (size_t)(g_core->sample_rate * g_max_duration_s),
                 "exceeded max duration");
     mock_fire_simple(KERCHEVT_COR_DROP);
     test_end();

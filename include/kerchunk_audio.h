@@ -55,4 +55,7 @@ int  kerchunk_audio_available(void);
 /* Print available audio devices to stderr. */
 void kerchunk_audio_list_devices(void);
 
+/* Return the target sample rate the audio engine is running at. */
+int kerchunk_audio_get_rate(void);
+
 #endif /* KERCHUNK_AUDIO_H */

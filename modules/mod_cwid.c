@@ -16,7 +16,6 @@
 #include <curl/curl.h>
 
 #define LOG_MOD "cwid"
-#define RATE    8000
 
 static kerchunk_core_t *g_core;
 static int g_timer_id     = -1;
@@ -197,14 +196,14 @@ static void send_cwid(void)
 
     /* Create CW encoder via libplcode */
     plcode_cwid_enc_t *enc = NULL;
-    if (plcode_cwid_enc_create(&enc, RATE, g_callsign,
+    if (plcode_cwid_enc_create(&enc, g_core->sample_rate, g_callsign,
                                 g_cwid_freq, g_cwid_wpm, g_cwid_amp) != PLCODE_OK) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "failed to create CW encoder");
         return;
     }
 
     /* Render into buffer — typical CW ID is 2-5 seconds */
-    size_t cap = (size_t)RATE * 10;  /* 10s max (plenty for any callsign) */
+    size_t cap = (size_t)g_core->sample_rate * 10;  /* 10s max (plenty for any callsign) */
     int16_t *buf = calloc(cap, sizeof(int16_t));
     if (!buf) {
         plcode_cwid_enc_destroy(enc);

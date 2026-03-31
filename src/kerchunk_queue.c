@@ -18,7 +18,10 @@
 #include <pthread.h>
 
 #define LOG_MOD  "queue"
-#define RATE     8000
+
+static int g_queue_rate = 48000;
+
+void kerchunk_queue_set_rate(int sample_rate) { g_queue_rate = sample_rate; }
 
 static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -39,7 +42,7 @@ static int      g_batch_active;
 
 /* Inter-item gap: silence inserted between consecutive file items */
 #define GAP_MS   10
-#define GAP_SAMPLES ((size_t)(RATE * GAP_MS) / 1000)
+#define GAP_SAMPLES ((size_t)(g_queue_rate * GAP_MS) / 1000)
 static size_t   g_gap_remaining;
 
 int kerchunk_queue_init(void)
@@ -126,6 +129,17 @@ int kerchunk_queue_add_file(const char *path, int priority)
         }
     }
 
+    /* Resample if WAV rate doesn't match queue rate */
+    if (rate != 0 && rate != g_queue_rate) {
+        int16_t *resampled = NULL;
+        size_t resampled_n = 0;
+        if (kerchunk_resample(buf, n, rate, g_queue_rate, &resampled, &resampled_n) == 0) {
+            free(buf);
+            buf = resampled;
+            n = resampled_n;
+        }
+    }
+
     kerchunk_queue_item_t *item = calloc(1, sizeof(*item));
     if (!item) {
         free(buf);
@@ -189,13 +203,13 @@ int kerchunk_queue_add_tone(int freq_hz, int duration_ms, int16_t amplitude, int
         return -1;
 
     /* Pre-render tone OUTSIDE the lock */
-    size_t n = ((size_t)RATE * (size_t)duration_ms) / 1000;
+    size_t n = ((size_t)g_queue_rate * (size_t)duration_ms) / 1000;
     int16_t *buf = calloc(n, sizeof(int16_t));
     if (!buf)
         return -1;
 
     plcode_tone_enc_t *tone = NULL;
-    if (plcode_tone_enc_create(&tone, RATE, freq_hz, amplitude) == PLCODE_OK) {
+    if (plcode_tone_enc_create(&tone, g_queue_rate, freq_hz, amplitude) == PLCODE_OK) {
         plcode_tone_enc_process(tone, buf, n);
         plcode_tone_enc_destroy(tone);
     }
@@ -227,7 +241,7 @@ int kerchunk_queue_add_silence(int duration_ms, int priority)
     if (duration_ms <= 0 || duration_ms > 300000)
         return -1;
 
-    size_t n = ((size_t)RATE * (size_t)duration_ms) / 1000;
+    size_t n = ((size_t)g_queue_rate * (size_t)duration_ms) / 1000;
     int16_t *buf = calloc(n, sizeof(int16_t));
     if (!buf)
         return -1;

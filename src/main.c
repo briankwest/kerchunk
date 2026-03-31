@@ -48,6 +48,9 @@ volatile sig_atomic_t g_running = 1;  /* non-static: console thread sets to 0 */
 static volatile sig_atomic_t g_reload  = 0;
 static time_t g_start_time = 0;  /* Daemon start — never resets */
 
+static int g_sample_rate   = 48000;
+static int g_frame_samples = 960;
+
 static void handle_signal(int sig)
 {
     if (sig == SIGTERM || sig == SIGINT)
@@ -478,11 +481,11 @@ static void *audio_thread_fn(void *arg)
         uint64_t t0 = now_us();
 
         /* ── Capture one frame from ring buffer ── */
-        int16_t frame[KERCHUNK_FRAME_SAMPLES];
-        int nread = kerchunk_audio_capture(frame, KERCHUNK_FRAME_SAMPLES);
+        int16_t frame[KERCHUNK_MAX_FRAME_SAMPLES];
+        int nread = kerchunk_audio_capture(frame, g_frame_samples);
         if (nread <= 0) {
-            memset(frame, 0, sizeof(frame));
-            nread = KERCHUNK_FRAME_SAMPLES;
+            memset(frame, 0, g_frame_samples * sizeof(int16_t));
+            nread = g_frame_samples;
         }
 
         /* ── Run CTCSS/DCS decoders on original frame (sub-audible tones
@@ -581,7 +584,7 @@ static void *audio_thread_fn(void *arg)
 
         /* Detect COR drop → start drain countdown */
         if (g_software_relay && g_relay_was_active && !relay_active) {
-            g_relay_drain = (KERCHUNK_SAMPLE_RATE * g_relay_drain_ms) / 1000;
+            g_relay_drain = (g_sample_rate * g_relay_drain_ms) / 1000;
         }
         g_relay_was_active = relay_active;
 
@@ -598,7 +601,7 @@ static void *audio_thread_fn(void *arg)
 
         if (do_relay && nread > 0) {
             if (kerchunk_audio_playback_writable() >= (size_t)nread) {
-                int16_t relay_buf[KERCHUNK_FRAME_SAMPLES];
+                int16_t relay_buf[KERCHUNK_MAX_FRAME_SAMPLES];
                 memcpy(relay_buf, frame, (size_t)nread * sizeof(int16_t));
 
                 /* TX scrambler before CTCSS/DCS mix */
@@ -673,16 +676,17 @@ static void *audio_thread_fn(void *arg)
             if (ptt_already_held)
                 g_tx_delay_rem = 0;
             else
-                g_tx_delay_rem = (KERCHUNK_SAMPLE_RATE * g_tx_delay_ms) / 1000;
+                g_tx_delay_rem = (g_sample_rate * g_tx_delay_ms) / 1000;
             g_tx_tail_rem = -1;
         }
 
         /* TX delay: feed silence + CTCSS/DCS while radio keys up */
         while (!queue_paused && g_queue_ptt && g_tx_delay_rem > 0 &&
-               kerchunk_audio_playback_writable() >= KERCHUNK_FRAME_SAMPLES) {
-            int16_t silence[KERCHUNK_FRAME_SAMPLES] = {0};
-            int sn = g_tx_delay_rem < KERCHUNK_FRAME_SAMPLES ?
-                     g_tx_delay_rem : KERCHUNK_FRAME_SAMPLES;
+               kerchunk_audio_playback_writable() >= (size_t)g_frame_samples) {
+            int16_t silence[KERCHUNK_MAX_FRAME_SAMPLES];
+            memset(silence, 0, g_frame_samples * sizeof(int16_t));
+            int sn = g_tx_delay_rem < g_frame_samples ?
+                     g_tx_delay_rem : g_frame_samples;
 
             /* Mix TX encoder into silence so CTCSS/DCS is present
              * from the moment PTT asserts — receiver squelch opens */
@@ -714,8 +718,8 @@ static void *audio_thread_fn(void *arg)
         if (!queue_paused && g_queue_ptt && g_tx_delay_rem <= 0 &&
             !(kerchunk_core_get()->is_receiving() && !kerchunk_core_get_ptt())) {
 
-            int16_t play_buf[KERCHUNK_FRAME_SAMPLES];
-            int nplay = kerchunk_queue_drain(play_buf, KERCHUNK_FRAME_SAMPLES);
+            int16_t play_buf[KERCHUNK_MAX_FRAME_SAMPLES];
+            int nplay = kerchunk_queue_drain(play_buf, g_frame_samples);
             if (nplay > 0) {
                 frames_drained = 1;
 
@@ -759,7 +763,7 @@ static void *audio_thread_fn(void *arg)
             kerchunk_queue_depth() == 0 && !kerchunk_queue_is_draining()) {
             /* Start tail countdown on first empty tick */
             if (g_tx_tail_rem < 0) {
-                g_tx_tail_rem = (KERCHUNK_SAMPLE_RATE * g_tx_tail_ms) / 1000;
+                g_tx_tail_rem = (g_sample_rate * g_tx_tail_ms) / 1000;
 
                 /* Fire QUEUE_COMPLETE at tail start — gives the dashboard
                  * time to show TAIL state before PTT drops */
@@ -773,10 +777,11 @@ static void *audio_thread_fn(void *arg)
 
             /* Feed tail silence + CTCSS/DCS to keep receiver open */
             while (g_tx_tail_rem > 0 &&
-                   kerchunk_audio_playback_writable() >= KERCHUNK_FRAME_SAMPLES) {
-                int16_t silence[KERCHUNK_FRAME_SAMPLES] = {0};
-                int sn = g_tx_tail_rem < KERCHUNK_FRAME_SAMPLES ?
-                         g_tx_tail_rem : KERCHUNK_FRAME_SAMPLES;
+                   kerchunk_audio_playback_writable() >= (size_t)g_frame_samples) {
+                int16_t silence[KERCHUNK_MAX_FRAME_SAMPLES];
+                memset(silence, 0, g_frame_samples * sizeof(int16_t));
+                int sn = g_tx_tail_rem < g_frame_samples ?
+                         g_tx_tail_rem : g_frame_samples;
 
                 int enc_type;
                 void *enc = kerchunk_core_get_tx_encoder(&enc_type);
@@ -925,11 +930,25 @@ int main(int argc, char **argv)
         kerchunk_user_init(cfg);
     }
 
+    /* Read and validate sample rate */
+    g_sample_rate = kerchunk_config_get_int(cfg, "audio", "sample_rate", 48000);
+    if (g_sample_rate != 8000 && g_sample_rate != 16000 &&
+        g_sample_rate != 32000 && g_sample_rate != 48000) {
+        KERCHUNK_LOG_W(LOG_MOD, "invalid sample_rate %d, falling back to 48000",
+                       g_sample_rate);
+        g_sample_rate = 48000;
+    }
+    g_frame_samples = (g_sample_rate * KERCHUNK_FRAME_MS) / 1000;
+    kerchunk_queue_set_rate(g_sample_rate);
+    kerchunk_core_set_sample_rate(g_sample_rate);
+    KERCHUNK_LOG_I(LOG_MOD, "sample_rate=%d frame_samples=%d",
+                   g_sample_rate, g_frame_samples);
+
     /* Init audio */
     kerchunk_audio_config_t audio_cfg = {
         .capture_device  = kerchunk_config_get(cfg, "audio", "capture_device"),
         .playback_device = kerchunk_config_get(cfg, "audio", "playback_device"),
-        .sample_rate     = kerchunk_config_get_int(cfg, "audio", "sample_rate", 8000),
+        .sample_rate     = g_sample_rate,
         .hw_rate         = kerchunk_config_get_int(cfg, "audio", "hw_rate", 0),
         .preemphasis     = 0,
         .preemphasis_alpha = 0.95f,
@@ -1018,10 +1037,9 @@ int main(int argc, char **argv)
                  g_relay_drain_ms);
 
     /* Create decoders */
-    int sample_rate = kerchunk_config_get_int(cfg, "general", "sample_rate", 8000);
     audio_thread_ctx_t audio_ctx = { NULL, NULL, NULL };
-    plcode_ctcss_dec_create(&audio_ctx.ctcss_dec, sample_rate);
-    plcode_dcs_dec_create(&audio_ctx.dcs_dec, sample_rate);
+    plcode_ctcss_dec_create(&audio_ctx.ctcss_dec, g_sample_rate);
+    plcode_dcs_dec_create(&audio_ctx.dcs_dec, g_sample_rate);
     /* DTMF decoder: tuned for hardware repeaters where the radio briefly
      * drops COS during DTMF (CTCSS interrupted by tone).  Higher
      * misses_to_end rides through the dropout without false digit-end.
@@ -1029,7 +1047,7 @@ int main(int argc, char **argv)
     plcode_dtmf_dec_opts_t dtmf_opts = {0};
     dtmf_opts.misses_to_end = 5;    /* 100ms of silence to end digit */
     dtmf_opts.min_off_frames = 3;   /* 60ms cooldown for same digit re-detection */
-    plcode_dtmf_dec_create_ex(&audio_ctx.dtmf_dec, sample_rate, &dtmf_opts);
+    plcode_dtmf_dec_create_ex(&audio_ctx.dtmf_dec, g_sample_rate, &dtmf_opts);
 
     /* ── Start audio thread ── */
     pthread_t audio_tid;

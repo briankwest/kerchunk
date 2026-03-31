@@ -59,7 +59,7 @@ static void parse_path(void)
 
 static int aprs_tx_frame(const uint8_t *frame, size_t frame_len)
 {
-	afsk_mod_t *mod = afsk_mod_create(KERCHUNK_SAMPLE_RATE);
+	afsk_mod_t *mod = afsk_mod_create(g_core->sample_rate);
 	if (!mod) {
 		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "failed to create modulator");
 		return -1;
@@ -83,7 +83,7 @@ static int aprs_tx_frame(const uint8_t *frame, size_t frame_len)
 	g_tx_count++;
 	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
 	            "queued APRS frame: %zu samples (%.1f ms)",
-	            ns, (double)ns / KERCHUNK_SAMPLE_RATE * 1000.0);
+	            ns, (double)ns / g_core->sample_rate * 1000.0);
 	return 0;
 }
 

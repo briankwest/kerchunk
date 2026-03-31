@@ -21,7 +21,6 @@
 #include <time.h>
 
 #define LOG_MOD "recorder"
-#define RATE    8000
 #define MAX_DURATION_S 300  /* 5 min hard cap */
 
 static kerchunk_core_t *g_core;
@@ -71,14 +70,14 @@ static void sanitize_name(char *out, size_t max, const char *name)
 static void append_samples(int16_t **buf, size_t *len, size_t *cap,
                            const int16_t *samples, size_t n)
 {
-    size_t max_samples = (size_t)RATE * (size_t)g_max_duration_s;
+    size_t max_samples = (size_t)g_core->sample_rate * (size_t)g_max_duration_s;
     if (*len >= max_samples)
         return;
 
     size_t needed = *len + n;
     if (needed > *cap) {
         size_t new_cap = *cap * 2;
-        if (new_cap < needed) new_cap = needed + (size_t)RATE;
+        if (new_cap < needed) new_cap = needed + (size_t)g_core->sample_rate;
         if (new_cap > max_samples) new_cap = max_samples;
         int16_t *new_buf = realloc(*buf, new_cap * sizeof(int16_t));
         if (!new_buf) return;
@@ -126,9 +125,9 @@ static void save_recording(const char *direction, const char *start_time,
     snprintf(path, sizeof(path), "%s/%s_%s_%s.wav",
              g_dir, start_time, direction, safe_who);
 
-    float dur = (float)len / (float)RATE;
+    float dur = (float)len / (float)g_core->sample_rate;
 
-    if (kerchunk_wav_write(path, buf, len, RATE) == 0) {
+    if (kerchunk_wav_write(path, buf, len, g_core->sample_rate) == 0) {
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                      "saved %s recording: %s (%.1fs, %zu samples)",
                      direction, path, dur, len);
@@ -169,7 +168,7 @@ static void rx_start(void)
     if (g_rx_active) return;
     g_rx_active = 1;
     g_rx_len = 0;
-    g_rx_cap = (size_t)RATE * 30;  /* start with 30s buffer */
+    g_rx_cap = (size_t)g_core->sample_rate * 30;  /* start with 30s buffer */
     g_rx_buf = malloc(g_rx_cap * sizeof(int16_t));
     if (!g_rx_buf) { g_rx_active = 0; return; }
     fmt_timestamp(g_rx_start_time, sizeof(g_rx_start_time));
@@ -217,7 +216,7 @@ static void tx_start(void)
     if (g_tx_active) return;
     g_tx_active = 1;
     g_tx_len = 0;
-    g_tx_cap = (size_t)RATE * 30;
+    g_tx_cap = (size_t)g_core->sample_rate * 30;
     g_tx_buf = malloc(g_tx_cap * sizeof(int16_t));
     if (!g_tx_buf) { g_tx_active = 0; return; }
     fmt_timestamp(g_tx_start_time, sizeof(g_tx_start_time));
@@ -338,7 +337,7 @@ static int cli_recorder(int argc, const char **argv, kerchunk_resp_t *r)
     resp_int(r, "max_duration_s", g_max_duration_s);
     resp_bool(r, "rx_active", g_rx_active);
     if (g_rx_active)
-        resp_float(r, "rx_duration_s", (double)g_rx_len / (double)RATE);
+        resp_float(r, "rx_duration_s", (double)g_rx_len / (double)g_core->sample_rate);
     return 0;
 }
 

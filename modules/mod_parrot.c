@@ -14,7 +14,6 @@
 #include <string.h>
 
 #define LOG_MOD "parrot"
-#define RATE    8000
 
 /* DTMF event offset — *88# */
 #define DTMF_EVT_PARROT (KERCHEVT_CUSTOM + 13)
@@ -45,7 +44,7 @@ static void parrot_audio_tap(const kerchevt_t *evt, void *ud)
     if (!g_recording || !evt->audio.samples)
         return;
 
-    size_t max_samples = (size_t)RATE * (size_t)g_max_duration_s;
+    size_t max_samples = (size_t)g_core->sample_rate * (size_t)g_max_duration_s;
     if (g_len >= max_samples)
         return;
 
@@ -55,7 +54,7 @@ static void parrot_audio_tap(const kerchevt_t *evt, void *ud)
 
     if (g_len + n > g_cap) {
         size_t new_cap = g_cap * 2;
-        if (new_cap < g_len + n) new_cap = g_len + n + (size_t)RATE;
+        if (new_cap < g_len + n) new_cap = g_len + n + (size_t)g_core->sample_rate;
         if (new_cap > max_samples) new_cap = max_samples;
         int16_t *nb = realloc(g_buf, new_cap * sizeof(int16_t));
         if (!nb) return;
@@ -88,7 +87,7 @@ static void start_recording(void)
     if (g_recording) return;
 
     g_len = 0;
-    g_cap = (size_t)RATE * (size_t)g_max_duration_s;
+    g_cap = (size_t)g_core->sample_rate * (size_t)g_max_duration_s;
     g_buf = malloc(g_cap * sizeof(int16_t));
     if (!g_buf) return;
 
@@ -109,7 +108,7 @@ static void stop_and_playback(void)
     g_core->audio_tap_unregister(parrot_audio_tap);
 
     if (g_buf && g_len > 0) {
-        float dur = (float)g_len / (float)RATE;
+        float dur = (float)g_len / (float)g_core->sample_rate;
 
         /* Compute average RMS */
         int32_t avg_rms = 0;

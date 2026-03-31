@@ -50,10 +50,10 @@ void resp_finish(kerchunk_resp_t *r);
 #define KERCHUNK_VERSION_PATCH 1
 #define KERCHUNK_VERSION_STRING "1.0.1"
 
-/* Frame size: 20ms at 8 kHz = 160 samples */
-#define KERCHUNK_FRAME_SAMPLES 160
-#define KERCHUNK_FRAME_MS      20
-#define KERCHUNK_SAMPLE_RATE   8000
+/* Frame timing: 20ms frames, max rate 48 kHz → max 960 samples/frame */
+#define KERCHUNK_FRAME_MS          20
+#define KERCHUNK_MAX_SAMPLE_RATE   48000
+#define KERCHUNK_MAX_FRAME_SAMPLES ((KERCHUNK_MAX_SAMPLE_RATE * KERCHUNK_FRAME_MS) / 1000)
 
 /* Queue priority levels (higher = plays sooner when queue is idle) */
 #define KERCHUNK_PRI_LOW          1   /* Voicemail playback, GPIO confirms */
@@ -117,6 +117,10 @@ struct kerchunk_core {
     const kerchunk_user_t *(*user_lookup_by_id)(int user_id);
     const kerchunk_user_t *(*user_lookup_by_ani)(const char *ani);
     int  (*user_count)(void);
+
+    /* Runtime sample rate (set once at startup) */
+    int sample_rate;
+    int frame_samples;
 };
 
 /* Unified command dispatch — core commands + module commands */
@@ -148,6 +152,9 @@ int  kerchunk_core_get_emergency(void);
 /* Core OTP elevated session state */
 void kerchunk_core_set_otp_elevated(int user_id, int elevated);
 int  kerchunk_core_get_otp_elevated(int user_id);
+
+/* Core sample rate setter */
+void kerchunk_core_set_sample_rate(int rate);
 
 /* Core config accessors */
 kerchunk_config_t *kerchunk_core_get_config(void);

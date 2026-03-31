@@ -11,11 +11,12 @@
 /* Pull in the module source */
 #include "../modules/mod_scrambler.c"
 
-/* Generate a pure tone at freq_hz into buf (n samples at 8kHz) */
+/* Generate a pure tone at freq_hz into buf (n samples at mock core rate) */
 static void gen_tone(int16_t *buf, size_t n, double freq_hz)
 {
+    int rate = g_mock_core.sample_rate;
     for (size_t i = 0; i < n; i++)
-        buf[i] = (int16_t)(16000.0 * sin(2.0 * M_PI * freq_hz * (double)i / 8000.0));
+        buf[i] = (int16_t)(16000.0 * sin(2.0 * M_PI * freq_hz * (double)i / (double)rate));
 }
 
 /* Compute RMS of a buffer */
@@ -65,10 +66,14 @@ void test_integ_scrambler(void)
     /* ── 2. Self-inverse: scramble twice → recovers original ── */
     test_begin("scrambler: self-inverse property");
     {
-        /* Use a long buffer so FIR filter delay settles.
-         * Two passes through 31-tap FIR × 2 filters = ~124 samples group
-         * delay total. Use 4000 samples and skip first 500 for settling. */
-        size_t n = 4000;
+        int rate = g_mock_core.sample_rate;
+        /* Scale buffer and settling regions with sample rate.
+         * FIR delay is ~62 samples at any rate; two passes = ~124.
+         * Use 0.5s of audio and skip first 0.1s for settling. */
+        size_t n = (size_t)(rate / 2);
+        size_t settle = (size_t)(rate / 10);
+        int period = rate / 1000;  /* 1kHz period in samples */
+
         int16_t *original = calloc(n, sizeof(int16_t));
         int16_t *work = calloc(n, sizeof(int16_t));
 
@@ -81,7 +86,7 @@ void test_integ_scrambler(void)
         scrambler_process(work, n, &st1);
 
         /* Verify scrambled is different from original (skip settling) */
-        double corr1 = correlation(original + 500, work + 500, n - 1000);
+        double corr1 = correlation(original + settle, work + settle, n - 2 * settle);
         test_assert(corr1 < 0.5, "scrambled too similar to original");
 
         /* Descramble (same carrier — self-inverse) */
@@ -92,11 +97,12 @@ void test_integ_scrambler(void)
         /* After two passes through the scrambler, the recovered signal
          * has 4x FIR group delay. Check that the signal has energy
          * (not zeroed out) and that it's periodic at 1kHz. */
-        double rms = compute_rms(work + 800, n - 1600);
+        double rms = compute_rms(work + 2 * settle, n - 4 * settle);
         test_assert(rms > 500.0, "self-inverse output too quiet");
 
-        /* Check periodicity: auto-correlate at 1kHz period (8 samples) */
-        double ac = correlation(work + 800, work + 808, n - 1700);
+        /* Check periodicity: auto-correlate at 1kHz period */
+        double ac = correlation(work + 2 * settle, work + 2 * settle + period,
+                                n - 4 * settle - (size_t)period);
         test_assert(ac > 0.5, "self-inverse failed: not periodic at input freq");
 
         free(original);
@@ -107,7 +113,7 @@ void test_integ_scrambler(void)
     /* ── 3. Different codes produce different output ── */
     test_begin("scrambler: different codes differ");
     {
-        size_t n = 800;
+        size_t n = (size_t)(g_mock_core.sample_rate / 10);  /* 0.1s */
         int16_t *src = calloc(n, sizeof(int16_t));
         int16_t *out1 = calloc(n, sizeof(int16_t));
         int16_t *out2 = calloc(n, sizeof(int16_t));

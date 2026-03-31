@@ -80,8 +80,8 @@ static uint16_t   g_ws_seq;
 
 /* ── WebSocket audio — lock-free SPSC ring (audio thread → web thread) ── */
 
-/* Frame: 4-byte header + 160 samples x 2 bytes = 324 bytes (PCM16 LE) */
-#define WS_FRAME_SIZE (4 + 160 * 2)
+/* Frame: 4-byte header + frame_samples * 2 bytes (PCM16 LE) */
+#define WS_MAX_FRAME_SIZE (4 + KERCHUNK_MAX_FRAME_SAMPLES * 2)
 
 /* Lock-free ring: audio thread writes, web thread reads.
  * No syscalls, no mutexes on the audio thread — just memory writes. */
@@ -89,7 +89,7 @@ static uint16_t   g_ws_seq;
 #define WS_RING_MASK  (WS_RING_SLOTS - 1)
 
 typedef struct {
-    int16_t samples[160];
+    int16_t samples[KERCHUNK_MAX_FRAME_SAMPLES];
     uint8_t dir;   /* 0x00=RX, 0x01=TX */
 } ws_audio_slot_t;
 
@@ -130,7 +130,7 @@ static void ws_set_state(struct mg_connection *c, ws_conn_state_t *st)
     memcpy(c->data + 1, &st, sizeof(st));
 }
 
-/* Push one 160-sample frame into the ring (called from audio thread) */
+/* Push one frame into the ring (called from audio thread) */
 static void ws_ring_push(const int16_t *pcm, size_t n, uint8_t dir)
 {
     unsigned w = atomic_load_explicit(&g_ws_ring_w, memory_order_relaxed);
@@ -138,10 +138,11 @@ static void ws_ring_push(const int16_t *pcm, size_t n, uint8_t dir)
     if (next == atomic_load_explicit(&g_ws_ring_r, memory_order_acquire))
         return;  /* ring full — drop frame */
 
+    int fs = g_core->frame_samples;
     ws_audio_slot_t *s = &g_ws_ring[w];
-    size_t copy = n > 160 ? 160 : n;
+    size_t copy = n > (size_t)fs ? (size_t)fs : n;
     memcpy(s->samples, pcm, copy * sizeof(int16_t));
-    if (copy < 160) memset(s->samples + copy, 0, (160 - copy) * sizeof(int16_t));
+    if (copy < (size_t)fs) memset(s->samples + copy, 0, ((size_t)fs - copy) * sizeof(int16_t));
     s->dir = dir;
 
     atomic_store_explicit(&g_ws_ring_w, next, memory_order_release);
@@ -158,17 +159,20 @@ static void ws_flush_ring(void)
     while (r != w) {
         ws_audio_slot_t *s = &g_ws_ring[r];
 
-        uint8_t msg[WS_FRAME_SIZE];
+        int fs = g_core->frame_samples;
+        size_t frame_bytes = (size_t)fs * sizeof(int16_t);
+        size_t msg_size = 4 + frame_bytes;
+        uint8_t msg[WS_MAX_FRAME_SIZE];
         msg[0] = 0x01;
         msg[1] = s->dir;
         msg[2] = (uint8_t)(g_ws_seq & 0xFF);
         msg[3] = (uint8_t)((g_ws_seq >> 8) & 0xFF);
         g_ws_seq++;
-        memcpy(msg + 4, s->samples, 160 * sizeof(int16_t));
+        memcpy(msg + 4, s->samples, frame_bytes);
 
         for (struct mg_connection *c = g_mgr.conns; c != NULL; c = c->next) {
             if (ws_get_state(c))
-                mg_ws_send(c, msg, WS_FRAME_SIZE, WEBSOCKET_OP_BINARY);
+                mg_ws_send(c, msg, msg_size, WEBSOCKET_OP_BINARY);
         }
 
         r = (r + 1) & WS_RING_MASK;
@@ -193,10 +197,11 @@ static void ws_tx_playback_tap(const kerchevt_t *evt, void *ud)
     if (!g_core->is_transmitting())
         return;
 
+    int fs = g_core->frame_samples;
     const int16_t *src = evt->audio.samples;
     size_t remaining = evt->audio.n;
     while (remaining > 0) {
-        size_t n = remaining > 160 ? 160 : remaining;
+        size_t n = remaining > (size_t)fs ? (size_t)fs : remaining;
         ws_ring_push(src, n, 0x01);
         src += n;
         remaining -= n;
@@ -211,7 +216,8 @@ static void ws_rx_audio_tap(const kerchevt_t *evt, void *ud)
     if (!g_core->is_receiving())
         return;
 
-    size_t n = evt->audio.n > 160 ? 160 : evt->audio.n;
+    int fs = g_core->frame_samples;
+    size_t n = evt->audio.n > (size_t)fs ? (size_t)fs : evt->audio.n;
     ws_ring_push(evt->audio.samples, n, 0x00);
 }
 
@@ -330,7 +336,7 @@ static void ws_handle_ptt_off(struct mg_connection *c, ws_conn_state_t *st)
 
     st->ptt_held = 0;
     if (g_ptt_holder == st) g_ptt_holder = NULL;
-    double duration = (double)st->audio_len / 8000.0;
+    double duration = (double)st->audio_len / (double)g_core->sample_rate;
     /* No release_ptt — queue system manages PTT automatically.
      * It will hold PTT through tx_tail after the last frame drains. */
 
@@ -358,16 +364,18 @@ static void ws_handle_audio_frame(ws_conn_state_t *st,
                                   const uint8_t *data, size_t len)
 {
     if (!st->ptt_held) return;
-    if (len != 321 || data[0] != 0x02) return;  /* 1 tag + 160 samples * 2 bytes */
+    int fs = g_core->frame_samples;
+    size_t expected_len = 1 + (size_t)fs * 2;  /* 1 tag + frame_samples * 2 bytes */
+    if (len != expected_len || data[0] != 0x02) return;
 
-    size_t max_samples = (size_t)g_ptt_max_duration_s * 8000;
+    size_t max_samples = (size_t)g_ptt_max_duration_s * (size_t)g_core->sample_rate;
     if (st->audio_len >= max_samples) return;
 
     /* Queue each frame immediately for real-time playback.
      * Thread-safe: kerchunk_queue has internal mutex protection. */
-    g_core->queue_audio_buffer((const int16_t *)(data + 1), 160,
+    g_core->queue_audio_buffer((const int16_t *)(data + 1), fs,
                                g_ptt_priority);
-    st->audio_len += 160;
+    st->audio_len += fs;
 }
 
 /* TLS cert/key data (read once, reused per connection) */

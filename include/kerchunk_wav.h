@@ -33,4 +33,10 @@ int  kerchunk_pcm_read(const char *path, int16_t **buf, size_t *n);
  * Returns 0 on success. */
 int  kerchunk_pcm_write(const char *path, const int16_t *buf, size_t n);
 
+/* Resample audio from one rate to another (linear interpolation).
+ * Allocates output buffer — caller must free *dst.
+ * Returns 0 on success, -1 on error. */
+int  kerchunk_resample(const int16_t *src, size_t src_n, int src_rate,
+                       int dst_rate, int16_t **dst, size_t *dst_n);
+
 #endif /* KERCHUNK_WAV_H */

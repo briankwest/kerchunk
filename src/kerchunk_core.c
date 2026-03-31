@@ -290,12 +290,20 @@ static kerchunk_core_t g_core = {
     .user_lookup_by_id    = core_user_lookup_by_id,
     .user_lookup_by_ani   = core_user_lookup_by_ani,
     .user_count           = core_user_count,
+    .sample_rate          = 48000,
+    .frame_samples        = 960,
 };
 
 /* Public accessors */
 kerchunk_core_t *kerchunk_core_get(void)
 {
     return &g_core;
+}
+
+void kerchunk_core_set_sample_rate(int rate)
+{
+    g_core.sample_rate   = rate;
+    g_core.frame_samples = (rate * 20) / 1000;
 }
 
 void kerchunk_core_set_config(kerchunk_config_t *cfg)

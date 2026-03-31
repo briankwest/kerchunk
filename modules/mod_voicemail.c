@@ -17,7 +17,6 @@
 #include <dirent.h>
 
 #define LOG_MOD "voicemail"
-#define RATE    8000
 
 /* From mod_dtmfcmd event offsets */
 #define DTMF_EVT_VOICEMAIL_STATUS  (KERCHEVT_CUSTOM + 0)
@@ -157,7 +156,7 @@ static void rec_audio_tap(const kerchevt_t *evt, void *ud)
         return;
 
     /* Cap buffer growth at max duration */
-    size_t max_samples = (size_t)RATE * (size_t)g_max_duration_s;
+    size_t max_samples = (size_t)g_core->sample_rate * (size_t)g_max_duration_s;
     if (g_rec_len >= max_samples)
         return;
 
@@ -165,7 +164,7 @@ static void rec_audio_tap(const kerchevt_t *evt, void *ud)
     size_t needed = g_rec_len + evt->audio.n;
     if (needed > g_rec_cap) {
         size_t new_cap = g_rec_cap * 2;
-        if (new_cap < needed) new_cap = needed + RATE;
+        if (new_cap < needed) new_cap = needed + g_core->sample_rate;
         if (new_cap > max_samples) new_cap = max_samples;
         int16_t *new_buf = realloc(g_rec_buf, new_cap * sizeof(int16_t));
         if (!new_buf) return;
@@ -253,7 +252,7 @@ static void on_vm_record(const kerchevt_t *evt, void *ud)
     g_recording = 1;
     g_record_user_id = target_id;
     g_rec_len = 0;
-    g_rec_cap = (size_t)RATE * (size_t)g_max_duration_s;
+    g_rec_cap = (size_t)g_core->sample_rate * (size_t)g_max_duration_s;
     g_rec_buf = malloc(g_rec_cap * sizeof(int16_t));
     if (!g_rec_buf) {
         g_recording = 0;

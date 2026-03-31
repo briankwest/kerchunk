@@ -36,7 +36,6 @@ static inline int16_t nco_sine(uint32_t phase)
 #define DTMF_EVT_SCRAMBLER (KERCHEVT_CUSTOM + 16)
 
 #define FIR_ORDER  31
-#define SAMPLE_RATE 8000
 
 static kerchunk_core_t *g_core;
 
@@ -70,7 +69,7 @@ static scrambler_state_t g_tx_state;
 
 static void compute_fir_coefficients(int carrier_hz)
 {
-    double fc = (double)carrier_hz / (double)SAMPLE_RATE;
+    double fc = (double)carrier_hz / (double)g_core->sample_rate;
     int M = FIR_ORDER - 1;
 
     double coeffs_f[FIR_ORDER];
@@ -118,7 +117,7 @@ static inline int16_t fir_process(int16_t *delay, int *pos, int16_t input)
 static void state_init(scrambler_state_t *st, int carrier_hz)
 {
     memset(st, 0, sizeof(*st));
-    st->nco_inc = (uint32_t)((double)carrier_hz / (double)SAMPLE_RATE
+    st->nco_inc = (uint32_t)((double)carrier_hz / (double)g_core->sample_rate
                               * 4294967296.0 + 0.5);
 }
 

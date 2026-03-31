@@ -801,8 +801,9 @@ static void call_setup_audio(void)
     /* Tell FreeSWITCH to send/receive audio via UDP unicast */
     char cmd[256];
     snprintf(cmd, sizeof(cmd),
-             "uuid_unicast %s %s %d %d mono 8000",
-             g_call_uuid, g_fs_host, g_udp_base_port, g_udp_base_port + 1);
+             "uuid_unicast %s %s %d %d mono %d",
+             g_call_uuid, g_fs_host, g_udp_base_port, g_udp_base_port + 1,
+             g_core->sample_rate);
     esl_api(cmd);
 
     /* Register audio tap (radio → phone) */

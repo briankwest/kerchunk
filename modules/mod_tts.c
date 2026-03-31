@@ -32,8 +32,7 @@
 #endif
 
 #define LOG_MOD "tts"
-#define RATE    8000
-#define MAX_TTS_SAMPLES (RATE * 60)
+#define MAX_TTS_SAMPLES (g_core->sample_rate * 60)
 #define ELEVENLABS_PCM_RATE 16000
 #define TTS_QUEUE_SIZE 8
 
@@ -109,20 +108,6 @@ static size_t curl_write_cb(char *ptr, size_t size, size_t nmemb, void *ud)
     memcpy(buf->data + buf->len, ptr, total);
     buf->len += total;
     return total;
-}
-
-/* ── Decimate 16000 Hz → 8000 Hz (2:1, average pairs) ── */
-
-static size_t decimate_16k_to_8k(const int16_t *src, size_t src_n,
-                                  int16_t *dst, size_t dst_cap)
-{
-    size_t out_n = src_n / 2;
-    if (out_n > dst_cap) out_n = dst_cap;
-
-    for (size_t i = 0; i < out_n; i++)
-        dst[i] = (int16_t)(((int32_t)src[i * 2] + src[i * 2 + 1]) / 2);
-
-    return out_n;
 }
 
 /* ── JSON-safe escaping ── */
@@ -246,15 +231,17 @@ static void synthesize_and_queue(const char *text, int priority)
         return;
     }
 
-    size_t dst_cap = src_samples / 2 + 1;
-    if (dst_cap > MAX_TTS_SAMPLES) dst_cap = MAX_TTS_SAMPLES;
-
-    int16_t *resampled = malloc(dst_cap * sizeof(int16_t));
-    if (!resampled) { free(buf.data); return; }
-
-    size_t out_len = decimate_16k_to_8k((const int16_t *)buf.data,
-                                         src_samples, resampled, dst_cap);
+    int16_t *resampled = NULL;
+    size_t out_len = 0;
+    if (kerchunk_resample((const int16_t *)buf.data, src_samples,
+                          ELEVENLABS_PCM_RATE, g_core->sample_rate,
+                          &resampled, &out_len) != 0) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "resample failed");
+        free(buf.data);
+        return;
+    }
     free(buf.data);
+    if (out_len > (size_t)MAX_TTS_SAMPLES) out_len = (size_t)MAX_TTS_SAMPLES;
 
     if (out_len > 0) {
         /* Write cache file (atomic: temp + rename) */
@@ -263,11 +250,11 @@ static void synthesize_and_queue(const char *text, int priority)
             cache_path_for_text(text, path, sizeof(path));
             char tmp[548];
             snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-            if (kerchunk_wav_write(tmp, resampled, out_len, RATE) == 0) {
+            if (kerchunk_wav_write(tmp, resampled, out_len, g_core->sample_rate) == 0) {
                 rename(tmp, path);  /* atomic */
                 g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                             "cached: %s (%zu samples, %.1fs)",
-                            path, out_len, (float)out_len / RATE);
+                            path, out_len, (float)out_len / g_core->sample_rate);
                 /* Queue from file so buffer can be freed immediately */
                 g_core->queue_audio_file(path, priority);
                 free(resampled);
@@ -282,7 +269,7 @@ static void synthesize_and_queue(const char *text, int priority)
         g_core->queue_audio_buffer(resampled, out_len, priority);
         g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
                     "spoke %zu samples (%.1fs): %s",
-                    out_len, (float)out_len / RATE, text);
+                    out_len, (float)out_len / g_core->sample_rate, text);
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "tts", .description = text } };
         kerchevt_fire(&ae);

@@ -205,6 +205,9 @@ void test_integ_decode(void)
     kerchevt_init();
     mock_reset();
     mock_init_core();
+    /* Override mock core to 8kHz for decode tests (synthetic signals at 8kHz) */
+    g_mock_core.sample_rate   = RATE;
+    g_mock_core.frame_samples = FRAME;
 
     /* Create decoders */
     plcode_ctcss_dec_create(&g_ctcss_dec, RATE);

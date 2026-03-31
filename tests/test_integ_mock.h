@@ -340,6 +340,8 @@ static void mock_init_core(void)
         .user_lookup_by_id   = kerchunk_user_lookup_by_id,
         .user_lookup_by_ani  = kerchunk_user_lookup_by_ani,
         .user_count          = kerchunk_user_count,
+        .sample_rate         = 48000,
+        .frame_samples       = 960,
     };
 }
 

@@ -46,7 +46,7 @@ static int flex_tx(uint32_t capcode, flex_msg_type_t type,
 	float fbuf[512000];
 	size_t ns = 0;
 	err = flex_baseband(bitbuf, bits, speed,
-	                    (float)KERCHUNK_SAMPLE_RATE,
+	                    (float)g_core->sample_rate,
 	                    fbuf, sizeof(fbuf) / sizeof(float), &ns);
 	if (err != FLEX_OK) {
 		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
