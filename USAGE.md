@@ -139,6 +139,8 @@ Here is the complete list of DTMF commands:
 | `*971#`-`*978#` | Set scrambler code 1-8 |
 | `*0`_digits_`#` | AutoPatch -- dial a phone number (e.g., `*05551234567#`) |
 | `*0#` | AutoPatch -- hang up current call |
+| `*98#` | Force immediate APRS beacon |
+| `*980#` | APRS status report |
 
 ### Weather and Time
 
@@ -249,12 +251,14 @@ The repeater produces several sounds you should be aware of:
 
 This section covers installation, configuration, and ongoing management of a kerchunkd repeater.
 
+> **Experimental features:** POCSAG paging (mod_pocsag) and FLEX paging (mod_flex) are experimental. They work for encoding and transmission but have not been extensively tested over the air. Use with caution and verify operation on your specific hardware before relying on them.
+
 ### Prerequisites
 
 **Hardware:**
 
 - Raspberry Pi (3B+ or later recommended) or any Linux computer
-- RIM-Lite v2 USB radio interface (CM119 chipset) -- provides audio I/O and COR/PTT via USB HID
+- RIM-Lite v2 or AIOC (All-In-One-Cable) USB radio interface (CM119/CM108 chipset) -- provides audio I/O and COR/PTT via USB HID
 - Retevis RT97L or compatible GMRS repeater with DB9 accessory port
 - DB9 cable connecting the RIM-Lite to the repeater
 
@@ -647,13 +651,17 @@ DTMF: `*0<digits>#` to dial, `*0#` to hang up. See [FREESWITCH.md](FREESWITCH.md
 
 Requires `librtlsdr-dev`. Tunes to a single channel at 240 kHz, FM demod with CTCSS/DCS/DTMF decoding.
 
-#### `[pocsag]` -- POCSAG Paging
+#### `[pocsag]` -- POCSAG Paging (experimental)
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `enabled` | `off` | Enable POCSAG paging encoder |
+| `modulation` | `baseband` | Modulation mode: `baseband` or `fsk` |
+| `deemphasis` | `off` | De-emphasis filter: `off` or `on` |
 
 Requires [libpocsag](https://github.com/briankwest/libpocsag) (detected by pkg-config at build time).
+
+> **Experimental:** POCSAG encoding and transmission work but have not been extensively tested over the air.
 
 CLI commands:
 
@@ -664,13 +672,18 @@ kerchunk> pocsag tone 1234567                     # Send tone-only page
 kerchunk> pocsag status                           # Show POCSAG status
 ```
 
-#### `[flex]` -- FLEX Paging
+#### `[flex]` -- FLEX Paging (experimental)
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `enabled` | `off` | Enable FLEX paging encoder |
+| `default_speed` | `1600` | FLEX speed in bps: `1600`, `3200`, or `6400` |
+| `modulation` | `baseband` | Modulation mode: `baseband` or `fsk` |
+| `deemphasis` | `off` | De-emphasis filter: `off` or `on` |
 
 Requires [libflex](https://github.com/briankwest/libflex) (detected by pkg-config at build time).
+
+> **Experimental:** FLEX encoding and transmission work but have not been extensively tested over the air.
 
 CLI commands:
 
@@ -702,6 +715,36 @@ CLI commands:
 kerchunk> aprs beacon                              # Force immediate beacon
 kerchunk> aprs send "Hello from the repeater"      # Send APRS message
 kerchunk> aprs status                              # Show APRS status
+```
+
+#### Paging and APRS Usage Examples
+
+**Send a POCSAG alphanumeric page:**
+
+```bash
+./kerchunk -x 'pocsag send 1234567 "Meeting at 3pm in room 200"'
+```
+
+**Send a FLEX numeric page at 3200 bps:**
+
+```bash
+./kerchunk -x 'flex numeric 1234567 5551234'
+```
+
+**Force an APRS position beacon:**
+
+```bash
+./kerchunk -x 'aprs beacon'
+```
+
+**Send burst tones via CLI:**
+
+```bash
+./kerchunk -x 'txcode dtmf 1234'              # DTMF sequence
+./kerchunk -x 'txcode twotone 1000 1500'       # Two-tone page
+./kerchunk -x 'txcode selcall 12345'           # Selcall sequence
+./kerchunk -x 'txcode mdc 1234'                # MDC-1200 burst
+./kerchunk -x 'txcode cwid'                    # CW ID burst
 ```
 
 ### FCC Compliance Settings
@@ -930,6 +973,14 @@ kerchunk> dtmfcmd                  # Show DTMF command table
 kerchunk> pocsag send 1234 "Test"  # Send POCSAG page
 kerchunk> flex send 1234 "Test"    # Send FLEX page
 kerchunk> aprs beacon              # Force APRS beacon
+kerchunk> txcode dtmf 1234         # Send DTMF sequence
+kerchunk> txcode twotone 1000 1500 # Send two-tone page
+kerchunk> txcode selcall 12345     # Send Selcall sequence
+kerchunk> txcode mdc 1234          # Send MDC-1200 burst
+kerchunk> txcode burst 1000 500    # Send tone burst (freq, duration_ms)
+kerchunk> txcode cwid              # Send CW ID burst
+kerchunk> threads                  # Show managed thread pool status
+kerchunk> schedule                 # Show wall-clock scheduler status
 kerchunk> /log debug               # Start log streaming at debug level
 kerchunk> /nolog                   # Stop log streaming
 ```

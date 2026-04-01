@@ -4,7 +4,9 @@
 
 mod_aprs integrates [libaprs](https://github.com/briankwest/libaprs) into kerchunkd for APRS position reporting and packet decoding on GMRS and HAM repeaters. Two modes: **receive** (decode APRS packets from SDR) and **transmit** (send short position/telemetry beacons via the repeater's TX audio path).
 
-> **Status:** Implemented. mod_aprs is built when libaprs is detected by pkg-config. Load it by adding `mod_aprs` to the module load list in `[modules]`.
+> **Status:** Implemented and working. mod_aprs is built when libaprs is detected by pkg-config. Load it by adding `mod_aprs` to the module load list in `[modules]`.
+>
+> **Callsign format:** AX.25 callsigns are limited to 6 alphanumeric characters plus a 4-bit SSID (0-15). The callsign from `[general]` is used directly. Ensure it fits the 6-character AX.25 limit.
 
 ## Table of Contents
 

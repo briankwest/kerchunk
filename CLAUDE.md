@@ -25,13 +25,13 @@ Libraries must be installed before building kerchunk:
 - **libssl** (for TLS): `apt install libssl-dev`
 - **librtlsdr** (for SDR module): `apt install librtlsdr-dev`
 - **libasound2** (for ALSA mixer): `apt install libasound2-dev`
-- **libpocsag** (optional, for POCSAG paging): `github.com/briankwest/libpocsag` — detected by pkg-config
-- **libflex** (optional, for FLEX paging): `github.com/briankwest/libflex` — detected by pkg-config
+- **libpocsag** (optional, experimental, for POCSAG paging): `github.com/briankwest/libpocsag` — detected by pkg-config
+- **libflex** (optional, experimental, for FLEX paging): `github.com/briankwest/libflex` — detected by pkg-config
 - **libaprs** (optional, for APRS): `github.com/briankwest/libaprs` — detected by pkg-config
 
 ## Architecture
 
-Lightweight C11 core with event bus, dlopen'd modules (.so), outbound audio queue, Unix socket CLI. 27 modules. Up to 5 threads: audio (20ms), main (20ms), web server, TTS, and NWS polling. Version string includes git hash (e.g. "1.0.1+abc1234", deb package "1.0.1-1+gitabc1234").
+Lightweight C11 core with event bus, dlopen'd modules (.so), outbound audio queue, Unix socket CLI. 27 modules (POCSAG and FLEX are experimental). Up to 7 threads: audio (20ms), main (20ms), web server, audio flush, TTS, NWS polling, and SDR capture. Managed thread pool (`threads_init`/`threads_shutdown`) supervises 5 module threads. Wall-clock scheduler (`sched_init`/`sched_shutdown`) provides `schedule_aligned` (drift-free periodic, used by CW ID) and `schedule_at` (future one-shot). Shutdown order: threads_shutdown, sched_shutdown, modules_shutdown. Version string includes git hash (e.g. "1.0.1+abc1234", deb package "1.0.1-1+gitabc1234").
 
 Modules receive a `kerchunk_core_t *` vtable in their `load()` callback. They subscribe to events, queue audio, and use timers — never access hardware directly.
 
@@ -100,7 +100,7 @@ Subscribe in the target module: `core->subscribe(KERCHEVT_CUSTOM + 8, handler, N
 
 Current DTMF commands: `*87#` VM status, `*86#` VM record (own), `*86<id>#` VM record (for user id), `*85#` VM play, `*83#` VM delete, `*84#` VM list, `*41<pin>#` GPIO on, `*40<pin>#` GPIO off, `*93#` weather, `*94#` forecast, `*95#` time, `*911#` emergency on, `*910#` emergency off, `*88#` parrot echo, `*96#` NWS alerts, `*68<6digits>#` OTP authenticate, `*97#` scrambler toggle, `*970#` scrambler off, `*971#`-`*978#` scrambler set code, `*0<digits>#` autopatch dial, `*0#` autopatch hangup, `*98#` APRS force beacon, `*980#` APRS status.
 
-17 core CLI commands: status, help, version, uptime, audio, hid, user, log, diag, play, tone, sim, tts, cwid, caller, emergency, dtmfcmd.
+19 core CLI commands: status, help, version, uptime, audio, hid, user, log, diag, play, tone, sim, tts, cwid, caller, emergency, dtmfcmd, threads, schedule.
 
 Module CLI commands: pocsag (send/numeric/tone/status), flex (send/numeric/tone/status), aprs (beacon/send/status).
 

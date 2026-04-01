@@ -6,7 +6,7 @@
 
 A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 or AIOC (All-In-One-Cable) USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode). Supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) operation.
 
-**27 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs), parrot/echo, CDR, statistics, recording, TX encoding, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry.
+**27 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs), parrot/echo, CDR, statistics, recording, TX encoding, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging (experimental), FLEX paging (experimental), APRS position/telemetry.
 
 **234 tests** — unit + integration test coverage with mock core vtable.
 
@@ -14,7 +14,17 @@ A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 f
 
 **Native JSON API** — every CLI command returns structured JSON via `kerchunk -j`. Event streaming via `kerchunk -e -j` (NDJSON). Response system (`kerchunk_resp_t`) provides both formats from a single handler.
 
-**Web Dashboard** — embedded HTTP/HTTPS server with real-time SSE event stream and live audio monitoring via WebSocket. Seven pages: Public dashboard (status, live audio, weather, coverage map), Registration, PTT (WebSocket push-to-talk), Admin dashboard (real-time SSE, controls), Users, Config, Coverage Planner.
+**Web Dashboard** — embedded HTTP/HTTPS server with real-time SSE event stream and live audio monitoring via WebSocket. TLS/HTTPS support with Let's Encrypt certificates. Seven pages: Public dashboard (status, live audio, weather, coverage map), Registration, PTT (WebSocket push-to-talk), Admin dashboard (real-time SSE, controls), Users, Config, Coverage Planner. Dynamic UI: modules register controls via CLI metadata (`/api/commands`).
+
+**Burst tones** — DTMF sequences, two-tone paging, Selcall, MDC-1200, CW ID, and tone burst generation via the `txcode` CLI command.
+
+**Wall-clock scheduler** — `schedule_aligned` for periodic tasks (CW ID), `schedule_at` for future one-shot events. Managed thread pool with 5 modules migrated to supervised threads.
+
+**Configurable sample rate** — internal audio pipeline defaults to 48kHz, configurable to 8000/16000/32000/48000 Hz. Git hash embedded in version string and deb package metadata.
+
+**Heartbeat event** — 5-second keepalive for SSE/WebSocket clients.
+
+**19 core CLI commands, 25+ module CLI commands** with full inline help and tab completion.
 
 ## Table of Contents
 
@@ -102,8 +112,8 @@ kerchunkd supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (
 | **Web PTT (transmit)** | **N** | Y | Y | GMRS: no remote/internet TX |
 | **Voice scrambler** | **N** | **N** | **Y** | Part 90 only — prohibited on GMRS (FCC 95.333) and Amateur (FCC 97.113(a)(4)) |
 | **AutoPatch (FreeSWITCH)** | **N** | Y | Y | GMRS: interconnection ambiguous |
-| POCSAG paging | Y | Y | Y | Brief data transmission |
-| FLEX paging | Y | Y | Y | Brief data transmission |
+| POCSAG paging (experimental) | Y | Y | Y | Brief data transmission |
+| FLEX paging (experimental) | Y | Y | Y | Brief data transmission |
 | APRS position/telemetry | Y | Y | Y | Brief data transmission, COR gated |
 
 ### Regulatory Notes
@@ -218,8 +228,8 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_scrambler  Frequency inversion voice scrambler      │ │
 │  │  mod_sdr        RTL-SDR single-channel monitor           │ │
 │  │  mod_freeswitch FreeSWITCH AutoPatch (Ham only)          │ │
-│  │  mod_pocsag     POCSAG paging encoder/transmitter        │ │
-│  │  mod_flex        FLEX paging encoder/transmitter         │ │
+│  │  mod_pocsag     POCSAG paging encoder (experimental)     │ │
+│  │  mod_flex       FLEX paging encoder (experimental)      │ │
 │  │  mod_aprs       APRS position reporting/telemetry        │ │
 │  └──────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────┘
@@ -519,7 +529,23 @@ kerchunk> /nolog                   # Stop log streaming
 kerchunk> exit                     # Exit console
 ```
 
-17 core commands: status, help, version, uptime, audio, hid, user, log, diag, play, tone, sim, tts, cwid, caller, emergency, dtmfcmd.
+19 core commands: status, help, version, uptime, audio, hid, user, log, diag, play, tone, sim, tts, cwid, caller, emergency, dtmfcmd, threads, schedule.
+
+Key module commands:
+
+```
+kerchunk> txcode dtmf 1234           # Send DTMF sequence
+kerchunk> txcode twotone 1000 1500   # Send two-tone page
+kerchunk> txcode selcall 12345       # Send Selcall sequence
+kerchunk> txcode mdc 1234            # Send MDC-1200 burst
+kerchunk> txcode burst 1000 500      # Send tone burst (freq, duration_ms)
+kerchunk> txcode cwid                # Send CW ID burst
+kerchunk> threads                    # Show managed thread pool status
+kerchunk> schedule                   # Show wall-clock scheduler status
+kerchunk> pocsag send 1234 "Test"    # Send POCSAG page
+kerchunk> flex send 1234 "Test"      # Send FLEX page
+kerchunk> aprs beacon                # Force APRS beacon
+```
 
 ### One-shot and Scripting
 
@@ -897,15 +923,19 @@ COR/PTT uses the CM119 USB HID interface, not GPIO — no pin conflicts.
 
 Config section: `[logger]`
 
-### mod_pocsag — POCSAG Paging
+### mod_pocsag — POCSAG Paging (experimental)
 
-Encodes and transmits POCSAG paging messages via the repeater's TX audio path. Requires [libpocsag](https://github.com/briankwest/libpocsag) (detected by pkg-config at build time).
+Encodes and transmits POCSAG paging messages via the repeater's TX audio path. Supports baseband and FSK modulation modes, with optional de-emphasis. Requires [libpocsag](https://github.com/briankwest/libpocsag) (detected by pkg-config at build time).
+
+> **Experimental:** POCSAG encoding and transmission work but have not been extensively tested over the air. Use with caution.
 
 Config section: `[pocsag]`. CLI: `pocsag send <capcode> <message>`, `pocsag numeric <capcode> <digits>`, `pocsag tone <capcode>`, `pocsag status`.
 
-### mod_flex — FLEX Paging
+### mod_flex — FLEX Paging (experimental)
 
-Encodes and transmits FLEX paging messages via the repeater's TX audio path. Requires [libflex](https://github.com/briankwest/libflex) (detected by pkg-config at build time).
+Encodes and transmits FLEX paging messages via the repeater's TX audio path. Supports 1600/3200/6400 bps speeds, baseband and FSK modulation modes, with optional de-emphasis. Requires [libflex](https://github.com/briankwest/libflex) (detected by pkg-config at build time).
+
+> **Experimental:** FLEX encoding and transmission work but have not been extensively tested over the air. Use with caution.
 
 Config section: `[flex]`. CLI: `flex send <capcode> <message>`, `flex numeric <capcode> <digits>`, `flex tone <capcode>`, `flex status`.
 

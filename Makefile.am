@@ -361,7 +361,7 @@ systemd_DATA = kerchunkd.service
 
 # Documentation
 docdir = $(datadir)/doc/kerchunk
-doc_DATA = README.md ARCHITECTURE.md USAGE.md FEATURES.md
+doc_DATA = README.md ARCHITECTURE.md USAGE.md APRS.md
 
 # ---------- install-data-local: sound files ----------
 
@@ -393,7 +393,7 @@ EXTRA_DIST = \
 	README.md \
 	ARCHITECTURE.md \
 	USAGE.md \
-	FEATURES.md \
+	APRS.md \
 	vendor/mongoose.c \
 	vendor/mongoose.h \
 	cli/linenoise.h \

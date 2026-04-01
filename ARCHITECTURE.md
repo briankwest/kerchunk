@@ -131,6 +131,37 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
   └── Playback callback ← playback ring
 ```
 
+### Managed Thread Pool
+
+The core provides a managed thread pool (`threads_init` / `threads_shutdown`) for modules that need background workers. Threads are registered at load time and supervised by the core:
+
+| Thread | Module | Purpose |
+|--------|--------|---------|
+| TTS worker | mod_tts | ElevenLabs API calls (cond_wait) |
+| NWS poller | mod_nws | api.weather.gov polling (cond_wait) |
+| Web server | mod_web | mongoose mg_mgr_poll loop |
+| Audio flush | mod_web | SPSC ring flush (5ms cadence) |
+| SDR capture | mod_sdr | RTL-SDR sample capture + FM demod |
+
+CLI: `threads` shows status of all managed threads (running, stopped, CPU time).
+
+### Wall-Clock Scheduler
+
+The scheduler (`sched_init` / `sched_shutdown`) provides wall-clock-aligned and one-shot event scheduling:
+
+- **`schedule_aligned(interval_ms, callback, ud)`** -- fires at wall-clock-aligned intervals (e.g., CW ID every 10 minutes, aligned to clock). Drift-free.
+- **`schedule_at(epoch_sec, callback, ud)`** -- fires once at a specific future wall-clock time. Used for deferred events.
+
+The main loop checks the scheduler on each tick (20ms). No dedicated thread needed.
+
+### Shutdown Order
+
+Shutdown proceeds in strict order to avoid use-after-free and ensure clean teardown:
+
+1. `threads_shutdown()` -- join all managed threads
+2. `sched_shutdown()` -- cancel all scheduled events
+3. `modules_shutdown()` -- unload modules (unsubscribe, free resources, dlclose)
+
 ### Synchronization
 
 | Mechanism | Where | Purpose |
@@ -520,9 +551,13 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
   ├── ptt.html      WebSocket PTT      ├── config.html   Live config editor
   └── coverage.html RF planner         └── coverage.html Coverage planner
 
+  Dynamic UI: /api/commands returns CLI metadata (name, usage, description)
+  for each registered command. The admin dashboard uses this to build
+  controls dynamically — modules register commands and the UI adapts.
+
   API Routes (auto-generated from CLI commands):
   ├── GET  /api/{command}    → dispatches CLI command, returns JSON
-  ├── GET  /api/commands     → lists all available commands
+  ├── GET  /api/commands     → lists all available commands (UI metadata)
   ├── GET  /api/status       → repeater state (public)
   ├── GET  /api/weather      → weather data (public)
   ├── GET  /api/nws          → NWS alerts (public)
