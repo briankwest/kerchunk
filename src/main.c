@@ -602,6 +602,64 @@ static int cmd_tone(int argc, const char **argv, kerchunk_resp_t *r)
     return 0;
 }
 
+/* ── Managed threads CLI ── */
+
+static void threads_iter_cb(int id, const char *name, int running,
+                            uint64_t start_us, void *ud)
+{
+    kerchunk_resp_t *r = (kerchunk_resp_t *)ud;
+    uint64_t now_us_v;
+    { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+      now_us_v = (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL; }
+    int secs = (int)((now_us_v - start_us) / 1000000ULL);
+    char line[128];
+    snprintf(line, sizeof(line), "  %2d  %-16s %-8s %dd %dh %dm\n",
+             id, name, running ? "running" : "stopped",
+             secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
+    resp_text_raw(r, line);
+}
+
+static int cmd_threads(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    (void)argc; (void)argv;
+    int n = kerchunk_thread_count();
+    resp_int(r, "count", n);
+    resp_text_raw(r, "  ID  Name              State     Uptime\n");
+    kerchunk_thread_iter(threads_iter_cb, r);
+    if (n == 0) resp_text_raw(r, "  (no managed threads)\n");
+    return 0;
+}
+
+/* ── Schedule CLI ── */
+
+static void sched_iter_cb(int id, const char *type,
+                          const struct timespec *next, int repeat, void *ud)
+{
+    kerchunk_resp_t *r = (kerchunk_resp_t *)ud;
+    struct tm tbuf;
+    gmtime_r(&next->tv_sec, &tbuf);
+    char line[128];
+    snprintf(line, sizeof(line),
+             "  %2d  %-10s %04d-%02d-%02d %02d:%02d:%02d.%03ld  %s\n",
+             id, type,
+             tbuf.tm_year + 1900, tbuf.tm_mon + 1, tbuf.tm_mday,
+             tbuf.tm_hour, tbuf.tm_min, tbuf.tm_sec,
+             next->tv_nsec / 1000000,
+             repeat ? "repeat" : "once");
+    resp_text_raw(r, line);
+}
+
+static int cmd_schedule(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    (void)argc; (void)argv;
+    int n = kerchunk_sched_count();
+    resp_int(r, "count", n);
+    resp_text_raw(r, "  ID  Type        Next Fire (UTC)          Repeat\n");
+    kerchunk_sched_iter(sched_iter_cb, r);
+    if (n == 0) resp_text_raw(r, "  (no scheduled callbacks)\n");
+    return 0;
+}
+
 static int cmd_sim(int argc, const char **argv, kerchunk_resp_t *r)
 {
     if (argc < 2) {
@@ -734,6 +792,10 @@ static const kerchunk_cli_cmd_t g_core_cmds[] = {
       .ui_command = "config reload" },
     { .name = "sim",      .usage = "sim cor|dtmf|tx <args>",            .description = "Simulate radio events",
       .handler = cmd_sim },
+    { .name = "threads",  .usage = "threads",                           .description = "Show managed threads",
+      .handler = cmd_threads },
+    { .name = "schedule", .usage = "schedule",                          .description = "Show scheduled callbacks",
+      .handler = cmd_schedule },
     { .name = "shutdown", .usage = "shutdown",                          .description = "Stop the daemon",
       .handler = cmd_shutdown },
 };
@@ -1240,6 +1302,8 @@ int main(int argc, char **argv)
     /* Init subsystems */
     kerchevt_init();
     kerchunk_timer_init();
+    kerchunk_sched_init();
+    kerchunk_threads_init();
     kerchunk_queue_init();
     kerchunk_core_set_config(cfg);
 
@@ -1507,6 +1571,7 @@ int main(int argc, char **argv)
 
         /* Timers */
         kerchunk_timer_tick();
+        kerchunk_sched_tick();
 
         /* Socket */
         kerchunk_socket_poll();
@@ -1538,6 +1603,8 @@ int main(int argc, char **argv)
     plcode_dcs_dec_destroy(audio_ctx.dcs_dec);
     plcode_dtmf_dec_destroy(audio_ctx.dtmf_dec);
 
+    kerchunk_threads_shutdown();
+    kerchunk_sched_shutdown();
     kerchunk_modules_shutdown();
     kerchunk_socket_shutdown();
     kerchunk_hid_shutdown();

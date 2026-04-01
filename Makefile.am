@@ -40,6 +40,8 @@ kerchunkd_SOURCES = \
 	src/kerchunk_user.c \
 	src/kerchunk_wav.c \
 	src/kerchunk_timer.c \
+	src/kerchunk_sched.c \
+	src/kerchunk_threads.c \
 	src/kerchunk_resp.c \
 	src/kerchunk_evt_json.c \
 	src/kerchunk_console.c
@@ -309,6 +311,8 @@ test_kerchunk_SOURCES = \
 	src/kerchunk_queue.c \
 	src/kerchunk_wav.c \
 	src/kerchunk_timer.c \
+	src/kerchunk_sched.c \
+	src/kerchunk_threads.c \
 	src/kerchunk_user.c \
 	src/kerchunk_resp.c \
 	src/kerchunk_evt_json.c

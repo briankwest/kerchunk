@@ -43,6 +43,7 @@ void resp_finish(kerchunk_resp_t *r);
 #include "kerchunk_log.h"
 #include "kerchunk_user.h"
 #include "kerchunk_wav.h"
+#include "kerchunk_sched.h"
 
 /* Version */
 #define KERCHUNK_VERSION_MAJOR 1
@@ -126,6 +127,21 @@ struct kerchunk_core {
     /* Runtime sample rate (set once at startup) */
     int sample_rate;
     int frame_samples;
+
+    /* Wall-clock scheduler */
+    int  (*schedule_at)(const struct timespec *when,
+                        void (*cb)(void *), void *ud);
+    int  (*schedule_aligned)(int align_ms, int offset_ms, int repeat,
+                             void (*cb)(void *), void *ud);
+    void (*schedule_cancel)(int sched_id);
+
+    /* Managed threads */
+    int  (*thread_create)(const char *name,
+                          void *(*fn)(void *), void *ud);
+    void (*thread_stop)(int tid);
+    int  (*thread_should_stop)(int tid);
+    void (*thread_join)(int tid);
+    int  (*thread_count)(void);
 };
 
 /* Unified command dispatch — core commands + module commands */

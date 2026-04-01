@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <time.h>
 #include <curl/curl.h>
 
 #define LOG_MOD "webhook"
@@ -77,8 +78,7 @@ static pthread_cond_t   g_queue_cond  = PTHREAD_COND_INITIALIZER;
 
 /* ── Worker thread ── */
 
-static pthread_t        g_worker_thread;
-static volatile int     g_worker_running;
+static int              g_worker_tid = -1;
 
 /* ── Stats ── */
 
@@ -179,14 +179,18 @@ static void *webhook_worker(void *arg)
 {
     (void)arg;
 
-    while (g_worker_running) {
+    while (!g_core->thread_should_stop(g_worker_tid)) {
         char payload[PAYLOAD_MAX];
 
         pthread_mutex_lock(&g_queue_mutex);
-        while (g_queue_count == 0 && g_worker_running)
-            pthread_cond_wait(&g_queue_cond, &g_queue_mutex);
+        while (g_queue_count == 0 && !g_core->thread_should_stop(g_worker_tid)) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += 1;
+            pthread_cond_timedwait(&g_queue_cond, &g_queue_mutex, &ts);
+        }
 
-        if (!g_worker_running) {
+        if (g_core->thread_should_stop(g_worker_tid)) {
             pthread_mutex_unlock(&g_queue_mutex);
             break;
         }
@@ -235,7 +239,7 @@ static void *webhook_worker(void *arg)
 static void on_event(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    if (!g_enabled || !g_worker_running) return;
+    if (!g_enabled || g_worker_tid < 0) return;
 
     char json[PAYLOAD_MAX];
     int jlen = kerchevt_to_json(evt, json, sizeof(json));
@@ -301,14 +305,12 @@ static void subscribe_events(const char *events_str)
 
 static void stop_worker(void)
 {
-    if (!g_worker_running) return;
+    if (g_worker_tid < 0) return;
 
-    pthread_mutex_lock(&g_queue_mutex);
-    g_worker_running = 0;
+    g_core->thread_stop(g_worker_tid);
     pthread_cond_signal(&g_queue_cond);
-    pthread_mutex_unlock(&g_queue_mutex);
-
-    pthread_join(g_worker_thread, NULL);
+    g_core->thread_join(g_worker_tid);
+    g_worker_tid = -1;
 }
 
 /* ── Module lifecycle ── */
@@ -371,12 +373,11 @@ static int webhook_configure(const kerchunk_config_t *cfg)
     }
 
     /* Start worker thread */
-    g_worker_running = 1;
-    if (pthread_create(&g_worker_thread, NULL, webhook_worker, NULL) != 0) {
+    g_worker_tid = g_core->thread_create("webhook-send", webhook_worker, NULL);
+    if (g_worker_tid < 0) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
                     "failed to create worker thread");
         g_enabled = 0;
-        g_worker_running = 0;
         unsubscribe_all();
         return 0;
     }
@@ -404,7 +405,7 @@ static int cli_webhook(int argc, const char **argv, kerchunk_resp_t *r)
 
     /* webhook test */
     if (argc >= 2 && strcmp(argv[1], "test") == 0) {
-        if (!g_enabled || !g_worker_running) {
+        if (!g_enabled || g_worker_tid < 0) {
             resp_str(r, "error", "webhook is not enabled");
             return 0;
         }

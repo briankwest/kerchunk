@@ -69,8 +69,7 @@ static int  g_channel = 1;
 static char g_log_file[256] = "sdr_activity.csv";
 
 static rtlsdr_dev_t *g_dev;
-static pthread_t g_thread;
-static volatile int g_running;
+static int g_sdr_tid = -1;
 
 static pthread_mutex_t g_log_mtx = PTHREAD_MUTEX_INITIALIZER;
 
@@ -158,7 +157,7 @@ static void *monitor_thread(void *arg)
     int rms_count = 0;
     int32_t peak_rms = 0;
 
-    while (g_running) {
+    while (!g_core->thread_should_stop(g_sdr_tid)) {
         int n_read = 0;
         if (rtlsdr_read_sync(g_dev, iq_buf, IQ_BUFSZ, &n_read) < 0) break;
         if (n_read == 0) continue;
@@ -338,7 +337,7 @@ static int sdr_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "sdr", "log_file");
     if (v) snprintf(g_log_file, sizeof(g_log_file), "%s", v);
 
-    if (g_running) {
+    if (g_sdr_tid >= 0) {
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "config reloaded (running)");
         return 0;
     }
@@ -361,10 +360,9 @@ static int sdr_configure(const kerchunk_config_t *cfg)
         return 0;
     }
 
-    g_running = 1;
     const char *name = rtlsdr_get_device_name((uint32_t)g_device_index);
 
-    pthread_create(&g_thread, NULL, monitor_thread, NULL);
+    g_sdr_tid = g_core->thread_create("sdr-monitor", monitor_thread, NULL);
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "started: device=%s channel=%d",
                 name ? name : "unknown", g_channel);
@@ -374,10 +372,11 @@ static int sdr_configure(const kerchunk_config_t *cfg)
 
 static void sdr_unload(void)
 {
-    if (g_running) {
-        g_running = 0;
+    if (g_sdr_tid >= 0) {
+        g_core->thread_stop(g_sdr_tid);
         if (g_dev) { rtlsdr_close(g_dev); g_dev = NULL; }
-        pthread_join(g_thread, NULL);
+        g_core->thread_join(g_sdr_tid);
+        g_sdr_tid = -1;
     }
 }
 
@@ -388,7 +387,7 @@ static int cli_sdr(int argc, const char **argv, kerchunk_resp_t *r)
     if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
 
     resp_bool(r, "enabled", g_enabled);
-    resp_bool(r, "running", g_running);
+    resp_bool(r, "running", g_sdr_tid >= 0);
     resp_int(r, "channel", g_channel);
     return 0;
 

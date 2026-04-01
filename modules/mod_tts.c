@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 #include <curl/curl.h>
 
 #ifdef HAVE_NEMO_NORMALIZE
@@ -63,8 +64,7 @@ static int             g_tts_tail;
 static int             g_tts_count;
 static pthread_mutex_t g_tts_mutex    = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_tts_cond     = PTHREAD_COND_INITIALIZER;
-static pthread_t       g_tts_thread;
-static volatile int    g_tts_running;
+static int             g_tts_tid = -1;
 
 /* ── FNV-1a hash for cache keys ── */
 
@@ -284,12 +284,16 @@ static void *tts_worker(void *arg)
 {
     (void)arg;
 
-    while (g_tts_running) {
+    while (!g_core->thread_should_stop(g_tts_tid)) {
         pthread_mutex_lock(&g_tts_mutex);
-        while (g_tts_count == 0 && g_tts_running)
-            pthread_cond_wait(&g_tts_cond, &g_tts_mutex);
+        while (g_tts_count == 0 && !g_core->thread_should_stop(g_tts_tid)) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += 1;
+            pthread_cond_timedwait(&g_tts_cond, &g_tts_mutex, &ts);
+        }
 
-        if (!g_tts_running) {
+        if (g_core->thread_should_stop(g_tts_tid)) {
             pthread_mutex_unlock(&g_tts_mutex);
             break;
         }
@@ -396,18 +400,17 @@ static int tts_configure(const kerchunk_config_t *cfg)
     }
 
     /* Stop existing worker thread on reload */
-    if (g_tts_running) {
-        pthread_mutex_lock(&g_tts_mutex);
-        g_tts_running = 0;
+    if (g_tts_tid >= 0) {
+        g_core->thread_stop(g_tts_tid);
         pthread_cond_signal(&g_tts_cond);
-        pthread_mutex_unlock(&g_tts_mutex);
-        pthread_join(g_tts_thread, NULL);
+        g_core->thread_join(g_tts_tid);
+        g_tts_tid = -1;
     }
 
     /* Start worker thread */
-    g_tts_running = 1;
     g_tts_head = g_tts_tail = g_tts_count = 0;
-    if (pthread_create(&g_tts_thread, NULL, tts_worker, NULL) != 0) {
+    g_tts_tid = g_core->thread_create("tts-synth", tts_worker, NULL);
+    if (g_tts_tid < 0) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
                     "failed to create TTS worker thread");
         return -1;
@@ -424,12 +427,11 @@ static int tts_configure(const kerchunk_config_t *cfg)
 
 static void tts_unload(void)
 {
-    if (g_tts_running) {
-        pthread_mutex_lock(&g_tts_mutex);
-        g_tts_running = 0;
+    if (g_tts_tid >= 0) {
+        g_core->thread_stop(g_tts_tid);
         pthread_cond_signal(&g_tts_cond);
-        pthread_mutex_unlock(&g_tts_mutex);
-        pthread_join(g_tts_thread, NULL);
+        g_core->thread_join(g_tts_tid);
+        g_tts_tid = -1;
     }
 
     g_initialized = 0;

@@ -385,11 +385,10 @@ static void process_alerts(const char *json)
 
 /* ── Background poll thread (avoids blocking main loop on curl) ── */
 
-static pthread_t       g_poll_thread;
+static int             g_poll_tid = -1;
 static pthread_mutex_t g_poll_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_poll_cond  = PTHREAD_COND_INITIALIZER;
 static volatile int    g_poll_requested;
-static volatile int    g_poll_running;
 
 static void poll_nws(void)
 {
@@ -407,14 +406,18 @@ static void poll_nws(void)
 static void *poll_worker(void *arg)
 {
     (void)arg;
-    while (g_poll_running) {
+    while (!g_core->thread_should_stop(g_poll_tid)) {
         pthread_mutex_lock(&g_poll_mutex);
-        while (!g_poll_requested && g_poll_running)
-            pthread_cond_wait(&g_poll_cond, &g_poll_mutex);
+        /* Wait for poll request or stop signal */
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1;  /* wake every 1s to check stop flag */
+        while (!g_poll_requested && !g_core->thread_should_stop(g_poll_tid))
+            pthread_cond_timedwait(&g_poll_cond, &g_poll_mutex, &ts);
         g_poll_requested = 0;
         pthread_mutex_unlock(&g_poll_mutex);
 
-        if (!g_poll_running) break;
+        if (g_core->thread_should_stop(g_poll_tid)) break;
         poll_nws();
     }
     return NULL;
@@ -548,12 +551,11 @@ static int nws_configure(const kerchunk_config_t *cfg)
     }
 
     /* Stop existing poll thread on reload */
-    if (g_poll_running) {
-        pthread_mutex_lock(&g_poll_mutex);
-        g_poll_running = 0;
+    if (g_poll_tid >= 0) {
+        g_core->thread_stop(g_poll_tid);
         pthread_cond_signal(&g_poll_cond);
-        pthread_mutex_unlock(&g_poll_mutex);
-        pthread_join(g_poll_thread, NULL);
+        g_core->thread_join(g_poll_tid);
+        g_poll_tid = -1;
     }
 
     /* Start timers */
@@ -566,9 +568,9 @@ static int nws_configure(const kerchunk_config_t *cfg)
                                                reannounce_timer_cb, NULL);
 
     /* Start background poll thread */
-    g_poll_running = 1;
     g_poll_requested = 0;
-    if (pthread_create(&g_poll_thread, NULL, poll_worker, NULL) != 0) {
+    g_poll_tid = g_core->thread_create("nws-poll", poll_worker, NULL);
+    if (g_poll_tid < 0) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
                     "failed to create poll thread");
         g_enabled = 0;
@@ -589,12 +591,11 @@ static int nws_configure(const kerchunk_config_t *cfg)
 static void nws_unload(void)
 {
     /* Stop poll thread */
-    if (g_poll_running) {
-        pthread_mutex_lock(&g_poll_mutex);
-        g_poll_running = 0;
+    if (g_poll_tid >= 0) {
+        g_core->thread_stop(g_poll_tid);
         pthread_cond_signal(&g_poll_cond);
-        pthread_mutex_unlock(&g_poll_mutex);
-        pthread_join(g_poll_thread, NULL);
+        g_core->thread_join(g_poll_tid);
+        g_poll_tid = -1;
     }
 
     if (g_poll_timer >= 0) {

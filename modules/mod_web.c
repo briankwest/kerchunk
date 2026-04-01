@@ -72,8 +72,7 @@ static int g_ptt_priority       = KERCHUNK_PRI_NORMAL;   /* [web] ptt_priority *
 /* Mongoose state */
 static struct mg_mgr g_mgr;
 static unsigned long g_listener_id;
-static pthread_t g_web_thread;
-static volatile int g_running;
+static int g_web_tid = -1;
 static atomic_int g_sse_count;
 static atomic_int g_ws_audio_count;
 static uint16_t   g_ws_seq;
@@ -1624,8 +1623,7 @@ static void web_event_handler(const kerchevt_t *evt, void *ud)
  * thread-safe) to wake the mongoose poll.  The mongoose event handler
  * sees MG_EV_WAKEUP with data "A" and calls ws_flush_ring() on its
  * own thread. */
-static pthread_t g_audio_ws_thread;
-static volatile int g_audio_ws_running;
+static int g_audio_ws_tid = -1;
 
 static void *audio_ws_thread(void *arg)
 {
@@ -1633,7 +1631,7 @@ static void *audio_ws_thread(void *arg)
     struct timespec deadline;
     clock_gettime(CLOCK_MONOTONIC, &deadline);
 
-    while (g_audio_ws_running) {
+    while (!g_core->thread_should_stop(g_audio_ws_tid)) {
         deadline.tv_nsec += 5000000L;  /* 5ms cadence */
         if (deadline.tv_nsec >= 1000000000L) {
             deadline.tv_sec++;
@@ -1658,7 +1656,7 @@ static void *audio_ws_thread(void *arg)
 static void *web_thread(void *arg)
 {
     (void)arg;
-    while (g_running) {
+    while (!g_core->thread_should_stop(g_web_tid)) {
         mg_mgr_poll(&g_mgr, 5);  /* 5ms poll timeout */
     }
     return NULL;
@@ -1712,7 +1710,7 @@ static int web_configure(const kerchunk_config_t *cfg)
     /* If already running, just update config values (auth_token, static_dir)
      * without restarting — restarting would deadlock if triggered by a web
      * API handler on the mongoose thread via SIGHUP. */
-    if (g_running) {
+    if (g_web_tid >= 0) {
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                     "config reloaded (port=%d auth=%s)",
                     g_port, g_auth_token[0] ? "yes" : "no");
@@ -1799,9 +1797,9 @@ static int web_configure(const kerchunk_config_t *cfg)
                            web_event_handler, NULL);
 
     /* Start server thread */
-    g_running = 1;
     g_sse_count = 0;
-    if (pthread_create(&g_web_thread, NULL, web_thread, NULL) != 0) {
+    g_web_tid = g_core->thread_create("web-server", web_thread, NULL);
+    if (g_web_tid < 0) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "failed to create web thread");
         mg_mgr_free(&g_mgr);
         g_enabled = 0;
@@ -1809,11 +1807,10 @@ static int web_configure(const kerchunk_config_t *cfg)
     }
 
     /* Start audio flush thread — wakes mongoose for WebSocket audio */
-    g_audio_ws_running = 1;
-    if (pthread_create(&g_audio_ws_thread, NULL, audio_ws_thread, NULL) != 0) {
+    g_audio_ws_tid = g_core->thread_create("web-audio", audio_ws_thread, NULL);
+    if (g_audio_ws_tid < 0) {
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                     "audio flush thread failed — WebSocket audio may stutter");
-        g_audio_ws_running = 0;
     }
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
@@ -1841,13 +1838,14 @@ static void web_unload(void)
         g_core->unsubscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + i), web_event_handler);
 
     /* Stop audio flush thread first (it wakes mongoose via mg_wakeup) */
-    if (g_audio_ws_running) {
-        g_audio_ws_running = 0;
-        pthread_join(g_audio_ws_thread, NULL);
+    if (g_audio_ws_tid >= 0) {
+        g_core->thread_stop(g_audio_ws_tid);
+        g_core->thread_join(g_audio_ws_tid);
+        g_audio_ws_tid = -1;
     }
 
     /* Broadcast shutdown to all clients before stopping */
-    if (g_running) {
+    if (g_web_tid >= 0) {
         for (struct mg_connection *c = g_mgr.conns; c; c = c->next) {
             if (c->data[0] == 'E') {
                 /* SSE: send shutdown event */
@@ -1860,8 +1858,9 @@ static void web_unload(void)
         /* Give mongoose one poll cycle to flush the close frames */
         mg_mgr_poll(&g_mgr, 50);
 
-        g_running = 0;
-        pthread_join(g_web_thread, NULL);
+        g_core->thread_stop(g_web_tid);
+        g_core->thread_join(g_web_tid);
+        g_web_tid = -1;
     }
 
     /* Release any WebSocket PTT that was held during shutdown */

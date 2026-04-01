@@ -292,6 +292,14 @@ static kerchunk_core_t g_core = {
     .user_count           = core_user_count,
     .sample_rate          = 48000,
     .frame_samples        = 960,
+    .schedule_at          = kerchunk_sched_at,
+    .schedule_aligned     = kerchunk_sched_aligned,
+    .schedule_cancel      = kerchunk_sched_cancel,
+    .thread_create        = kerchunk_thread_create,
+    .thread_stop          = kerchunk_thread_stop,
+    .thread_should_stop   = kerchunk_thread_should_stop,
+    .thread_join          = kerchunk_thread_join,
+    .thread_count         = kerchunk_thread_count,
 };
 
 /* Public accessors */
