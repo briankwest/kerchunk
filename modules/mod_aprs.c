@@ -32,6 +32,7 @@
 static kerchunk_core_t *g_core;
 static int g_enabled = 1;
 static int g_tx_count = 0;
+static float g_tx_level = 0.5f;
 
 static char g_callsign[16] = "N0CALL-9";
 static double g_lat = 35.21;
@@ -77,6 +78,10 @@ static int aprs_tx_frame(const uint8_t *frame, size_t frame_len)
 		            "AFSK modulate failed: %d", (int)err);
 		return -1;
 	}
+
+	/* apply tx_level scaling */
+	for (size_t i = 0; i < ns; i++)
+		audio[i] = (int16_t)((float)audio[i] * g_tx_level);
 
 	g_core->queue_audio_buffer(audio, ns, KERCHUNK_PRI_NORMAL);
 
@@ -233,6 +238,12 @@ static int mod_configure(const kerchunk_config_t *cfg)
 	v = g_core->config_get("aprs", "path");
 	if (v) strncpy(g_path_str, v, sizeof(g_path_str) - 1);
 	parse_path();
+	v = g_core->config_get("aprs", "tx_level");
+	if (v) {
+		float lv = (float)atof(v);
+		if (lv > 0.0f && lv <= 1.0f) g_tx_level = lv;
+	}
+	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "tx_level=%.0f%%", g_tx_level * 100.0f);
 	return 0;
 }
 
