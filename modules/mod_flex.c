@@ -27,6 +27,7 @@ static int g_enabled = 1;
 static int g_tx_count = 0;
 static int g_deemph = 0;
 static int g_use_fsk = 0;  /* 0=baseband (direct mod), 1=FSK tones (mic input) */
+static float g_tx_level = 0.5f;  /* 0.0-1.0, scales audio output */
 static flex_speed_t g_default_speed = FLEX_SPEED_1600_2;
 
 static int flex_tx(uint32_t capcode, flex_msg_type_t type,
@@ -75,7 +76,7 @@ static int flex_tx(uint32_t capcode, flex_msg_type_t type,
 	int16_t *pcm = malloc(ns * sizeof(int16_t));
 	if (!pcm) return -1;
 	for (size_t i = 0; i < ns; i++)
-		pcm[i] = (int16_t)(fbuf[i] * 32767.0f);
+		pcm[i] = (int16_t)(fbuf[i] * 32767.0f * g_tx_level);
 
 	g_core->queue_audio_buffer(pcm, ns, KERCHUNK_PRI_NORMAL);
 	free(pcm);
@@ -159,6 +160,7 @@ static int cli_flex(int argc, const char **argv, kerchunk_resp_t *resp)
 		resp_bool(resp, "enabled", g_enabled);
 		resp_str(resp, "modulation", g_use_fsk ? "fsk" : "baseband");
 		resp_bool(resp, "deemphasis", g_deemph);
+		resp_int(resp, "tx_level_pct", (int)(g_tx_level * 100.0f));
 		resp_int(resp, "tx_count", g_tx_count);
 		resp_int(resp, "default_speed", flex_speed_bps(g_default_speed));
 	} else {
@@ -236,6 +238,12 @@ static int mod_configure(const kerchunk_config_t *cfg)
 	g_deemph = (v && strcmp(v, "on") == 0);
 	v = g_core->config_get("flex", "modulation");
 	g_use_fsk = (v && strcmp(v, "fsk") == 0);
+	v = g_core->config_get("flex", "tx_level");
+	if (v) {
+		float lv = (float)atof(v);
+		if (lv > 0.0f && lv <= 1.0f) g_tx_level = lv;
+	}
+	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "tx_level=%.0f%%", g_tx_level * 100.0f);
 	return 0;
 }
 
