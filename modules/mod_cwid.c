@@ -18,7 +18,7 @@
 #define LOG_MOD "cwid"
 
 static kerchunk_core_t *g_core;
-static int g_timer_id     = -1;
+static int g_sched_id     = -1;
 static int g_solar_timer  = -1;
 static int g_pending      = 0;
 static int g_cwid_interval_ms = 600000;
@@ -272,20 +272,6 @@ static int is_quiet_hour(void)
         return hour >= g_quiet_start || hour < g_quiet_end;
 }
 
-/* Milliseconds until the next clock-aligned interval boundary.
- * E.g., with a 10-min interval at 14:37, returns 3 min (→ 14:40). */
-static int ms_until_next_boundary(int interval_ms)
-{
-    time_t now = time(NULL);
-    struct tm *tm = localtime(&now);
-    int sec_into_hour = tm->tm_min * 60 + tm->tm_sec;
-    int interval_sec = interval_ms / 1000;
-    if (interval_sec <= 0) interval_sec = 600;
-    int remainder = sec_into_hour % interval_sec;
-    if (remainder == 0) return interval_ms;  /* on boundary — next full interval */
-    return (interval_sec - remainder) * 1000;
-}
-
 static void cwid_timer_cb(void *ud)
 {
     (void)ud;
@@ -299,14 +285,6 @@ static void cwid_timer_cb(void *ud)
         g_pending = 1;
         g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "CW ID deferred (channel busy)");
     }
-}
-
-/* One-shot callback to align first CW ID to clock, then start repeating timer */
-static void cwid_align_cb(void *ud)
-{
-    (void)ud;
-    cwid_timer_cb(NULL);
-    g_timer_id = g_core->timer_create(g_cwid_interval_ms, 1, cwid_timer_cb, NULL);
 }
 
 static void on_tail_start(const kerchevt_t *evt, void *ud)
@@ -396,15 +374,15 @@ static int cwid_configure(const kerchunk_config_t *cfg)
         g_solar_timer = g_core->timer_create(86400000, 1, fetch_solar_times, NULL); /* 24h */
     }
 
-    if (g_timer_id >= 0)
-        g_core->timer_cancel(g_timer_id);
-    int offset = ms_until_next_boundary(g_cwid_interval_ms);
-    g_timer_id = g_core->timer_create(offset, 0, cwid_align_cb, NULL);
+    if (g_sched_id >= 0)
+        g_core->schedule_cancel(g_sched_id);
+    g_sched_id = g_core->schedule_aligned(g_cwid_interval_ms, 0, 1,
+                                          cwid_timer_cb, NULL);
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "callsign=%s interval=%dms wpm=%d freq=%d",
                 g_callsign, g_cwid_interval_ms, g_cwid_wpm, g_cwid_freq);
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "first CW ID in %d.%ds (clock-aligned)",
-                offset / 1000, (offset % 1000) / 100);
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "CW ID wall-clock aligned (every %ds)", g_cwid_interval_ms / 1000);
     if (g_quiet_start >= 0 && g_quiet_end >= 0)
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "quiet hours: %02d:00-%02d:00",
                     g_quiet_start, g_quiet_end);
@@ -415,9 +393,9 @@ static void cwid_unload(void)
 {
     g_core->unsubscribe(KERCHEVT_TAIL_START, on_tail_start);
     g_core->unsubscribe(KERCHEVT_STATE_CHANGE, on_state_change);
-    if (g_timer_id >= 0) {
-        g_core->timer_cancel(g_timer_id);
-        g_timer_id = -1;
+    if (g_sched_id >= 0) {
+        g_core->schedule_cancel(g_sched_id);
+        g_sched_id = -1;
     }
     if (g_solar_timer >= 0) {
         g_core->timer_cancel(g_solar_timer);
