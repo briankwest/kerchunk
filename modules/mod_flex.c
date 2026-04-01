@@ -26,6 +26,7 @@ static kerchunk_core_t *g_core;
 static int g_enabled = 1;
 static int g_tx_count = 0;
 static int g_deemph = 0;
+static int g_use_fsk = 0;  /* 0=baseband (direct mod), 1=FSK tones (mic input) */
 static flex_speed_t g_default_speed = FLEX_SPEED_1600_2;
 
 static int flex_tx(uint32_t capcode, flex_msg_type_t type,
@@ -46,13 +47,28 @@ static int flex_tx(uint32_t capcode, flex_msg_type_t type,
 
 	float fbuf[512000];
 	size_t ns = 0;
-	int flags = g_deemph ? FLEX_BASEBAND_DEEMPH : 0;
-	err = flex_baseband_ex(bitbuf, bits, speed,
-	                       (float)g_core->sample_rate, flags,
-	                       fbuf, sizeof(fbuf) / sizeof(float), &ns);
+
+	if (g_use_fsk) {
+		/* FSK audio tones — for mic/line input to radio */
+		uint8_t *unpacked = (uint8_t *)malloc(bits);
+		if (!unpacked) return -1;
+		for (size_t i = 0; i < bits; i++)
+			unpacked[i] = (bitbuf[i / 8] >> (7 - (i % 8))) & 1;
+		flex_mod_t mod;
+		flex_mod_init(&mod, speed, (float)g_core->sample_rate);
+		err = flex_mod_bits(&mod, unpacked, bits,
+		                    fbuf, sizeof(fbuf) / sizeof(float), &ns);
+		free(unpacked);
+	} else {
+		/* Baseband NRZ — for direct modulator (RIM-Lite, varactor) */
+		int flags = g_deemph ? FLEX_BASEBAND_DEEMPH : 0;
+		err = flex_baseband_ex(bitbuf, bits, speed,
+		                       (float)g_core->sample_rate, flags,
+		                       fbuf, sizeof(fbuf) / sizeof(float), &ns);
+	}
 	if (err != FLEX_OK) {
 		g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
-		            "baseband failed: %s", flex_strerror(err));
+		            "modulate failed: %s", flex_strerror(err));
 		return -1;
 	}
 
@@ -141,6 +157,7 @@ static int cli_flex(int argc, const char **argv, kerchunk_resp_t *resp)
 	} else if (strcmp(sub, "status") == 0) {
 		resp_str(resp, "module", "mod_flex");
 		resp_bool(resp, "enabled", g_enabled);
+		resp_str(resp, "modulation", g_use_fsk ? "fsk" : "baseband");
 		resp_bool(resp, "deemphasis", g_deemph);
 		resp_int(resp, "tx_count", g_tx_count);
 		resp_int(resp, "default_speed", flex_speed_bps(g_default_speed));
@@ -217,6 +234,8 @@ static int mod_configure(const kerchunk_config_t *cfg)
 	if (v) g_default_speed = parse_speed(v);
 	v = g_core->config_get("flex", "deemphasis");
 	g_deemph = (v && strcmp(v, "on") == 0);
+	v = g_core->config_get("flex", "modulation");
+	g_use_fsk = (v && strcmp(v, "fsk") == 0);
 	return 0;
 }
 

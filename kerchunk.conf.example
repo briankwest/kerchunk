@@ -499,10 +499,13 @@ group = 2
 ; ----------------------------------------------------------------------------
 [pocsag]
 ; enabled = on
-; deemphasis = off                ; on | off — apply 75µs de-emphasis to cancel
-                                  ; radio TX pre-emphasis. Enable when feeding a
-                                  ; radio mic input with pre-emphasis (BTECH HT).
-                                  ; Leave off for flat/data ports (RIM-Lite, RT97L).
+; modulation = baseband           ; baseband | fsk
+                                  ; baseband: NRZ levels for direct modulator input
+                                  ;   (RIM-Lite, repeater accessory port, varactor)
+                                  ; fsk: audio tones for mic/line input to radio
+                                  ;   (AIOC, BTECH HT, any radio with mic jack)
+; deemphasis = off                ; on | off — apply 75µs de-emphasis (baseband only)
+                                  ; for radios with TX pre-emphasis on mic input
 
 ; ----------------------------------------------------------------------------
 ; FLEX paging transmitter (requires libflex)
@@ -510,12 +513,13 @@ group = 2
 ; CLI: flex send <capcode> [speed] <message>
 ;      flex numeric <capcode> <digits>
 ;      flex tone <capcode>
-; Speeds: 1600, 3200
+; Speeds: 1600, 3200, 6400
 ; ----------------------------------------------------------------------------
 [flex]
 ; enabled = on
 ; default_speed = 1600
-; deemphasis = off                ; on | off — same as [pocsag] deemphasis
+; modulation = baseband           ; baseband | fsk — same as [pocsag]
+; deemphasis = off                ; on | off — baseband only
 
 ; ----------------------------------------------------------------------------
 ; APRS beacon and messaging (requires libaprs)
