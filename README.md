@@ -229,7 +229,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_sdr        RTL-SDR single-channel monitor           │ │
 │  │  mod_freeswitch FreeSWITCH AutoPatch (Ham only)          │ │
 │  │  mod_pocsag     POCSAG paging encoder (experimental)     │ │
-│  │  mod_flex       FLEX paging encoder (experimental)      │ │
+│  │  mod_flex       FLEX paging encoder (experimental)       │ │
 │  │  mod_aprs       APRS position reporting/telemetry        │ │
 │  └──────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────┘
