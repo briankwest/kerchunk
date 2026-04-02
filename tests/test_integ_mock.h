@@ -259,14 +259,14 @@ MOCK_UNUSED static int mock_schedule_at(const struct timespec *when,
                                         void (*cb)(void *), void *ud)
 {
     (void)when;
-    return mock_timer_create(0, 0, cb, ud);
+    return mock_timer_create(1, 0, cb, ud);
 }
 
 MOCK_UNUSED static int mock_schedule_aligned(int align_ms, int offset_ms, int repeat,
                                              void (*cb)(void *), void *ud)
 {
-    (void)align_ms; (void)offset_ms;
-    return mock_timer_create(0, repeat, cb, ud);
+    (void)offset_ms;
+    return mock_timer_create(align_ms > 0 ? align_ms : 1, repeat, cb, ud);
 }
 
 MOCK_UNUSED static void mock_schedule_cancel(int id) { mock_timer_cancel(id); }
