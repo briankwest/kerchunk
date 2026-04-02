@@ -294,6 +294,38 @@ static int flex_schedule_page(uint32_t capcode, flex_msg_type_t type,
 	return 0;
 }
 
+/* ── immediate TX (bypass scheduler, for testing) ── */
+
+static int flex_tx_now(uint32_t capcode, flex_msg_type_t type,
+                       flex_speed_t speed, const char *text)
+{
+	uint16_t cycle = 0, frame = 0;
+	{
+		struct timespec now;
+		clock_gettime(CLOCK_REALTIME, &now);
+		flex_frame_at_time(now.tv_sec, &cycle, &frame);
+	}
+
+	flex_pending_t tmp;
+	memset(&tmp, 0, sizeof(tmp));
+	tmp.capcode = capcode;
+	tmp.type = type;
+	tmp.speed = speed;
+	if (text) snprintf(tmp.text, sizeof(tmp.text), "%s", text);
+
+	if (flex_pre_encode(&tmp, cycle, frame) < 0)
+		return -1;
+
+	g_core->queue_audio_buffer(tmp.pcm, tmp.pcm_len,
+	                           KERCHUNK_PRI_NORMAL, QUEUE_FLAG_NO_TAIL);
+	free(tmp.pcm);
+	g_tx_count++;
+	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+	            "immediate TX: capcode=%u speed=%d type=%d",
+	            capcode, flex_speed_bps(speed), (int)type);
+	return 0;
+}
+
 /* ── CLI handler ── */
 
 static int cli_flex(int argc, const char **argv, kerchunk_resp_t *resp)
@@ -330,6 +362,37 @@ static int cli_flex(int argc, const char **argv, kerchunk_resp_t *resp)
 
 		int rc = flex_schedule_page(capcode, FLEX_MSG_ALPHA, speed, msg, resp);
 		if (rc == 0) resp_str(resp, "message", msg);
+
+	} else if (strcmp(sub, "now") == 0) {
+		/* immediate TX — bypass frame scheduler */
+		if (argc < 4) {
+			resp_str(resp, "error", "usage: flex now <capcode> [speed] <message>");
+			resp_finish(resp);
+			return -1;
+		}
+		uint32_t capcode = (uint32_t)strtoul(argv[2], NULL, 10);
+		flex_speed_t speed = g_default_speed;
+		int msg_start = 3;
+		if (argc >= 5) {
+			int maybe = atoi(argv[3]);
+			if (maybe == 1600 || maybe == 3200 || maybe == 6400) {
+				speed = (maybe == 3200) ? FLEX_SPEED_3200_2 :
+				        (maybe == 6400) ? FLEX_SPEED_6400_4 :
+				        FLEX_SPEED_1600_2;
+				msg_start = 4;
+			}
+		}
+		char msg[512] = {0};
+		for (int i = msg_start; i < argc; i++) {
+			if (i > msg_start) strncat(msg, " ", sizeof(msg) - strlen(msg) - 1);
+			strncat(msg, argv[i], sizeof(msg) - strlen(msg) - 1);
+		}
+		int rc = flex_tx_now(capcode, FLEX_MSG_ALPHA, speed, msg);
+		resp_str(resp, "status", rc == 0 ? "queued" : "error");
+		if (rc == 0) {
+			resp_int(resp, "capcode", (int)capcode);
+			resp_str(resp, "message", msg);
+		}
 
 	} else if (strcmp(sub, "numeric") == 0) {
 		if (argc < 4) {
@@ -387,16 +450,17 @@ usage:
 		"    capcode: pager address (decimal)\n"
 		"    speed:   1600 (default), 3200, 6400\n"
 		"    message: text string\n\n"
+		"  flex now <capcode> [speed] <message>\n"
+		"    Transmit immediately (bypass frame scheduler).\n"
+		"    For testing — pagers in battery-save may miss this.\n\n"
 		"  flex numeric <capcode> <digits>\n"
 		"    Schedule numeric page.\n\n"
 		"  flex tone <capcode>\n"
 		"    Schedule tone-only page.\n\n"
 		"  flex status\n"
 		"    Show module status, pending queue, current FLEX time.\n\n"
-		"Pages are queued and transmitted at the correct frame boundary\n"
-		"(capcode %% 128) for the pager's battery-saving schedule.\n\n"
 		"Config: [flex] enabled, default_speed, modulation, deemphasis, tx_level\n");
-	resp_str(resp, "error", "usage: flex <send|numeric|tone|status>");
+	resp_str(resp, "error", "usage: flex <send|now|numeric|tone|status>");
 	resp_finish(resp);
 	return -1;
 }
