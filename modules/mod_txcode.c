@@ -78,7 +78,7 @@ static void create_encoder(uint16_t ctcss_freq_x10, uint16_t dcs_code)
 
 static int queue_burst(int16_t *buf, size_t n)
 {
-	g_core->queue_audio_buffer(buf, n, KERCHUNK_PRI_NORMAL);
+	g_core->queue_audio_buffer(buf, n, KERCHUNK_PRI_NORMAL, 0);
 	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
 	            "queued burst: %zu samples (%.1f ms)",
 	            n, (double)n / g_core->sample_rate * 1000.0);

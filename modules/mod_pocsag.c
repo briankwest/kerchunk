@@ -79,7 +79,7 @@ static int pocsag_tx(uint32_t addr, uint32_t baud, pocsag_func_t func,
 	for (size_t i = 0; i < ns; i++)
 		pcm[i] = (int16_t)(fbuf[i] * 32767.0f * g_tx_level);
 
-	g_core->queue_audio_buffer(pcm, ns, KERCHUNK_PRI_NORMAL);
+	g_core->queue_audio_buffer(pcm, ns, KERCHUNK_PRI_NORMAL, QUEUE_FLAG_NO_TAIL);
 	free(pcm);
 
 	g_tx_count++;

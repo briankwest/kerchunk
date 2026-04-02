@@ -52,7 +52,7 @@ static void on_queue_complete(const kerchevt_t *evt, void *ud)
         g_courtesy_pending = 0;
         return;
     }
-    if (g_queue_courtesy)
+    if (g_queue_courtesy && !(kerchunk_queue_drain_flags() & QUEUE_FLAG_NO_TAIL))
         queue_tone("queue_complete");
 }
 

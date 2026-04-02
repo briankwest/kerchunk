@@ -25,29 +25,29 @@ void test_integ_cwid_module(void)
     mod_cwid.load(&g_mock_core);
     cwid_configure(cfg);
 
-    /* 1. Timer created on configure */
+    /* 1. Schedule created on configure */
     test_begin("cwid: timer created on configure");
-    test_assert(g_timer_id >= 0, "timer not created");
+    test_assert(g_sched_id >= 0, "schedule not created");
     test_end();
 
-    /* 2. Timer fires CW ID when idle (not receiving, not transmitting) */
+    /* 2. Schedule fires CW ID when idle (not receiving, not transmitting) */
     test_begin("cwid: timer sends CW ID when idle");
     g_mock.receiving = 0;
     g_mock.transmitting = 0;
     g_mock.buffer_calls = 0;
     g_mock.silence_calls = 0;
-    mock_fire_timer(g_timer_id);
+    cwid_timer_cb(NULL);
     test_assert(g_mock.buffer_calls >= 1, "no CW audio queued");
     test_assert(g_mock.silence_calls >= 1, "no lead-in silence");
     test_assert(g_pending == 0, "pending flag not cleared");
     test_end();
 
-    /* 3. Timer defers when receiving */
+    /* 3. Schedule defers when receiving */
     test_begin("cwid: timer defers when receiving");
     g_mock.receiving = 1;
     g_mock.transmitting = 0;
     g_mock.buffer_calls = 0;
-    mock_fire_timer(g_timer_id);
+    cwid_timer_cb(NULL);
     test_assert(g_pending == 1, "pending not set");
     test_assert(g_mock.buffer_calls == 0, "CW ID sent while receiving");
     test_end();
@@ -61,12 +61,12 @@ void test_integ_cwid_module(void)
     test_assert(g_pending == 0, "pending not cleared after tail");
     test_end();
 
-    /* 5. Timer defers when transmitting */
+    /* 5. Schedule defers when transmitting */
     test_begin("cwid: timer defers when transmitting");
     g_mock.receiving = 0;
     g_mock.transmitting = 1;
     g_mock.buffer_calls = 0;
-    mock_fire_timer(g_timer_id);
+    cwid_timer_cb(NULL);
     test_assert(g_pending == 1, "pending not set");
     test_assert(g_mock.buffer_calls == 0, "CW ID sent while transmitting");
     test_end();
@@ -120,7 +120,7 @@ void test_integ_cwid_module(void)
     g_mock.receiving = 0;
     g_mock.transmitting = 0;
     g_mock.buffer_calls = 0;
-    mock_fire_timer(g_timer_id);
+    cwid_timer_cb(NULL);
     test_assert(g_mock.buffer_calls >= 1, "CW ID should fire when quiet disabled");
     test_end();
     mod_cwid.unload();
@@ -134,7 +134,7 @@ void test_integ_cwid_module(void)
     g_mock.receiving = 0;
     g_mock.transmitting = 0;
     g_mock.buffer_calls = 0;
-    mock_fire_timer(g_timer_id);
+    cwid_timer_cb(NULL);
     test_assert(g_mock.buffer_calls == 0, "CW ID should be skipped during quiet hours");
     test_end();
 

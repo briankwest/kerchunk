@@ -36,6 +36,8 @@ static size_t   g_drain_pos;
 static int      g_draining;
 static int      g_drain_item_id;
 static kerchunk_queue_item_type_t g_drain_type;
+static int      g_drain_flags;
+static int      g_last_drain_flags;
 
 /* 1 while queue is actively playing a batch — prevents preemption */
 static int      g_batch_active;
@@ -164,7 +166,7 @@ int kerchunk_queue_add_file(const char *path, int priority)
     return id;
 }
 
-int kerchunk_queue_add_buffer(const int16_t *buf, size_t n, int priority)
+int kerchunk_queue_add_buffer(const int16_t *buf, size_t n, int priority, int flags)
 {
     if (!buf || n == 0)
         return -1;
@@ -183,6 +185,7 @@ int kerchunk_queue_add_buffer(const int16_t *buf, size_t n, int priority)
 
     item->type       = QUEUE_AUDIO_BUFFER;
     item->priority   = priority;
+    item->flags      = flags;
     item->buffer.buf = copy;
     item->buffer.n   = n;
     item->buffer.owns = 1;
@@ -343,6 +346,8 @@ static int load_next_item(void)
 
         g_drain_item_id = item->id;
         g_drain_type    = item->type;
+        g_drain_flags   = item->flags;
+        g_last_drain_flags = item->flags;
         g_draining = 1;
         g_batch_active = 1;
         free_item(item);
@@ -416,4 +421,9 @@ int kerchunk_queue_is_draining(void)
     int d = g_draining;
     pthread_mutex_unlock(&g_mutex);
     return d;
+}
+
+int kerchunk_queue_drain_flags(void)
+{
+    return g_last_drain_flags;
 }

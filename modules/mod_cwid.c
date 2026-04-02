@@ -221,7 +221,7 @@ static void send_cwid(void)
 
     if (pos > 0) {
         g_core->queue_silence(200, KERCHUNK_PRI_IDENT);
-        g_core->queue_audio_buffer(buf, pos, KERCHUNK_PRI_IDENT);
+        g_core->queue_audio_buffer(buf, pos, KERCHUNK_PRI_IDENT, 0);
         g_core->queue_silence(100, KERCHUNK_PRI_IDENT);
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "CW ID queued: %s (%zu samples)",
                     g_callsign, pos);

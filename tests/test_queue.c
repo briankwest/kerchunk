@@ -29,7 +29,7 @@ static void *producer_fn(void *arg)
     for (int i = 0; i < count; i++) {
         for (int j = 0; j < 160; j++)
             buf[j] = (int16_t)i;
-        kerchunk_queue_add_buffer(buf, 160, 2);
+        kerchunk_queue_add_buffer(buf, 160, 2, 0);
         atomic_fetch_add(&g_items_produced, 1);
         if (i % 10 == 0) usleep(100);
     }
@@ -51,7 +51,7 @@ void test_queue(void)
     test_begin("add and drain buffer");
     int16_t samples[160];
     memset(samples, 0, sizeof(samples));
-    int id = kerchunk_queue_add_buffer(samples, 160, 0);
+    int id = kerchunk_queue_add_buffer(samples, 160, 0, 0);
     test_assert(id > 0, "add_buffer failed");
     test_assert(kerchunk_queue_depth() == 1, "depth not 1");
     int16_t out[160];
@@ -81,9 +81,9 @@ void test_queue(void)
     test_end();
 
     test_begin("priority ordering (high drains first)");
-    kerchunk_queue_add_buffer(samples, 160, 0);
-    kerchunk_queue_add_buffer(samples, 160, 10);
-    kerchunk_queue_add_buffer(samples, 160, 5);
+    kerchunk_queue_add_buffer(samples, 160, 0, 0);
+    kerchunk_queue_add_buffer(samples, 160, 10, 0);
+    kerchunk_queue_add_buffer(samples, 160, 5, 0);
     test_assert(kerchunk_queue_depth() == 3, "depth not 3");
     total = 0;
     while (kerchunk_queue_drain(out, 160) > 0)
@@ -138,7 +138,7 @@ void test_queue(void)
         int16_t buf[160];
         for (int i = 0; i < 160; i++) buf[i] = (int16_t)(i * 100);
         for (int i = 0; i < 10; i++)
-            kerchunk_queue_add_buffer(buf, 160, 2);
+            kerchunk_queue_add_buffer(buf, 160, 2, 0);
         test_assert(kerchunk_queue_depth() == 10, "depth not 10");
         total = 0;
         while ((n = kerchunk_queue_drain(out, 160)) > 0)
@@ -158,7 +158,7 @@ void test_queue(void)
         int16_t buf[160];
         for (int i = 0; i < 160; i++) buf[i] = (int16_t)(i * 50);
         for (int i = 0; i < 50; i++)
-            kerchunk_queue_add_buffer(buf, 160, 2);
+            kerchunk_queue_add_buffer(buf, 160, 2, 0);
         total = 0;
         while ((n = kerchunk_queue_drain(out, 160)) > 0)
             total += n;
@@ -200,7 +200,7 @@ void test_queue(void)
         int16_t pattern[320];
         for (int i = 0; i < 320; i++)
             pattern[i] = (int16_t)(i * 100 - 16000);
-        kerchunk_queue_add_buffer(pattern, 320, 0);
+        kerchunk_queue_add_buffer(pattern, 320, 0, 0);
         int16_t result[320];
         int pos = 0;
         while ((n = kerchunk_queue_drain(result + pos, 160)) > 0)
@@ -218,7 +218,7 @@ void test_queue(void)
     {
         int16_t buf[480];
         for (int i = 0; i < 480; i++) buf[i] = (int16_t)i;
-        kerchunk_queue_add_buffer(buf, 480, 0);
+        kerchunk_queue_add_buffer(buf, 480, 0, 0);
         /* Drain in 3 chunks of 160 */
         int16_t chunk[160];
         int ok = 1;
@@ -280,7 +280,7 @@ void test_queue(void)
         /* After concurrent test, verify normal operations still work */
         int16_t buf[160];
         for (int i = 0; i < 160; i++) buf[i] = (int16_t)(i * 200);
-        id = kerchunk_queue_add_buffer(buf, 160, 0);
+        id = kerchunk_queue_add_buffer(buf, 160, 0, 0);
         test_assert(id > 0, "add_buffer failed post-stress");
         test_assert(kerchunk_queue_depth() == 1, "depth wrong");
         int16_t result[160];
@@ -305,7 +305,7 @@ void test_queue(void)
 
         /* Burst of 100 small buffers (simulating web PTT) */
         for (int i = 0; i < 100; i++)
-            kerchunk_queue_add_buffer(buf, 160, 2);
+            kerchunk_queue_add_buffer(buf, 160, 2, 0);
 
         /* Drain all */
         total = 0;

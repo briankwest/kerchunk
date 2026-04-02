@@ -76,9 +76,9 @@ static int core_queue_audio_file(const char *path, int priority)
     return kerchunk_queue_add_file(path, priority);
 }
 
-static int core_queue_audio_buffer(const int16_t *buf, size_t n, int priority)
+static int core_queue_audio_buffer(const int16_t *buf, size_t n, int priority, int flags)
 {
-    return kerchunk_queue_add_buffer(buf, n, priority);
+    return kerchunk_queue_add_buffer(buf, n, priority, flags);
 }
 
 static int core_queue_tone(int freq_hz, int duration_ms, int16_t amplitude, int priority)

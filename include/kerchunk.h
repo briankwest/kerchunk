@@ -80,7 +80,7 @@ struct kerchunk_core {
 
     /* Outbound queue */
     int  (*queue_audio_file)(const char *path, int priority);
-    int  (*queue_audio_buffer)(const int16_t *buf, size_t n, int priority);
+    int  (*queue_audio_buffer)(const int16_t *buf, size_t n, int priority, int flags);
     int  (*queue_tone)(int freq_hz, int duration_ms, int16_t amplitude, int priority);
     int  (*queue_silence)(int duration_ms, int priority);
     int  (*queue_flush)(void);

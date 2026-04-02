@@ -127,9 +127,9 @@ static int mock_queue_audio_file(const char *p, int pri)
     return 0;
 }
 
-static int mock_queue_audio_buffer(const int16_t *b, size_t n, int pri)
+static int mock_queue_audio_buffer(const int16_t *b, size_t n, int pri, int flags)
 {
-    (void)b; (void)n; (void)pri;
+    (void)b; (void)n; (void)pri; (void)flags;
     g_mock.buffer_calls++;
     return 0;
 }
@@ -254,6 +254,31 @@ static void mock_timer_cancel(int id)
     }
 }
 
+/* Mock schedule functions (use timer slots since behavior is identical) */
+MOCK_UNUSED static int mock_schedule_at(const struct timespec *when,
+                                        void (*cb)(void *), void *ud)
+{
+    (void)when;
+    return mock_timer_create(0, 0, cb, ud);
+}
+
+MOCK_UNUSED static int mock_schedule_aligned(int align_ms, int offset_ms, int repeat,
+                                             void (*cb)(void *), void *ud)
+{
+    (void)align_ms; (void)offset_ms;
+    return mock_timer_create(0, repeat, cb, ud);
+}
+
+MOCK_UNUSED static void mock_schedule_cancel(int id) { mock_timer_cancel(id); }
+
+/* Mock thread functions (no-ops in tests) */
+MOCK_UNUSED static int mock_thread_create(const char *n, void *(*fn)(void *), void *ud)
+{ (void)n; (void)fn; (void)ud; return 1; }
+MOCK_UNUSED static void mock_thread_stop(int tid) { (void)tid; }
+MOCK_UNUSED static int mock_thread_should_stop(int tid) { (void)tid; return 0; }
+MOCK_UNUSED static void mock_thread_join(int tid) { (void)tid; }
+MOCK_UNUSED static int mock_thread_count(void) { return 0; }
+
 /* ------------------------------------------------------------------ */
 /*  Test helpers                                                       */
 /* ------------------------------------------------------------------ */
@@ -342,6 +367,14 @@ static void mock_init_core(void)
         .user_count          = kerchunk_user_count,
         .sample_rate         = 48000,
         .frame_samples       = 960,
+        .schedule_at         = mock_schedule_at,
+        .schedule_aligned    = mock_schedule_aligned,
+        .schedule_cancel     = mock_schedule_cancel,
+        .thread_create       = mock_thread_create,
+        .thread_stop         = mock_thread_stop,
+        .thread_should_stop  = mock_thread_should_stop,
+        .thread_join         = mock_thread_join,
+        .thread_count        = mock_thread_count,
     };
 }
 

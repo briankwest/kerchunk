@@ -990,7 +990,7 @@ static void vox_process_and_queue(void)
             g_vox_ptt_held = 1;
         }
         g_core->queue_audio_buffer(frame, VAD_FRAME_SAMPLES,
-                                    KERCHUNK_PRI_ELEVATED);
+                                    KERCHUNK_PRI_ELEVATED, 0);
     } else {
         if (g_vox_ptt_held) {
             g_core->release_ptt("freeswitch");

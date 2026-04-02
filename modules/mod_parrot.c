@@ -127,7 +127,7 @@ static void stop_and_playback(void)
                     (int)g_sq_peak_rms, peak_pct);
 
         g_core->queue_silence(200, KERCHUNK_PRI_NORMAL);
-        g_core->queue_audio_buffer(g_buf, g_len, KERCHUNK_PRI_NORMAL);
+        g_core->queue_audio_buffer(g_buf, g_len, KERCHUNK_PRI_NORMAL, 0);
 
         /* Announce signal quality via TTS */
         if (g_core->tts_speak) {

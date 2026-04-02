@@ -375,7 +375,7 @@ static void ws_handle_audio_frame(ws_conn_state_t *st,
     /* Queue each frame immediately for real-time playback.
      * Thread-safe: kerchunk_queue has internal mutex protection. */
     g_core->queue_audio_buffer((const int16_t *)(data + 1), fs,
-                               g_ptt_priority);
+                               g_ptt_priority, 0);
     st->audio_len += fs;
 }
 

@@ -83,7 +83,7 @@ static int aprs_tx_frame(const uint8_t *frame, size_t frame_len)
 	for (size_t i = 0; i < ns; i++)
 		audio[i] = (int16_t)((float)audio[i] * g_tx_level);
 
-	g_core->queue_audio_buffer(audio, ns, KERCHUNK_PRI_NORMAL);
+	g_core->queue_audio_buffer(audio, ns, KERCHUNK_PRI_NORMAL, QUEUE_FLAG_NO_TAIL);
 
 	g_tx_count++;
 	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,

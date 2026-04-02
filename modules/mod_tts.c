@@ -266,7 +266,7 @@ static void synthesize_and_queue(const char *text, int priority)
             /* Cache write failed — fall through to queue from buffer */
         }
 
-        g_core->queue_audio_buffer(resampled, out_len, priority);
+        g_core->queue_audio_buffer(resampled, out_len, priority, 0);
         g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
                     "spoke %zu samples (%.1fs): %s",
                     out_len, (float)out_len / g_core->sample_rate, text);

@@ -8,6 +8,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* Queue item flags */
+#define QUEUE_FLAG_NO_TAIL  0x01  /* suppress courtesy/tail tone after this item */
+
 /* Queue item types */
 typedef enum {
     QUEUE_AUDIO_FILE,
@@ -21,6 +24,7 @@ typedef struct kerchunk_queue_item {
     kerchunk_queue_item_type_t type;
     int priority;
     int id;
+    int flags;
     union {
         struct { char path[256]; }                         file;
         struct { int16_t *buf; size_t n; int owns; }       buffer;
@@ -38,7 +42,7 @@ int  kerchunk_queue_init(void);
 void kerchunk_queue_shutdown(void);
 
 int  kerchunk_queue_add_file(const char *path, int priority);
-int  kerchunk_queue_add_buffer(const int16_t *buf, size_t n, int priority);
+int  kerchunk_queue_add_buffer(const int16_t *buf, size_t n, int priority, int flags);
 int  kerchunk_queue_add_tone(int freq_hz, int duration_ms, int16_t amplitude, int priority);
 int  kerchunk_queue_add_silence(int duration_ms, int priority);
 
@@ -55,5 +59,8 @@ int  kerchunk_queue_drain(int16_t *out, size_t max_n);
 
 /* Check if queue is currently draining (mid-item) */
 int  kerchunk_queue_is_draining(void);
+
+/* Get flags of the last drained item (valid after drain returns 0) */
+int  kerchunk_queue_drain_flags(void);
 
 #endif /* KERCHUNK_QUEUE_H */
