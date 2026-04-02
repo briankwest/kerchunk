@@ -82,7 +82,7 @@ static uint32_t fnv1a(const char *s)
 static void cache_path_for_text(const char *text, char *out, size_t outsz)
 {
     uint32_t h = fnv1a(text);
-    snprintf(out, outsz, "%s/%08x.wav", g_cache_dir, h);
+    snprintf(out, outsz, "%s/%08x_%zu.wav", g_cache_dir, h, strlen(text));
 }
 
 /* ── libcurl response buffer ── */
@@ -96,6 +96,7 @@ typedef struct {
 static size_t curl_write_cb(char *ptr, size_t size, size_t nmemb, void *ud)
 {
     curl_buf_t *buf = ud;
+    if (size > 0 && nmemb > SIZE_MAX / size) return 0;
     size_t total = size * nmemb;
     if (buf->len + total + 1 > buf->cap) {
         size_t new_cap = buf->cap * 2;
@@ -196,6 +197,9 @@ static void synthesize_and_queue(const char *text, int priority)
     }
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE, 50L * 1024 * 1024);  /* 50MB for audio */
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);

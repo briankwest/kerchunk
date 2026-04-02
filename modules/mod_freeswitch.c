@@ -42,7 +42,7 @@
 #define JITTER_BUF_SAMPLES   1600  /* 200ms at 8kHz */
 
 /* ESL receive buffer */
-#define ESL_BUF_SIZE         4096
+#define ESL_BUF_SIZE         16384
 
 /* Call states */
 typedef enum {
@@ -489,6 +489,15 @@ static void esl_poll(void)
         g_esl_buf_len += (int)n;
         g_esl_buf[g_esl_buf_len] = '\0';
         esl_process_buffer();
+        /* Safety: if the buffer is full without a complete event
+         * delimiter ("\n\n"), flush it to avoid a stuck state. */
+        if (g_esl_buf_len >= ESL_BUF_SIZE - 1) {
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "ESL buffer full (%d bytes) without delimiter — flushing",
+                        g_esl_buf_len);
+            g_esl_buf_len = 0;
+            g_esl_buf[0] = '\0';
+        }
     } else if (n == 0) {
         /* Connection closed */
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "ESL connection closed");

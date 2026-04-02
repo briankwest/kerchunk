@@ -137,6 +137,9 @@ static int post_payload(const char *json)
     snprintf(ua, sizeof(ua), "kerchunkd/" KERCHUNK_VERSION_STRING " mod_webhook");
 
     curl_easy_setopt(curl, CURLOPT_URL, g_url);
+    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE, 1L * 1024 * 1024);  /* 1MB for webhook responses */
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);

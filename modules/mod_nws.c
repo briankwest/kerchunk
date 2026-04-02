@@ -80,6 +80,7 @@ typedef struct {
 static size_t curl_write_cb(char *ptr, size_t size, size_t nmemb, void *ud)
 {
     curl_buf_t *buf = ud;
+    if (size > 0 && nmemb > SIZE_MAX / size) return 0;
     size_t total = size * nmemb;
     if (buf->len + total + 1 > buf->cap) {
         size_t new_cap = buf->cap * 2;
@@ -117,6 +118,9 @@ static char *nws_fetch(void)
     headers = curl_slist_append(headers, "Accept: application/geo+json");
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE, 10L * 1024 * 1024);  /* 10MB */
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, ua);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
@@ -141,6 +145,13 @@ static char *nws_fetch(void)
 
 /* ── JSON parsing helpers ── */
 
+/*
+ * Naive JSON string extractor using strstr(). This can produce incorrect
+ * results if a key name appears inside a string value earlier in the JSON.
+ * A proper fix would use a real JSON parser (e.g., mg_json_get_str() from
+ * mongoose). Acceptable here because process_alerts() works on isolated
+ * per-"properties" blocks, limiting the scope for false matches.
+ */
 static int json_str(const char *json, const char *key, char *out, size_t max)
 {
     char needle[64];

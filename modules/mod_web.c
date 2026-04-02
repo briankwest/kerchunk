@@ -31,15 +31,32 @@
 
 #define LOG_MOD "web"
 
-#define API_HEADERS \
-    "Content-Type: application/json\r\n" \
-    "Access-Control-Allow-Origin: *\r\n"
+/* CORS origin: configurable via [web] cors_origin. Defaults to "*"
+ * which is intentional for the embedded dashboard — the real protection
+ * is the auth token, not CORS. Users who want to restrict it can set
+ * cors_origin to a specific origin in kerchunk.conf. */
+static char g_cors_origin[256] = "*";
 
-#define CORS_HEADERS \
-    "Access-Control-Allow-Origin: *\r\n" \
-    "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n" \
-    "Access-Control-Allow-Headers: Authorization, Content-Type\r\n" \
-    "Access-Control-Max-Age: 86400\r\n"
+/* Built at configure time from g_cors_origin */
+static char g_api_headers[512] = "";
+static char g_cors_headers[512] = "";
+
+static void build_cors_headers(void)
+{
+    snprintf(g_api_headers, sizeof(g_api_headers),
+             "Content-Type: application/json\r\n"
+             "Access-Control-Allow-Origin: %s\r\n",
+             g_cors_origin);
+    snprintf(g_cors_headers, sizeof(g_cors_headers),
+             "Access-Control-Allow-Origin: %s\r\n"
+             "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
+             "Access-Control-Allow-Headers: Authorization, Content-Type\r\n"
+             "Access-Control-Max-Age: 86400\r\n",
+             g_cors_origin);
+}
+
+#define API_HEADERS  g_api_headers
+#define CORS_HEADERS g_cors_headers
 
 static int is_sensitive(const char *key) {
     static const char *sens[] = {"api_key","auth_token","totp_secret",
@@ -109,7 +126,11 @@ typedef struct {
     size_t audio_len;    /* total samples queued (for duration tracking) */
 } ws_conn_state_t;
 
-/* Only one user can transmit via WebSocket PTT at a time */
+/* Only one user can transmit via WebSocket PTT at a time.
+ * Thread safety: all reads/writes occur on the mongoose event loop thread
+ * (single-threaded), so no mutex is needed. The one exception is
+ * web_unload() which runs on the main thread — see comment there.
+ * At shutdown no new events arrive so the race window is benign. */
 static ws_conn_state_t *g_ptt_holder;  /* NULL = channel free */
 
 /* Store/retrieve state pointer in c->data.
@@ -1745,6 +1766,7 @@ static void *web_thread(void *arg)
 static int web_load(kerchunk_core_t *core)
 {
     g_core = core;
+    build_cors_headers();
     return 0;
 }
 
@@ -1771,6 +1793,10 @@ static int web_configure(const kerchunk_config_t *cfg)
 
     v = kerchunk_config_get(cfg, "web", "tls_key");
     if (v) snprintf(g_tls_key, sizeof(g_tls_key), "%s", v);
+
+    v = kerchunk_config_get(cfg, "web", "cors_origin");
+    if (v) snprintf(g_cors_origin, sizeof(g_cors_origin) - 1, "%s", v);
+    build_cors_headers();
 
     v = kerchunk_config_get(cfg, "web", "registration_enabled");
     g_registration_enabled = (v && strcmp(v, "on") == 0);
@@ -1941,7 +1967,9 @@ static void web_unload(void)
         g_web_tid = -1;
     }
 
-    /* Release any WebSocket PTT that was held during shutdown */
+    /* Release any WebSocket PTT that was held during shutdown.
+     * NOTE: this runs on the main thread while the mongoose thread has
+     * already been joined above, so there is no actual race here. */
     if (g_ptt_holder) {
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                     "shutdown: releasing orphaned WS PTT (user=%s)",

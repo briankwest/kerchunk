@@ -51,7 +51,8 @@ static char     g_tx_start_time[32];
 static void fmt_timestamp(char *buf, size_t max)
 {
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
+    struct tm tbuf;
+    struct tm *t = localtime_r(&now, &tbuf);
     snprintf(buf, max, "%04d%02d%02d_%02d%02d%02d",
              t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
              t->tm_hour, t->tm_min, t->tm_sec);
@@ -103,7 +104,8 @@ static void activity_log(const char *direction, const char *who,
     if (!fp) return;
 
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
+    struct tm tbuf;
+    struct tm *t = localtime_r(&now, &tbuf);
     fprintf(fp, "%04d-%02d-%02d %02d:%02d:%02d %s %s %.1fs %s\n",
             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
             t->tm_hour, t->tm_min, t->tm_sec,

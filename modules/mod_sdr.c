@@ -140,6 +140,14 @@ static void *monitor_thread(void *arg)
 
     unsigned char *iq_buf = malloc(IQ_BUFSZ);
     int16_t *audio_buf = malloc(IQ_BUFSZ * sizeof(int16_t));
+    int16_t *audio_inv = malloc(IQ_BUFSZ * sizeof(int16_t));
+    if (!iq_buf || !audio_buf || !audio_inv) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "failed to allocate SDR buffers");
+        free(iq_buf);
+        free(audio_buf);
+        free(audio_inv);
+        return NULL;
+    }
 
     float prev_i = 0, prev_q = 0;
     float deemph = 0;
@@ -202,12 +210,10 @@ static void *monitor_thread(void *arg)
         plcode_ctcss_result_t ctcss_res;
         plcode_ctcss_dec_process(ctcss_dec, audio_buf, (size_t)audio_pos, &ctcss_res);
 
-        int16_t *audio_inv = malloc((size_t)audio_pos * sizeof(int16_t));
         for (int i = 0; i < audio_pos; i++) audio_inv[i] = -audio_buf[i];
         plcode_dcs_result_t dcs_res, dcs_res_inv;
         plcode_dcs_dec_process(dcs_dec, audio_buf, (size_t)audio_pos, &dcs_res);
         plcode_dcs_dec_process(dcs_dec_inv, audio_inv, (size_t)audio_pos, &dcs_res_inv);
-        free(audio_inv);
 
         plcode_dtmf_result_t dtmf_res;
         plcode_dtmf_dec_process(dtmf_dec, audio_buf, (size_t)audio_pos, &dtmf_res);
@@ -313,6 +319,7 @@ static void *monitor_thread(void *arg)
     plcode_dtmf_dec_destroy(dtmf_dec);
     free(iq_buf);
     free(audio_buf);
+    free(audio_inv);
     return NULL;
 }
 
