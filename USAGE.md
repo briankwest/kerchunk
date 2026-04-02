@@ -1,6 +1,6 @@
 # kerchunkd Usage Guide
 
-A complete guide for radio users and administrators of a kerchunkd-powered GMRS repeater.
+A complete guide for radio users and administrators of a kerchunkd-powered repeater.
 
 ## Table of Contents
 
@@ -37,7 +37,7 @@ This section is for anyone using the repeater over the air with a GMRS radio.
 
 ### What is kerchunkd?
 
-kerchunkd is the software that controls this GMRS repeater. Compared to a basic repeater, it provides features you can access from your radio using DTMF tones (the sounds your radio makes when you press number keys):
+kerchunkd is the software that controls this repeater. Compared to a basic repeater, it provides features you can access from your radio using DTMF tones (the sounds your radio makes when you press number keys):
 
 - **Caller identification** -- the repeater knows who is transmitting
 - **Weather reports and forecasts** -- on-demand via DTMF
@@ -1104,7 +1104,7 @@ Create a systemd service file at `/etc/systemd/system/kerchunkd.service`:
 
 ```ini
 [Unit]
-Description=kerchunkd GMRS Repeater Controller
+Description=kerchunkd Repeater Controller
 After=network.target sound.target
 
 [Service]
