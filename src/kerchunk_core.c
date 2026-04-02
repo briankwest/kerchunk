@@ -32,10 +32,6 @@ static int g_ptt_active;
 static int g_ptt_refcount;
 static int g_cor_active;
 
-/* TX encoder state (set by mod_txcode, read by audio thread) */
-static void *g_tx_enc;
-static int   g_tx_enc_type;   /* KERCHUNK_TX_ENC_NONE/CTCSS/DCS */
-
 /* Emergency flag (set by mod_emergency, read by other modules) */
 static int g_emergency_active;
 
@@ -366,19 +362,6 @@ void kerchunk_core_dispatch_playback_taps(const kerchevt_t *evt)
 
     for (int i = 0; i < n; i++)
         snap[i](evt, snap_ud[i]);
-}
-
-/* TX encoder state */
-void kerchunk_core_set_tx_encoder(void *enc, int type)
-{
-    g_tx_enc      = enc;
-    g_tx_enc_type = type;
-}
-
-void *kerchunk_core_get_tx_encoder(int *type)
-{
-    if (type) *type = g_tx_enc_type;
-    return g_tx_enc;
 }
 
 /* Scrambler hooks */

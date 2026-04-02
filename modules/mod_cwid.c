@@ -335,20 +335,12 @@ static int cwid_configure(const kerchunk_config_t *cfg)
     if (freq)
         snprintf(g_frequency, sizeof(g_frequency), "%s", freq);
 
-    /* Build PL/DCS tone string for voice ID.
-     * Check repeater defaults first, then fall back to group.1 */
+    /* PL/DCS tone string for voice ID — read from config as metadata.
+     * The repeater hardware handles encoding; this is just for announcement. */
     g_pl_tone[0] = '\0';
-    int tx_ctcss = kerchunk_config_get_int(cfg, "repeater", "tx_ctcss", 0);
-    int tx_dcs   = kerchunk_config_get_int(cfg, "repeater", "tx_dcs", 0);
-    if (tx_ctcss == 0 && tx_dcs == 0) {
-        tx_ctcss = kerchunk_config_get_int(cfg, "group.1", "tx_ctcss", 0);
-        tx_dcs   = kerchunk_config_get_int(cfg, "group.1", "tx_dcs", 0);
-    }
-    if (tx_ctcss > 0)
-        snprintf(g_pl_tone, sizeof(g_pl_tone), "CTCSS %d.%d hertz",
-                 tx_ctcss / 10, tx_ctcss % 10);
-    else if (tx_dcs > 0)
-        snprintf(g_pl_tone, sizeof(g_pl_tone), "DCS code %03d", tx_dcs);
+    const char *pl = kerchunk_config_get(cfg, "repeater", "pl_tone");
+    if (pl)
+        snprintf(g_pl_tone, sizeof(g_pl_tone), "%s", pl);
 
     const char *vi = kerchunk_config_get(cfg, "repeater", "voice_id");
     if (vi) g_voice_id = (strcmp(vi, "off") != 0);

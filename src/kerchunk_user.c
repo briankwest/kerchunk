@@ -65,11 +65,8 @@ int kerchunk_user_init(const kerchunk_config_t *cfg)
         kerchunk_group_t *g = &g_groups[g_group_count];
         g->id = id;
         snprintf(g->name, sizeof(g->name), "%s", name);
-        g->tx_ctcss_freq_x10 = (uint16_t)kerchunk_config_get_int(cfg, section, "tx_ctcss", 0);
-        g->tx_dcs_code       = (uint16_t)kerchunk_config_get_int(cfg, section, "tx_dcs", 0);
 
-        KERCHUNK_LOG_I(LOG_MOD, "loaded group %d: %s (tx_ctcss=%u)",
-                     g->id, g->name, g->tx_ctcss_freq_x10);
+        KERCHUNK_LOG_I(LOG_MOD, "loaded group %d: %s", g->id, g->name);
         g_group_count++;
     }
 
@@ -231,25 +228,3 @@ const kerchunk_group_t *kerchunk_group_lookup_by_id(int group_id)
     return NULL;
 }
 
-int kerchunk_user_lookup_group_tx(int user_id, uint16_t *ctcss_out, uint16_t *dcs_out)
-{
-    const kerchunk_user_t *u = kerchunk_user_lookup_by_id(user_id);
-    if (!u)
-        return -1;
-
-    /* TX tones come from group only */
-    if (u->group > 0) {
-        for (int i = 0; i < g_group_count; i++) {
-            if (g_groups[i].id == u->group) {
-                if (ctcss_out) *ctcss_out = g_groups[i].tx_ctcss_freq_x10;
-                if (dcs_out)   *dcs_out   = g_groups[i].tx_dcs_code;
-                return 0;
-            }
-        }
-    }
-
-    /* No TX tone configured */
-    if (ctcss_out) *ctcss_out = 0;
-    if (dcs_out)   *dcs_out   = 0;
-    return 0;
-}

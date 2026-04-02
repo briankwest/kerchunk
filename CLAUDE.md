@@ -67,7 +67,6 @@ ffmpeg -y -i /tmp/tmp.aiff -ar 48000 -ac 1 -sample_fmt s16 sounds/<subdir>/<name
 - Modules do NOT manage PTT for queued audio — the core handles it automatically
 - Queue audio at appropriate priority: emergency=10, CW ID=5, weather=3, time=2, general=0
 - Modules can call `kerchunk_core_get_emergency()` / `kerchunk_core_set_emergency()` directly (not via vtable)
-- TX encoder state: `kerchunk_core_set_tx_encoder()` / `kerchunk_core_get_tx_encoder()` — set by mod_txcode, mixed by audio thread
 
 ## Queue behavior
 
@@ -116,11 +115,11 @@ The NWS module needs libcurl: `make modules/mod_nws.so` uses `pkg-config --libs 
 
 ## Config
 
-INI format. Modules read config in their `configure()` callback via `kerchunk_config_get(cfg, "section", "key")`. Config buffer is 1024 bytes (supports long module load lists). Key sections: `[general]`, `[modules]`, `[audio]` (includes `sample_rate` default 48000, `tx_encode` default off), `[repeater]`, `[web]`, `[weather]`, `[time]`, `[caller]`, `[recording]`, `[emergency]`, `[tts]`, `[nws]`, `[otp]`, `[stats]`, `[freeswitch]`, `[scrambler]`, `[sdr]`, `[pocsag]`, `[flex]`, `[aprs]`, `[group.N]`, `[user.N]`.
+INI format. Modules read config in their `configure()` callback via `kerchunk_config_get(cfg, "section", "key")`. Config buffer is 1024 bytes (supports long module load lists). Key sections: `[general]`, `[modules]`, `[audio]` (includes `sample_rate` default 48000), `[repeater]`, `[web]`, `[weather]`, `[time]`, `[caller]`, `[recording]`, `[emergency]`, `[tts]`, `[nws]`, `[otp]`, `[stats]`, `[freeswitch]`, `[scrambler]`, `[sdr]`, `[pocsag]`, `[flex]`, `[aprs]`, `[group.N]`, `[user.N]`.
 
 ## User DB & Groups
 
-Users have `username`, `email`, `group` fields. Groups have `tx_ctcss`, `tx_dcs`. TX tone resolution: group → repeater default (no per-user tone override). Use `kerchunk_user_lookup_group_tx()` to resolve. Users without a `username` in config get one auto-derived from name (lowercase, spaces→underscores). User array is dynamic (malloc/realloc, up to 9999).
+Users have `username`, `email`, `group` fields. Users without a `username` in config get one auto-derived from name (lowercase, spaces→underscores). User array is dynamic (malloc/realloc, up to 9999).
 
 ## Logging
 
@@ -132,4 +131,4 @@ mod_recorder captures RX audio via audio tap, TX audio via playback tap. Files s
 
 ## Testing stubs
 
-Core functions called directly by modules (`kerchunk_core_set_emergency`, `kerchunk_core_get_emergency`, `kerchunk_core_set_tx_encoder`, `kerchunk_core_get_tx_encoder`) are stubbed in `tests/test_stubs.c` for the test binary.
+Core functions called directly by modules (`kerchunk_core_set_emergency`, `kerchunk_core_get_emergency`) are stubbed in `tests/test_stubs.c` for the test binary.

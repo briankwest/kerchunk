@@ -299,10 +299,7 @@ static void ws_handle_auth(struct mg_connection *c, ws_conn_state_t *st,
     snprintf(st->user_name, sizeof(st->user_name), "%s", found->name);
 
     /* Do NOT fire KERCHEVT_CALLER_IDENTIFIED here — that event is for
-     * radio caller identification (COR cycle) and triggers mod_txcode
-     * to change the TX encoder.  Firing it from the web thread would
-     * race with the audio thread reading the encoder, corrupting
-     * CTCSS/DCS on all subsequent transmissions.  Web auth is tracked
+     * radio caller identification (COR cycle).  Web auth is tracked
      * separately for CDR via the announcement event on PTT off. */
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
@@ -805,8 +802,8 @@ static void handle_api_groups(struct mg_connection *c)
         if (!g) continue;
         if (i > 0) buf[off++] = ',';
         off += snprintf(buf + off, RESP_MAX - off,
-            "{\"id\":%d,\"name\":\"%s\",\"tx_ctcss\":%d,\"tx_dcs\":%d}",
-            g->id, g->name, g->tx_ctcss_freq_x10, g->tx_dcs_code);
+            "{\"id\":%d,\"name\":\"%s\"}",
+            g->id, g->name);
     }
     off += snprintf(buf + off, RESP_MAX - off, "]}");
     (void)off;
@@ -1029,20 +1026,10 @@ static void handle_api_group_create(struct mg_connection *c,
         return;
     }
 
-    char section[32], vbuf[256];
+    char section[32];
     snprintf(section, sizeof(section), "group.%d", new_id);
     kerchunk_config_set(cfg, section, "name", name);
     free(name);
-
-    long lv;
-
-    lv = mg_json_get_long(hm->body, "$.tx_ctcss", 0);
-    snprintf(vbuf, sizeof(vbuf), "%ld", lv);
-    kerchunk_config_set(cfg, section, "tx_ctcss", vbuf);
-
-    lv = mg_json_get_long(hm->body, "$.tx_dcs", 0);
-    snprintf(vbuf, sizeof(vbuf), "%ld", lv);
-    kerchunk_config_set(cfg, section, "tx_dcs", vbuf);
 
     kerchunk_config_save(cfg);
     kerchunk_core_unlock_config();
@@ -1068,22 +1055,12 @@ static void handle_api_group_update(struct mg_connection *c,
 
     kerchunk_core_lock_config();
 
-    char section[32], vbuf[256];
+    char section[32];
     snprintf(section, sizeof(section), "group.%d", id);
 
     char *s;
-    long lv;
-
     s = mg_json_get_str(hm->body, "$.name");
     if (s) { kerchunk_config_set(cfg, section, "name", s); free(s); }
-
-    lv = mg_json_get_long(hm->body, "$.tx_ctcss", -1);
-    if (lv >= 0) { snprintf(vbuf, sizeof(vbuf), "%ld", lv);
-                    kerchunk_config_set(cfg, section, "tx_ctcss", vbuf); }
-
-    lv = mg_json_get_long(hm->body, "$.tx_dcs", -1);
-    if (lv >= 0) { snprintf(vbuf, sizeof(vbuf), "%ld", lv);
-                    kerchunk_config_set(cfg, section, "tx_dcs", vbuf); }
 
     kerchunk_config_save(cfg);
     kerchunk_core_unlock_config();

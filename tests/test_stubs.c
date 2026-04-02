@@ -6,8 +6,6 @@
 #include "kerchunk.h"
 
 static int g_emergency_flag;
-static void *g_tx_enc;
-static int   g_tx_enc_type;
 
 void kerchunk_core_set_emergency(int active)
 {
@@ -17,18 +15,6 @@ void kerchunk_core_set_emergency(int active)
 int kerchunk_core_get_emergency(void)
 {
     return g_emergency_flag;
-}
-
-void kerchunk_core_set_tx_encoder(void *enc, int type)
-{
-    g_tx_enc      = enc;
-    g_tx_enc_type = type;
-}
-
-void *kerchunk_core_get_tx_encoder(int *type)
-{
-    if (type) *type = g_tx_enc_type;
-    return g_tx_enc;
 }
 
 void kerchunk_socket_broadcast_log(int level, const char *formatted_line)

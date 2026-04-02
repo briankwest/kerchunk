@@ -71,19 +71,6 @@ void test_integ_userdb(void)
     test_assert(kerchunk_user_count() == 2, "wrong count");
     test_end();
 
-    /* 7. group TX (user tones removed — should get group tones) */
-    test_begin("userdb: group TX lookup");
-    kerchunk_config_set(cfg, "group.1", "name", "Family");
-    kerchunk_config_set(cfg, "group.1", "tx_ctcss", "1318");
-    kerchunk_config_set(cfg, "user.1", "group", "1");
-    kerchunk_user_shutdown();
-    kerchunk_user_init(cfg);
-    uint16_t ctcss = 0, dcs = 0;
-    int rc = kerchunk_user_lookup_group_tx(1, &ctcss, &dcs);
-    test_assert(rc == 0, "group tx lookup failed");
-    test_assert(ctcss == 1318, "wrong group ctcss");
-    test_end();
-
     kerchunk_user_shutdown();
     kerchunk_config_destroy(cfg);
 }

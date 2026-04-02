@@ -32,8 +32,6 @@ extern void kerchunk_core_set_cor(int active);
 extern int  kerchunk_core_get_ptt(void);
 extern void kerchunk_core_dispatch_taps(const kerchevt_t *evt);
 extern void kerchunk_core_dispatch_playback_taps(const kerchevt_t *evt);
-extern void *kerchunk_core_get_tx_encoder(int *type);
-
 extern void kerchunk_timer_init(void);
 extern void kerchunk_timer_shutdown(void);
 extern void kerchunk_timer_tick(void);
@@ -50,8 +48,6 @@ static time_t g_start_time = 0;  /* Daemon start — never resets */
 
 static int g_sample_rate   = 48000;
 static int g_frame_samples = 960;
-static int g_tx_encode     = 0;  /* mix CTCSS/DCS into TX audio */
-
 static void handle_signal(int sig)
 {
     if (sig == SIGTERM || sig == SIGINT)
@@ -995,16 +991,6 @@ static void *audio_thread_fn(void *arg)
                         scr_fn(relay_buf, (size_t)nread, scr_ctx);
                 }
 
-                /* Mix TX encoder into relayed audio (if enabled) */
-                if (g_tx_encode) {
-                    int enc_type;
-                    void *enc = kerchunk_core_get_tx_encoder(&enc_type);
-                    if (enc && enc_type == KERCHUNK_TX_ENC_CTCSS)
-                        plcode_ctcss_enc_process(enc, relay_buf, (size_t)nread);
-                    else if (enc && enc_type == KERCHUNK_TX_ENC_DCS)
-                        plcode_dcs_enc_process(enc, relay_buf, (size_t)nread);
-                }
-
                 kerchunk_audio_playback(relay_buf, (size_t)nread);
 
                 /* Dispatch to playback taps (TX recording) */
@@ -1065,24 +1051,13 @@ static void *audio_thread_fn(void *arg)
             g_tx_tail_rem = -1;
         }
 
-        /* TX delay: feed silence + CTCSS/DCS while radio keys up */
+        /* TX delay: feed silence while radio keys up */
         while (!queue_paused && g_queue_ptt && g_tx_delay_rem > 0 &&
                kerchunk_audio_playback_writable() >= (size_t)g_frame_samples) {
             int16_t silence[KERCHUNK_MAX_FRAME_SAMPLES];
             memset(silence, 0, g_frame_samples * sizeof(int16_t));
             int sn = g_tx_delay_rem < g_frame_samples ?
                      g_tx_delay_rem : g_frame_samples;
-
-            /* Mix TX encoder into silence so CTCSS/DCS is present
-             * from the moment PTT asserts — receiver squelch opens */
-            if (g_tx_encode) {
-                int enc_type;
-                void *enc = kerchunk_core_get_tx_encoder(&enc_type);
-                if (enc && enc_type == KERCHUNK_TX_ENC_CTCSS)
-                    plcode_ctcss_enc_process(enc, silence, (size_t)sn);
-                else if (enc && enc_type == KERCHUNK_TX_ENC_DCS)
-                    plcode_dcs_enc_process(enc, silence, (size_t)sn);
-            }
 
             kerchunk_audio_playback(silence, (size_t)sn);
 
@@ -1126,16 +1101,6 @@ static void *audio_thread_fn(void *arg)
                         scr_fn(play_buf, (size_t)nplay, scr_ctx);
                 }
 
-                /* Mix TX encoder (CTCSS/DCS) into outbound audio */
-                if (g_tx_encode) {
-                    int enc_type;
-                    void *enc = kerchunk_core_get_tx_encoder(&enc_type);
-                    if (enc && enc_type == KERCHUNK_TX_ENC_CTCSS)
-                        plcode_ctcss_enc_process(enc, play_buf, (size_t)nplay);
-                    else if (enc && enc_type == KERCHUNK_TX_ENC_DCS)
-                        plcode_dcs_enc_process(enc, play_buf, (size_t)nplay);
-                }
-
                 kerchunk_audio_playback(play_buf, (size_t)nplay);
 
                 /* Dispatch to WebSocket via SPSC ring */
@@ -1164,22 +1129,13 @@ static void *audio_thread_fn(void *arg)
                 }
             }
 
-            /* Feed tail silence + CTCSS/DCS to keep receiver open */
+            /* Feed tail silence */
             while (g_tx_tail_rem > 0 &&
                    kerchunk_audio_playback_writable() >= (size_t)g_frame_samples) {
                 int16_t silence[KERCHUNK_MAX_FRAME_SAMPLES];
                 memset(silence, 0, g_frame_samples * sizeof(int16_t));
                 int sn = g_tx_tail_rem < g_frame_samples ?
                          g_tx_tail_rem : g_frame_samples;
-
-                if (g_tx_encode) {
-                    int enc_type;
-                    void *enc = kerchunk_core_get_tx_encoder(&enc_type);
-                    if (enc && enc_type == KERCHUNK_TX_ENC_CTCSS)
-                        plcode_ctcss_enc_process(enc, silence, (size_t)sn);
-                    else if (enc && enc_type == KERCHUNK_TX_ENC_DCS)
-                        plcode_dcs_enc_process(enc, silence, (size_t)sn);
-                }
 
                 kerchunk_audio_playback(silence, (size_t)sn);
 
@@ -1425,15 +1381,10 @@ int main(int argc, char **argv)
     if (g_relay_drain_ms < 0) g_relay_drain_ms = 0;
     if (g_relay_drain_ms > 5000) g_relay_drain_ms = 5000;
 
-    /* TX encoding: mix CTCSS/DCS into outbound audio.
-     * Set 'off' when the repeater hardware handles encoding. */
-    const char *txe = kerchunk_config_get(cfg, "audio", "tx_encode");
-    g_tx_encode = (txe && strcmp(txe, "on") == 0);
-
     KERCHUNK_LOG_I(LOG_MOD, "tx_delay=%dms tx_tail=%dms software_relay=%s "
-                 "tx_encode=%s relay_drain=%dms",
+                 "relay_drain=%dms",
                  g_tx_delay_ms, g_tx_tail_ms, g_software_relay ? "on" : "off",
-                 g_tx_encode ? "on" : "off", g_relay_drain_ms);
+                 g_relay_drain_ms);
 
     /* Create decoders */
     audio_thread_ctx_t audio_ctx = { NULL, NULL, NULL };
@@ -1491,11 +1442,9 @@ int main(int argc, char **argv)
                     if (m && m->configure) m->configure(cfg);
                 }
 
-                /* Re-read TX timing and encoding */
+                /* Re-read TX timing */
                 g_tx_delay_ms = kerchunk_config_get_int(cfg, "repeater", "tx_delay", 100);
                 g_tx_tail_ms  = kerchunk_config_get_int(cfg, "repeater", "tx_tail", 200);
-                txe = kerchunk_config_get(cfg, "audio", "tx_encode");
-                g_tx_encode = (txe && strcmp(txe, "on") == 0);
                 if (g_tx_delay_ms < 0) g_tx_delay_ms = 0;
                 if (g_tx_delay_ms > 2000) g_tx_delay_ms = 2000;
                 if (g_tx_tail_ms < 0) g_tx_tail_ms = 0;

@@ -39,8 +39,6 @@ typedef struct {
 typedef struct {
     int      id;
     char     name[32];
-    uint16_t tx_ctcss_freq_x10; /* Default TX CTCSS for group members */
-    uint16_t tx_dcs_code;       /* Default TX DCS for group members */
 } kerchunk_group_t;
 
 /* Forward declaration */
@@ -60,8 +58,5 @@ int  kerchunk_user_count(void);
 int  kerchunk_group_count(void);
 const kerchunk_group_t *kerchunk_group_get(int index);
 const kerchunk_group_t *kerchunk_group_lookup_by_id(int group_id);
-
-/* Group lookup — returns TX tone for a user (user override → group fallback) */
-int  kerchunk_user_lookup_group_tx(int user_id, uint16_t *ctcss_out, uint16_t *dcs_out);
 
 #endif /* KERCHUNK_USER_H */

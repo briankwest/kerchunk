@@ -16,7 +16,7 @@ A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 f
 
 **Web Dashboard** — embedded HTTP/HTTPS server with real-time SSE event stream and live audio monitoring via WebSocket. TLS/HTTPS support with Let's Encrypt certificates. Seven pages: Public dashboard (status, live audio, weather, coverage map), Registration, PTT (WebSocket push-to-talk), Admin dashboard (real-time SSE, controls), Users, Config, Coverage Planner. Dynamic UI: modules register controls via CLI metadata (`/api/commands`).
 
-**Burst tones** — DTMF sequences, two-tone paging, Selcall, MDC-1200, CW ID, and tone burst generation via the `txcode` CLI command.
+**Burst tones** — DTMF sequences, two-tone paging, Selcall, MDC-1200, CW ID, and tone burst generation via the `tones` CLI command.
 
 **Wall-clock scheduler** — `schedule_aligned` for periodic tasks (CW ID), `schedule_at` for future one-shot events. Managed thread pool with 5 modules migrated to supervised threads.
 
@@ -56,7 +56,7 @@ A custom repeater controller for the Retevis RT97L GMRS repeater, built in C11 f
   - [mod_weather — Weather Announcements](#mod_weather--weather-announcements)
   - [mod_time — Time Announcements](#mod_time--time-announcements)
   - [mod_recorder — Transmission Recording](#mod_recorder--transmission-recording)
-  - [mod_txcode — Dynamic TX Encoding](#mod_txcode--dynamic-tx-encoding)
+  - [mod_tones — Burst Tones](#mod_tones--burst-tones)
   - [mod_emergency — Emergency Mode](#mod_emergency--emergency-mode)
   - [mod_otp — TOTP Authentication](#mod_otp--totp-authentication)
   - [mod_parrot — Echo/Parrot](#mod_parrot--echoparrot)
@@ -215,7 +215,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_weather    Weather via weatherapi.com + TTS         │ │
 │  │  mod_time       Time announcements via TTS               │ │
 │  │  mod_recorder   Per-transmission WAV recording           │ │
-│  │  mod_txcode     Dynamic TX CTCSS/DCS encoding            │ │
+│  │  mod_tones      Burst tone toolbox (DTMF, Selcall, etc.) │ │
 │  │  mod_emergency  Emergency mode (*911#/*910#)             │ │
 │  │  mod_otp        TOTP authentication (*68<code>#)         │ │
 │  │  mod_parrot     Echo/parrot for audio quality check      │ │
@@ -237,7 +237,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 
 ### Threading Model
 
-- **Audio thread** (20ms) — captures audio, runs libplcode decoders (CTCSS/DCS/DTMF), software relay with drain, drains outbound queue, mixes TX CTCSS/DCS tones into all outgoing audio, manages queue-driven PTT
+- **Audio thread** (20ms) — captures audio, runs libplcode decoders (CTCSS/DCS/DTMF), software relay with drain, drains outbound queue, manages queue-driven PTT
 - **Main thread** (20ms) — processes timers, polls control socket, handles COR/PTT, config reloads
 - **Web thread** — accepts HTTP connections, serves API/SSE/static files
 - **TTS thread** — async ElevenLabs API calls (non-blocking)
@@ -342,7 +342,7 @@ Both state machines are visible in the web dashboard and reported via `/api/stat
 
 ### Core Audio Engine
 
-- **Software relay** — when enabled, kerchunkd captures RX audio and retransmits in software with TX CTCSS/DCS mixed in. Live voice preempts queued announcements.
+- **Software relay** — when enabled, kerchunkd captures RX audio and retransmits in software. Live voice preempts queued announcements.
 - **Relay drain** — on COR drop, relay continues for configurable period (default 500ms) to avoid cutting speech mid-word. Playback ring also fully drains before PTT releases.
 - **PTT refcounting** — multiple modules can hold PTT simultaneously; hardware releases only when all refs drop to zero
 - **Queue auto-PTT** — audio thread asserts PTT when draining, releases when empty
@@ -534,12 +534,12 @@ kerchunk> exit                     # Exit console
 Key module commands:
 
 ```
-kerchunk> txcode dtmf 1234           # Send DTMF sequence
-kerchunk> txcode twotone 1000 1500   # Send two-tone page
-kerchunk> txcode selcall 12345       # Send Selcall sequence
-kerchunk> txcode mdc 1234            # Send MDC-1200 burst
-kerchunk> txcode burst 1000 500      # Send tone burst (freq, duration_ms)
-kerchunk> txcode cwid                # Send CW ID burst
+kerchunk> tones dtmf 1234            # Send DTMF sequence
+kerchunk> tones twotone 1000 1500    # Send two-tone page
+kerchunk> tones selcall 12345        # Send Selcall sequence
+kerchunk> tones mdc 1234             # Send MDC-1200 burst
+kerchunk> tones burst 1000 500       # Send tone burst (freq, duration_ms)
+kerchunk> tones cwid                 # Send CW ID burst
 kerchunk> threads                    # Show managed thread pool status
 kerchunk> schedule                   # Show wall-clock scheduler status
 kerchunk> pocsag send 1234 "Test"    # Send POCSAG page
@@ -618,11 +618,8 @@ Controls the IDLE/RECEIVING/TAIL_WAIT/HANG_WAIT/TIMEOUT RX state machine and clo
 | `tx_tail` | ms | `200` | Silence after audio before PTT release |
 | `software_relay` | on/off | `off` | Relay RX audio to TX in software |
 | `relay_drain` | ms | `500` | Continue relaying after COR drop (0-5000) |
-| `ctcss_amplitude` | int | `800` | CTCSS encoder amplitude (100-4000) |
 | `cor_drop_hold` | int | `1000` | COR drop hold time in ms (absorbs DTMF COS glitches) |
 | `require_identification` | on/off | `off` | Closed repeater: deny unless identified |
-| `tx_ctcss` | int | `0` | Default TX CTCSS (freq x10) |
-| `tx_dcs` | int | `0` | Default TX DCS code |
 | `voice_id` | on/off | `on` | Speak frequency/PL via TTS after CW ID |
 
 Config section: `[repeater]`
@@ -719,9 +716,9 @@ Records RX (per COR cycle) and TX (per queue drain) to timestamped WAV files. Re
 
 Config section: `[recording]`
 
-### mod_txcode — Dynamic TX Encoding
+### mod_tones — Burst Tones
 
-TX CTCSS/DCS per caller. Resolution: group -> repeater default.
+DTMF sequences, two-tone paging, Selcall, MDC-1200, CW ID, and tone burst generation.
 
 ### mod_emergency — Emergency Mode
 
@@ -974,7 +971,6 @@ Config section: `[general]`
 | `capture_device` | string | `default` | PortAudio capture device |
 | `playback_device` | string | `default` | PortAudio playback device |
 | `hw_rate` | int | `0` | Force hardware sample rate (0=auto, 48000 recommended for USB) |
-| `tx_encode` | on/off | `off` | Mix CTCSS/DCS encoding into TX audio. Default off (repeater handles encoding) |
 | `preemphasis` | on/off | `off` | Pre-emphasis filter |
 | `preemphasis_alpha` | float | `0.95` | Pre-emphasis filter coefficient |
 | `speaker_volume` | int | `-1` | ALSA speaker playback volume (0-151, -1=don't set) |
@@ -1004,7 +1000,6 @@ Users and groups can be defined in the main `kerchunk.conf` or in a separate fil
 ```ini
 [group.1]
 name = Family
-tx_ctcss = 1000          # 100.0 Hz
 
 [user.1]
 username = bwest          # Lowercase, no spaces — login identity
@@ -1018,8 +1013,6 @@ voicemail = 1
 group = 1
 totp_secret = JBSWY3DPEHPK3PXP  # Base32 TOTP secret (for mod_otp)
 ```
-
-TX tone resolution: group `tx_ctcss`/`tx_dcs` -> repeater default.
 
 Users without a `username` field in config get one auto-derived from their name (lowercase, spaces replaced with underscores).
 

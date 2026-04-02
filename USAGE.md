@@ -393,7 +393,7 @@ The recommended module load order is:
 ```
 mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,
 mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,
-mod_txcode,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,
+mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,
 mod_web,mod_webhook,mod_scrambler,mod_sdr,mod_freeswitch,
 mod_pocsag,mod_flex,mod_aprs
 ```
@@ -408,7 +408,6 @@ Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert
 | `capture_device` | `default` | PortAudio capture device name |
 | `playback_device` | `default` | PortAudio playback device name |
 | `hw_rate` | `0` (auto) | Force hardware sample rate; use `48000` for USB |
-| `tx_encode` | `off` | Mix CTCSS/DCS encoding into TX audio. Default off (repeater handles encoding) |
 | `speaker_volume` | `-1` | ALSA speaker volume (0-151, -1 = don't set) |
 | `mic_volume` | `-1` | ALSA mic volume (0-16, -1 = don't set) |
 | `agc` | (unset) | ALSA AGC switch (`on` or `off`, unset = don't change) |
@@ -440,9 +439,6 @@ Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert
 | `cwid_wpm` | `20` | Morse code speed in words per minute |
 | `cwid_freq` | `800` | CW tone frequency in Hz |
 | `voice_id` | `on` | Announce frequency/PL via TTS after CW ID |
-| `tx_ctcss` | `0` | Default TX CTCSS tone (freq x 10, e.g., 1318 = 131.8 Hz) |
-| `tx_dcs` | `0` | Default TX DCS code |
-| `ctcss_amplitude` | `800` | CTCSS encoder amplitude (100-4000) |
 | `cor_drop_hold` | `1000` | COR drop hold for DTMF COS glitch absorption, in ms (0-5000) |
 
 #### `[caller]` -- Caller Identification
@@ -740,11 +736,11 @@ kerchunk> aprs status                              # Show APRS status
 **Send burst tones via CLI:**
 
 ```bash
-./kerchunk -x 'txcode dtmf 1234'              # DTMF sequence
-./kerchunk -x 'txcode twotone 1000 1500'       # Two-tone page
-./kerchunk -x 'txcode selcall 12345'           # Selcall sequence
-./kerchunk -x 'txcode mdc 1234'                # MDC-1200 burst
-./kerchunk -x 'txcode cwid'                    # CW ID burst
+./kerchunk -x 'tones dtmf 1234'               # DTMF sequence
+./kerchunk -x 'tones twotone 1000 1500'        # Two-tone page
+./kerchunk -x 'tones selcall 12345'            # Selcall sequence
+./kerchunk -x 'tones mdc 1234'                 # MDC-1200 burst
+./kerchunk -x 'tones cwid'                     # CW ID burst
 ```
 
 ### FCC Compliance Settings
@@ -799,7 +795,7 @@ Each user can be identified by one or both of these methods:
 | `ani` | `5551` | Automatic: radio sends DTMF digits after key-up |
 | `dtmf_login` | `101` | Manual: user presses `*101#` on their radio |
 
-CTCSS/DCS tones are NOT used for caller identification. They are reserved for repeater access (squelch gating), tone-based action routing, and selective calling (group TX tones).
+CTCSS/DCS tones are NOT used for caller identification. They are reserved for repeater access (squelch gating).
 
 #### Groups
 
@@ -808,21 +804,12 @@ Groups provide shared settings for sets of users. Define groups with `[group.N]`
 ```ini
 [group.1]
 name = Family
-tx_ctcss = 1000             ; Members of this group hear CTCSS 100.0 Hz
 
 [group.2]
 name = Friends
-tx_ctcss = 1318             ; Members of this group hear CTCSS 131.8 Hz
 ```
 
 Assign a user to a group with the `group` field in their `[user.N]` section.
-
-#### TX Tone Hierarchy
-
-The repeater can transmit different CTCSS/DCS tones to different users so their radios only open squelch for traffic intended for them. The tone used follows this priority:
-
-1. **Group** -- `tx_ctcss` or `tx_dcs` set on the user's group
-2. **Repeater default** -- `tx_ctcss` or `tx_dcs` set in the `[repeater]` section
 
 #### Setting Up TOTP for a User
 
@@ -973,12 +960,12 @@ kerchunk> dtmfcmd                  # Show DTMF command table
 kerchunk> pocsag send 1234 "Test"  # Send POCSAG page
 kerchunk> flex send 1234 "Test"    # Send FLEX page
 kerchunk> aprs beacon              # Force APRS beacon
-kerchunk> txcode dtmf 1234         # Send DTMF sequence
-kerchunk> txcode twotone 1000 1500 # Send two-tone page
-kerchunk> txcode selcall 12345     # Send Selcall sequence
-kerchunk> txcode mdc 1234          # Send MDC-1200 burst
-kerchunk> txcode burst 1000 500    # Send tone burst (freq, duration_ms)
-kerchunk> txcode cwid              # Send CW ID burst
+kerchunk> tones dtmf 1234          # Send DTMF sequence
+kerchunk> tones twotone 1000 1500  # Send two-tone page
+kerchunk> tones selcall 12345      # Send Selcall sequence
+kerchunk> tones mdc 1234           # Send MDC-1200 burst
+kerchunk> tones burst 1000 500     # Send tone burst (freq, duration_ms)
+kerchunk> tones cwid               # Send CW ID burst
 kerchunk> threads                  # Show managed thread pool status
 kerchunk> schedule                 # Show wall-clock scheduler status
 kerchunk> /log debug               # Start log streaming at debug level

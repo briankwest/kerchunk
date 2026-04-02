@@ -150,15 +150,6 @@ int kerchunk_dispatch_command(int argc, const char **argv, kerchunk_resp_t *resp
 /* Event-to-JSON serializer (src/kerchunk_evt_json.c) */
 int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max);
 
-/* TX encoder types */
-#define KERCHUNK_TX_ENC_NONE  0
-#define KERCHUNK_TX_ENC_CTCSS 1
-#define KERCHUNK_TX_ENC_DCS   2
-
-/* Core TX encoder state (audio thread access) */
-void  kerchunk_core_set_tx_encoder(void *enc, int type);
-void *kerchunk_core_get_tx_encoder(int *type);
-
 /* Core scrambler hooks (audio thread access) */
 typedef void (*kerchunk_scrambler_fn)(int16_t *buf, size_t n, void *ctx);
 void  kerchunk_core_set_rx_scrambler(kerchunk_scrambler_fn fn, void *ctx);

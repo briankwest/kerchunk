@@ -1,18 +1,14 @@
 /*
- * mod_txcode.c — TX tone encoder and burst tone CLI
+ * mod_tones.c — Burst tone CLI commands
  *
- * Continuous path: sets the active TX CTCSS/DCS encoder based on
- * the identified caller's group config.  The audio thread mixes
- * the encoder output into all outbound audio (when tx_encode=on).
- *
- * Burst CLI commands (queued one-shot):
- *   txcode                         Show active encoder status
- *   txcode dtmf <digits>           Transmit DTMF sequence
- *   txcode twotone <f1> <f2> <ms>  Two-tone sequential page
- *   txcode selcall <digits> [std]  5-tone selective call
- *   txcode burst <freq> <ms>       Single tone burst
- *   txcode mdc <op> <arg> <unit>   MDC-1200 data burst
- *   txcode cwid [callsign]         Manual CW ID
+ * One-shot tone generation queued to the audio pipeline:
+ *   tones                         Show help
+ *   tones dtmf <digits>           Transmit DTMF sequence
+ *   tones twotone <f1> <f2> <ms>  Two-tone sequential page
+ *   tones selcall <digits> [std]  5-tone selective call
+ *   tones burst <freq> <ms>       Single tone burst
+ *   tones mdc <op> <arg> <unit>   MDC-1200 data burst
+ *   tones cwid [callsign]         Manual CW ID
  */
 
 #include "kerchunk.h"
@@ -23,56 +19,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define LOG_MOD "txcode"
+#define LOG_MOD "tones"
 #define AMP     16000   /* default burst amplitude */
 
 static kerchunk_core_t *g_core;
-
-/* Config: repeater-wide default TX tone */
-static uint16_t g_default_tx_ctcss;
-static uint16_t g_default_tx_dcs;
-static int16_t  g_ctcss_amplitude = 800;
-
-/* Current continuous encoder */
-static void *g_enc;
-static int   g_enc_type;
-
-/* ── Continuous CTCSS/DCS encoder ── */
-
-static void destroy_encoder(void)
-{
-	if (!g_enc) return;
-	if (g_enc_type == KERCHUNK_TX_ENC_CTCSS)
-		plcode_ctcss_enc_destroy(g_enc);
-	else if (g_enc_type == KERCHUNK_TX_ENC_DCS)
-		plcode_dcs_enc_destroy(g_enc);
-	g_enc      = NULL;
-	g_enc_type = KERCHUNK_TX_ENC_NONE;
-	kerchunk_core_set_tx_encoder(NULL, KERCHUNK_TX_ENC_NONE);
-}
-
-static void create_encoder(uint16_t ctcss_freq_x10, uint16_t dcs_code)
-{
-	destroy_encoder();
-	if (ctcss_freq_x10 > 0) {
-		plcode_ctcss_enc_t *enc = NULL;
-		if (plcode_ctcss_enc_create(&enc, g_core->sample_rate,
-		    ctcss_freq_x10, g_ctcss_amplitude) == PLCODE_OK) {
-			g_enc = enc; g_enc_type = KERCHUNK_TX_ENC_CTCSS;
-			kerchunk_core_set_tx_encoder(enc, KERCHUNK_TX_ENC_CTCSS);
-			g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-			            "TX CTCSS: %.1f Hz", (float)ctcss_freq_x10 / 10.0f);
-		}
-	} else if (dcs_code > 0) {
-		plcode_dcs_enc_t *enc = NULL;
-		if (plcode_dcs_enc_create(&enc, g_core->sample_rate,
-		    dcs_code, 0, 1600) == PLCODE_OK) {
-			g_enc = enc; g_enc_type = KERCHUNK_TX_ENC_DCS;
-			kerchunk_core_set_tx_encoder(enc, KERCHUNK_TX_ENC_DCS);
-			g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "TX DCS: %u", dcs_code);
-		}
-	}
-}
 
 /* ── Helper: render a burst encoder into a buffer and queue it ── */
 
@@ -85,57 +35,23 @@ static int queue_burst(int16_t *buf, size_t n)
 	return 0;
 }
 
-/* ── Event handlers ── */
-
-static void on_caller_identified(const kerchevt_t *evt, void *ud)
-{
-	(void)ud;
-	uint16_t ctcss = 0, dcs = 0;
-	if (kerchunk_user_lookup_group_tx(evt->caller.user_id, &ctcss, &dcs) == 0 &&
-	    (ctcss > 0 || dcs > 0)) {
-		create_encoder(ctcss, dcs);
-	} else if (g_default_tx_ctcss > 0 || g_default_tx_dcs > 0) {
-		create_encoder(g_default_tx_ctcss, g_default_tx_dcs);
-	} else {
-		destroy_encoder();
-	}
-}
-
-static void on_caller_cleared(const kerchevt_t *evt, void *ud)
-{
-	(void)evt; (void)ud;
-	if (g_default_tx_ctcss > 0 || g_default_tx_dcs > 0)
-		create_encoder(g_default_tx_ctcss, g_default_tx_dcs);
-	else
-		destroy_encoder();
-}
-
 /* ── CLI ── */
 
-static int cli_txcode(int argc, const char **argv, kerchunk_resp_t *r)
+static int cli_tones(int argc, const char **argv, kerchunk_resp_t *r)
 {
 	if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
 
 	int rate = g_core->sample_rate;
 
-	/* No subcommand: show status */
-	if (argc < 2) {
-		const char *type_str = "none";
-		if (g_enc_type == KERCHUNK_TX_ENC_CTCSS) type_str = "CTCSS";
-		else if (g_enc_type == KERCHUNK_TX_ENC_DCS) type_str = "DCS";
-		resp_str(r, "tx_encoder", type_str);
-		resp_int(r, "default_ctcss", g_default_tx_ctcss);
-		resp_int(r, "default_dcs", g_default_tx_dcs);
-		resp_int(r, "ctcss_amplitude", g_ctcss_amplitude);
-		return 0;
-	}
+	/* No subcommand: show help */
+	if (argc < 2) goto usage;
 
 	const char *sub = argv[1];
 
-	/* ── txcode dtmf <digits> ── */
+	/* ── tones dtmf <digits> ── */
 	if (strcmp(sub, "dtmf") == 0) {
 		if (argc < 3) {
-			resp_str(r, "error", "usage: txcode dtmf <digits>");
+			resp_str(r, "error", "usage: tones dtmf <digits>");
 			return -1;
 		}
 		const char *digits = argv[2];
@@ -163,10 +79,10 @@ static int cli_txcode(int argc, const char **argv, kerchunk_resp_t *r)
 		return 0;
 	}
 
-	/* ── txcode twotone <freq1> <freq2> <duration_ms> ── */
+	/* ── tones twotone <freq1> <freq2> <duration_ms> ── */
 	if (strcmp(sub, "twotone") == 0) {
 		if (argc < 5) {
-			resp_str(r, "error", "usage: txcode twotone <freq1> <freq2> <duration_ms>");
+			resp_str(r, "error", "usage: tones twotone <freq1> <freq2> <duration_ms>");
 			return -1;
 		}
 		int f1 = atoi(argv[2]), f2 = atoi(argv[3]), ms = atoi(argv[4]);
@@ -199,10 +115,10 @@ static int cli_txcode(int argc, const char **argv, kerchunk_resp_t *r)
 		return 0;
 	}
 
-	/* ── txcode selcall <digits> [zvei1|ccir|eia] ── */
+	/* ── tones selcall <digits> [zvei1|ccir|eia] ── */
 	if (strcmp(sub, "selcall") == 0) {
 		if (argc < 3) {
-			resp_str(r, "error", "usage: txcode selcall <digits> [zvei1|ccir|eia]");
+			resp_str(r, "error", "usage: tones selcall <digits> [zvei1|ccir|eia]");
 			return -1;
 		}
 		const char *addr = argv[2];
@@ -234,10 +150,10 @@ static int cli_txcode(int argc, const char **argv, kerchunk_resp_t *r)
 		return 0;
 	}
 
-	/* ── txcode burst <freq> <duration_ms> ── */
+	/* ── tones burst <freq> <duration_ms> ── */
 	if (strcmp(sub, "burst") == 0) {
 		if (argc < 4) {
-			resp_str(r, "error", "usage: txcode burst <freq_hz> <duration_ms>");
+			resp_str(r, "error", "usage: tones burst <freq_hz> <duration_ms>");
 			return -1;
 		}
 		int freq = atoi(argv[2]), ms = atoi(argv[3]);
@@ -269,10 +185,10 @@ static int cli_txcode(int argc, const char **argv, kerchunk_resp_t *r)
 		return 0;
 	}
 
-	/* ── txcode mdc <op> <arg> <unit_id> ── */
+	/* ── tones mdc <op> <arg> <unit_id> ── */
 	if (strcmp(sub, "mdc") == 0) {
 		if (argc < 5) {
-			resp_str(r, "error", "usage: txcode mdc <op> <arg> <unit_id>");
+			resp_str(r, "error", "usage: tones mdc <op> <arg> <unit_id>");
 			return -1;
 		}
 		int op = (int)strtol(argv[2], NULL, 16);
@@ -301,7 +217,7 @@ static int cli_txcode(int argc, const char **argv, kerchunk_resp_t *r)
 		return 0;
 	}
 
-	/* ── txcode cwid [callsign] ── */
+	/* ── tones cwid [callsign] ── */
 	if (strcmp(sub, "cwid") == 0) {
 		const char *call = NULL;
 		if (argc >= 3)
@@ -339,64 +255,40 @@ static int cli_txcode(int argc, const char **argv, kerchunk_resp_t *r)
 	goto usage;
 
 usage:
-	resp_text_raw(r, "TX tone encoder and burst tone toolbox\n\n"
-		"  txcode\n"
-		"    Show active continuous TX encoder (CTCSS/DCS/none).\n\n"
-		"  txcode dtmf <digits>\n"
+	resp_text_raw(r, "Burst tone toolbox\n\n"
+		"  tones dtmf <digits>\n"
 		"    Transmit DTMF sequence (0-9, A-D, *, #).\n"
 		"    100ms tone, 50ms gap per digit.\n\n"
-		"  txcode twotone <freq1> <freq2> <duration_ms>\n"
+		"  tones twotone <freq1> <freq2> <duration_ms>\n"
 		"    Two-tone sequential page (fire/EMS paging).\n"
 		"    freq1/freq2: Hz, duration: ms per tone.\n\n"
-		"  txcode selcall <digits> [zvei1|ccir|eia]\n"
+		"  tones selcall <digits> [zvei1|ccir|eia]\n"
 		"    5-tone selective call. Default standard: ZVEI-1.\n"
 		"    digits: 5-digit address (0-9).\n\n"
-		"  txcode burst <freq_hz> <duration_ms>\n"
+		"  tones burst <freq_hz> <duration_ms>\n"
 		"    Single tone burst (e.g. 1750 Hz repeater access).\n"
 		"    freq: 100-10000 Hz, duration: 10-30000 ms.\n\n"
-		"  txcode mdc <op> <arg> <unit_id>\n"
+		"  tones mdc <op> <arg> <unit_id>\n"
 		"    MDC-1200 data burst. All values in hex.\n"
 		"    op: opcode, arg: argument, unit_id: 4-digit hex.\n\n"
-		"  txcode cwid [callsign]\n"
+		"  tones cwid [callsign]\n"
 		"    Manual CW ID at 800 Hz, 20 WPM.\n"
-		"    Uses [general] callsign if omitted.\n\n"
-		"Config: [repeater] tx_ctcss, tx_dcs, ctcss_amplitude\n");
-	resp_str(r, "error", "usage: txcode <dtmf|twotone|selcall|burst|mdc|cwid>");
+		"    Uses [general] callsign if omitted.\n");
+	resp_str(r, "error", "usage: tones <dtmf|twotone|selcall|burst|mdc|cwid>");
 	resp_finish(r);
 	return -1;
 }
 
 /* ── Module lifecycle ── */
 
-static int txcode_load(kerchunk_core_t *core)
+static int tones_load(kerchunk_core_t *core)
 {
 	g_core = core;
-	g_enc      = NULL;
-	g_enc_type = KERCHUNK_TX_ENC_NONE;
-	core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
-	core->subscribe(KERCHEVT_CALLER_CLEARED,    on_caller_cleared, NULL);
 	return 0;
 }
 
-static int txcode_configure(const kerchunk_config_t *cfg)
+static void tones_unload(void)
 {
-	g_default_tx_ctcss = (uint16_t)kerchunk_config_get_int(cfg, "repeater", "tx_ctcss", 0);
-	g_default_tx_dcs   = (uint16_t)kerchunk_config_get_int(cfg, "repeater", "tx_dcs", 0);
-	g_ctcss_amplitude  = (int16_t)kerchunk_config_get_int(cfg, "repeater", "ctcss_amplitude", 800);
-	if (g_ctcss_amplitude < 100)   g_ctcss_amplitude = 100;
-	if (g_ctcss_amplitude > 4000)  g_ctcss_amplitude = 4000;
-
-	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-	            "default tx_ctcss=%u tx_dcs=%u ctcss_amplitude=%d",
-	            g_default_tx_ctcss, g_default_tx_dcs, g_ctcss_amplitude);
-	return 0;
-}
-
-static void txcode_unload(void)
-{
-	g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
-	g_core->unsubscribe(KERCHEVT_CALLER_CLEARED,    on_caller_cleared);
-	destroy_encoder();
 }
 
 static const kerchunk_ui_field_t dtmf_fields[] = {
@@ -425,41 +317,40 @@ static const kerchunk_ui_field_t cwid_fields[] = {
 };
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-	{ .name = "txcode", .usage = "txcode dtmf <digits>",
-	  .description = "DTMF sequence", .handler = cli_txcode,
+	{ .name = "tones", .usage = "tones dtmf <digits>",
+	  .description = "DTMF sequence", .handler = cli_tones,
 	  .category = "Tones", .ui_label = "DTMF", .ui_type = CLI_UI_FORM,
-	  .ui_command = "txcode dtmf", .ui_fields = dtmf_fields, .num_ui_fields = 1 },
-	{ .name = "txcode", .usage = "txcode burst <freq> <dur_ms>",
-	  .description = "Tone burst", .handler = cli_txcode,
+	  .ui_command = "tones dtmf", .ui_fields = dtmf_fields, .num_ui_fields = 1 },
+	{ .name = "tones", .usage = "tones burst <freq> <dur_ms>",
+	  .description = "Tone burst", .handler = cli_tones,
 	  .category = "Tones", .ui_label = "Tone Burst", .ui_type = CLI_UI_FORM,
-	  .ui_command = "txcode burst", .ui_fields = burst_fields, .num_ui_fields = 2 },
-	{ .name = "txcode", .usage = "txcode twotone <f1> <f2> <dur_ms>",
-	  .description = "Two-tone page", .handler = cli_txcode,
+	  .ui_command = "tones burst", .ui_fields = burst_fields, .num_ui_fields = 2 },
+	{ .name = "tones", .usage = "tones twotone <f1> <f2> <dur_ms>",
+	  .description = "Two-tone page", .handler = cli_tones,
 	  .category = "Tones", .ui_label = "Two-Tone", .ui_type = CLI_UI_FORM,
-	  .ui_command = "txcode twotone", .ui_fields = twotone_fields, .num_ui_fields = 3 },
-	{ .name = "txcode", .usage = "txcode selcall <digits> [std]",
-	  .description = "5-tone selective call", .handler = cli_txcode,
+	  .ui_command = "tones twotone", .ui_fields = twotone_fields, .num_ui_fields = 3 },
+	{ .name = "tones", .usage = "tones selcall <digits> [std]",
+	  .description = "5-tone selective call", .handler = cli_tones,
 	  .category = "Tones", .ui_label = "Selcall", .ui_type = CLI_UI_FORM,
-	  .ui_command = "txcode selcall", .ui_fields = selcall_fields, .num_ui_fields = 2 },
-	{ .name = "txcode", .usage = "txcode mdc <op> <arg> <unit_id>",
-	  .description = "MDC-1200 data burst", .handler = cli_txcode,
+	  .ui_command = "tones selcall", .ui_fields = selcall_fields, .num_ui_fields = 2 },
+	{ .name = "tones", .usage = "tones mdc <op> <arg> <unit_id>",
+	  .description = "MDC-1200 data burst", .handler = cli_tones,
 	  .category = "Tones", .ui_label = "MDC-1200", .ui_type = CLI_UI_FORM,
-	  .ui_command = "txcode mdc", .ui_fields = mdc_fields, .num_ui_fields = 3 },
-	{ .name = "txcode", .usage = "txcode cwid [callsign]",
-	  .description = "Manual CW ID", .handler = cli_txcode,
+	  .ui_command = "tones mdc", .ui_fields = mdc_fields, .num_ui_fields = 3 },
+	{ .name = "tones", .usage = "tones cwid [callsign]",
+	  .description = "Manual CW ID", .handler = cli_tones,
 	  .category = "Tones", .ui_label = "CW ID", .ui_type = CLI_UI_FORM,
-	  .ui_command = "txcode cwid", .ui_fields = cwid_fields, .num_ui_fields = 1 },
+	  .ui_command = "tones cwid", .ui_fields = cwid_fields, .num_ui_fields = 1 },
 };
 
-static kerchunk_module_def_t mod_txcode = {
-	.name             = "mod_txcode",
+static kerchunk_module_def_t mod_tones = {
+	.name             = "mod_tones",
 	.version          = "1.0.0",
-	.description      = "TX tone encoder and burst tone toolbox",
-	.load             = txcode_load,
-	.configure        = txcode_configure,
-	.unload           = txcode_unload,
+	.description      = "Burst tone toolbox",
+	.load             = tones_load,
+	.unload           = tones_unload,
 	.cli_commands     = cli_cmds,
 	.num_cli_commands = sizeof(cli_cmds) / sizeof(cli_cmds[0]),
 };
 
-KERCHUNK_MODULE_DEFINE(mod_txcode);
+KERCHUNK_MODULE_DEFINE(mod_tones);

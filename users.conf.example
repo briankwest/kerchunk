@@ -10,20 +10,13 @@
 
 ; ----------------------------------------------------------------------------
 ; Groups
-;
-; Groups provide TX tone settings for their members.
-; TX tone resolution: group -> repeater default.
-; Each group should have a unique TX CTCSS or DCS code.
 ; ----------------------------------------------------------------------------
 
 [group.1]
 name = Family
-tx_ctcss = 1000                  ; TX CTCSS for this group (freq * 10)
-; tx_dcs = 23                    ; TX DCS code (alternative to CTCSS)
 
 [group.2]
 name = Friends
-tx_ctcss = 1318
 
 ; ----------------------------------------------------------------------------
 ; Users

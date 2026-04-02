@@ -88,7 +88,7 @@ kerchunkmod_LTLIBRARIES = \
 	modules/mod_weather.la \
 	modules/mod_time.la \
 	modules/mod_recorder.la \
-	modules/mod_txcode.la \
+	modules/mod_tones.la \
 	modules/mod_emergency.la \
 	modules/mod_parrot.la \
 	modules/mod_cdr.la \
@@ -156,10 +156,10 @@ modules_mod_recorder_la_CFLAGS   = $(MOD_CFLAGS)
 modules_mod_recorder_la_LDFLAGS  = $(MOD_LDFLAGS)
 modules_mod_recorder_la_LIBADD   = $(PLCODE_LIBS)
 
-modules_mod_txcode_la_SOURCES    = modules/mod_txcode.c
-modules_mod_txcode_la_CFLAGS     = $(MOD_CFLAGS)
-modules_mod_txcode_la_LDFLAGS    = $(MOD_LDFLAGS)
-modules_mod_txcode_la_LIBADD     = $(PLCODE_LIBS)
+modules_mod_tones_la_SOURCES     = modules/mod_tones.c
+modules_mod_tones_la_CFLAGS      = $(MOD_CFLAGS)
+modules_mod_tones_la_LDFLAGS     = $(MOD_LDFLAGS)
+modules_mod_tones_la_LIBADD      = $(PLCODE_LIBS)
 
 modules_mod_emergency_la_SOURCES = modules/mod_emergency.c
 modules_mod_emergency_la_CFLAGS  = $(MOD_CFLAGS)
@@ -295,7 +295,6 @@ test_kerchunk_SOURCES = \
 	tests/test_integ_time.c \
 	tests/test_integ_decode.c \
 	tests/test_integ_recorder.c \
-	tests/test_integ_txcode.c \
 	tests/test_integ_emergency.c \
 	tests/test_integ_parrot.c \
 	tests/test_integ_cdr.c \

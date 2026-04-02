@@ -11,7 +11,6 @@ extern void test_integ_voicemail(void);
 extern void test_integ_time(void);
 extern void test_integ_decode(void);
 extern void test_integ_recorder(void);
-extern void test_integ_txcode(void);
 extern void test_integ_emergency(void);
 extern void test_integ_parrot(void);
 extern void test_integ_cdr(void);
@@ -32,7 +31,6 @@ void test_integration(void)
     test_integ_time();
     test_integ_decode();
     test_integ_recorder();
-    test_integ_txcode();
     test_integ_emergency();
     test_integ_parrot();
     test_integ_cdr();

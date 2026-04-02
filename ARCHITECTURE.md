@@ -74,7 +74,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
                           │  │  caller    dtmfcmd   otp          │  │
                           │  │  voicemail gpio      logger       │  │
                           │  │  weather   time      recorder     │  │
-                          │  │  txcode    emergency parrot       │  │
+                          │  │  tones     emergency parrot       │  │
                           │  │  cdr       tts       nws          │  │
                           │  │  stats     web       webhook      │  │
                           │  │  scrambler sdr       freeswitch   │  │
@@ -216,8 +216,8 @@ Shutdown proceeds in strict order to avoid use-after-free and ensure clean teard
 | `TAIL_START` | mod_repeater | cwid, courtesy, logger, web |
 | `TAIL_EXPIRE` | mod_repeater | logger, web |
 | `TIMEOUT` | mod_repeater | logger, web, stats |
-| `CALLER_IDENTIFIED` | mod_caller | repeater, recorder, txcode, logger, web |
-| `CALLER_CLEARED` | mod_caller | repeater, recorder, txcode, logger, web |
+| `CALLER_IDENTIFIED` | mod_caller | repeater, recorder, logger, web |
+| `CALLER_CLEARED` | mod_caller | repeater, recorder, logger, web |
 | `QUEUE_DRAIN` | Audio thread | logger, web |
 | `QUEUE_COMPLETE` | Audio thread | courtesy, logger, web |
 | `RECORDING_SAVED` | mod_recorder | cdr, logger, web |
@@ -272,11 +272,10 @@ Shutdown proceeds in strict order to avoid use-after-free and ensure clean teard
   ┌──────────┐     ┌─────────────────────────────────┐
   │ WAV file │     │                                 │
   │ PCM buf  │────►│  1. Assert PTT                  │
-  │ Tone gen │     │  2. TX delay (silence + CTCSS)  │
+  │ Tone gen │     │  2. TX delay (silence)           │
   │ Silence  │     │  3. Drain frame (960 samples)   │
   └──────────┘     │  4. Scrambler (if enabled)      │
-   (priority       │  5. Mix TX CTCSS/DCS encoder    │
-    sorted)        │  6. Write to playback ring      │──► Playback Ring ──► ALSA
+   (priority       │  5. Write to playback ring      │──► Playback Ring ──► ALSA
                    │  7. Dispatch playback taps      │    (lock-free)
                    │  8. When empty: TX tail         │
                    │  9. Wait for ring drain         │
@@ -524,13 +523,13 @@ Shutdown proceeds in strict order to avoid use-after-free and ensure clean teard
 ```
   [user.1]                    [group.1]
   username = bwest            name = Family
-  name = Brian West           tx_ctcss = 1000
+  name = Brian West
   callsign = WRDP519
-  email = brian@bkw.org       TX Tone Resolution:
-  dtmf_login = 101            ┌──────────────────────┐
-  ani = 5551                  │ 1. User's group tone │
-  access = 2                  │ 2. Repeater default  │
-  group = 1                   └──────────────────────┘
+  email = brian@bkw.org
+  dtmf_login = 101
+  ani = 5551
+  access = 2
+  group = 1
   totp_secret = JBSWY...
 
   Identification methods:
@@ -623,7 +622,7 @@ Shutdown proceeds in strict order to avoid use-after-free and ensure clean teard
   kerchunk.conf (main config, .gitignored)
   ├── [general]     Callsign, frequency, paths, coordinates
   ├── [modules]     Module path + load order
-  ├── [audio]       PortAudio devices, sample_rate (default 48000), tx_encode, mixer levels
+  ├── [audio]       PortAudio devices, sample_rate (default 48000), mixer levels
   ├── [hid]         HID device, COR bit/polarity, PTT GPIO pin
   ├── [repeater]    State machine timers, relay mode, TX tone, CW ID
   ├── [web]         HTTP/TLS, auth, PTT, registration
@@ -649,7 +648,7 @@ Shutdown proceeds in strict order to avoid use-after-free and ensure clean teard
   ├── [pocsag]      POCSAG paging encoder settings
   ├── [flex]        FLEX paging encoder settings
   ├── [aprs]        APRS position reporting, RX/TX, beacon settings
-  ├── [group.N]     Group name, TX CTCSS/DCS
+  ├── [group.N]     Group name
   └── [user.N]      Username, callsign, email, ANI, login, access, group, TOTP
 
   users.conf (optional separate user DB, set via users_file in [general])

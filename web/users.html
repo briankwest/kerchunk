@@ -138,8 +138,8 @@ table tr:hover td { background: rgba(88,166,255,0.04); }
     <button class="btn btn-green btn-sm" onclick="openGroupModal()" style="margin-bottom:10px">+ Add Group</button>
     <div class="table-wrap">
       <table id="groups-table">
-        <thead><tr><th>ID</th><th>Name</th><th>TX CTCSS</th><th>TX DCS</th><th>Actions</th></tr></thead>
-        <tbody id="groups-body"><tr><td colspan="5" class="empty-msg">Loading...</td></tr></tbody>
+        <thead><tr><th>ID</th><th>Name</th><th>Actions</th></tr></thead>
+        <tbody id="groups-body"><tr><td colspan="3" class="empty-msg">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -165,16 +165,6 @@ table tr:hover td { background: rgba(88,166,255,0.04); }
     <div class="form-group">
       <label>Name</label>
       <input type="text" id="grp-name" placeholder="Group name">
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>TX CTCSS</label>
-        <select id="grp-tx-ctcss"></select>
-      </div>
-      <div class="form-group">
-        <label>TX DCS</label>
-        <select id="grp-tx-dcs"></select>
-      </div>
     </div>
     <div class="form-actions">
       <button class="btn" onclick="closeGroupModal()">Cancel</button>
@@ -309,69 +299,6 @@ function showToast(msg, type) {
 }
 
 // ============================================================
-// Standard CTCSS / DCS codes (EIA)
-// ============================================================
-const CTCSS_TONES = [
-  670,693,719,744,770,797,825,854,885,915,948,974,1000,1035,1072,1109,
-  1148,1188,1230,1273,1318,1365,1413,1462,1514,1567,1598,1622,1655,1679,
-  1713,1738,1773,1799,1835,1862,1899,1928,1966,1995,2035,2065,2107,2181,
-  2257,2291,2336,2418,2503,2541
-];
-const DCS_CODES = [
-  23,25,26,31,32,36,43,47,51,53,54,65,71,72,73,74,114,115,116,122,125,
-  131,132,134,143,145,152,155,156,162,165,172,174,205,212,223,225,226,
-  243,244,245,246,251,252,255,261,263,265,266,271,274,306,311,315,325,
-  331,332,343,346,351,356,364,365,371,411,412,413,423,431,432,445,446,
-  452,454,455,462,464,465,466,503,506,516,523,526,532,546,565,606,612,
-  624,627,631,632,654,662,664,703,712,723,731,732,734,743,754
-];
-
-function fmtCtcss(v) { return v ? (v/10).toFixed(1) + ' Hz' : 'None'; }
-function fmtDcs(v) { return v ? ('000'+v).slice(-3) : 'None'; }
-
-// Only exclude tones already assigned to OTHER groups (not this one).
-// User forms don't exclude anything — users can override to any tone.
-function takenCtcss(excludeType, excludeId) {
-  const taken = new Set();
-  if (excludeType === 'group') {
-    groups.forEach(g => { if (g.tx_ctcss && (g.id||g.ID) !== excludeId) taken.add(g.tx_ctcss); });
-  }
-  return taken;
-}
-
-function takenDcs(excludeType, excludeId) {
-  const taken = new Set();
-  if (excludeType === 'group') {
-    groups.forEach(g => { if (g.tx_dcs && (g.id||g.ID) !== excludeId) taken.add(g.tx_dcs); });
-  }
-  return taken;
-}
-
-function populateCtcssSelect(sel, currentVal, excludeType, excludeId) {
-  const taken = takenCtcss(excludeType, excludeId);
-  sel.innerHTML = '<option value="0">None</option>';
-  CTCSS_TONES.forEach(t => {
-    const inUse = taken.has(t) && t !== currentVal;
-    sel.innerHTML += '<option value="'+t+'"' +
-      (t === currentVal ? ' selected' : '') +
-      (inUse ? ' disabled style="color:var(--dim)"' : '') +
-      '>' + (t/10).toFixed(1) + ' Hz' + (inUse ? ' (in use)' : '') + '</option>';
-  });
-}
-
-function populateDcsSelect(sel, currentVal, excludeType, excludeId) {
-  const taken = takenDcs(excludeType, excludeId);
-  sel.innerHTML = '<option value="0">None</option>';
-  DCS_CODES.forEach(c => {
-    const inUse = taken.has(c) && c !== currentVal;
-    sel.innerHTML += '<option value="'+c+'"' +
-      (c === currentVal ? ' selected' : '') +
-      (inUse ? ' disabled style="color:var(--dim)"' : '') +
-      '>' + ('000'+c).slice(-3) + (inUse ? ' (in use)' : '') + '</option>';
-  });
-}
-
-// ============================================================
 // Data
 // ============================================================
 let groups = [];
@@ -406,15 +333,13 @@ async function loadUsers() {
 function renderGroups() {
   const tbody = document.getElementById('groups-body');
   if (!groups.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No groups defined</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">No groups defined</td></tr>';
     return;
   }
   tbody.innerHTML = groups.map(g =>
     '<tr>' +
     '<td>' + (g.id || g.ID || '-') + '</td>' +
     '<td>' + esc(g.name || '') + '</td>' +
-    '<td>' + fmtCtcss(g.tx_ctcss) + '</td>' +
-    '<td>' + fmtDcs(g.tx_dcs) + '</td>' +
     '<td><div class="actions">' +
       '<button class="btn btn-sm" onclick="editGroup(' + (g.id || g.ID) + ')">Edit</button>' +
       '<button class="btn btn-sm btn-danger" onclick="deleteGroup(' + (g.id || g.ID) + ')">Delete</button>' +
@@ -484,9 +409,6 @@ function openGroupModal(g) {
   document.getElementById('group-modal-title').textContent = g ? 'Edit Group' : 'Add Group';
   document.getElementById('group-edit-id').value = g ? (g.id || g.ID || '') : '';
   document.getElementById('grp-name').value = g ? (g.name || '') : '';
-  const editId = g ? (g.id || g.ID || 0) : 0;
-  populateCtcssSelect(document.getElementById('grp-tx-ctcss'), g ? (g.tx_ctcss||0) : 0, 'group', editId);
-  populateDcsSelect(document.getElementById('grp-tx-dcs'), g ? (g.tx_dcs||0) : 0, 'group', editId);
   document.getElementById('group-modal').classList.add('active');
 }
 
@@ -502,9 +424,7 @@ function editGroup(id) {
 async function saveGroup() {
   const editId = document.getElementById('group-edit-id').value;
   const body = {
-    name: document.getElementById('grp-name').value.trim(),
-    tx_ctcss: parseInt(document.getElementById('grp-tx-ctcss').value) || 0,
-    tx_dcs: parseInt(document.getElementById('grp-tx-dcs').value) || 0
+    name: document.getElementById('grp-name').value.trim()
   };
   if (!body.name) { showToast('Group name is required', 'error'); return; }
 
