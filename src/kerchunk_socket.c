@@ -513,7 +513,7 @@ void kerchunk_socket_poll(void)
 
             if (slot >= 0) {
                 char welcome[64];
-                snprintf(welcome, sizeof(welcome), ". kerchunkd v%s connected\n", PACKAGE_VERSION);
+                snprintf(welcome, sizeof(welcome), ". kerchunkd v%s connected\n", KERCHUNK_VERSION_STRING);
                 write_all(client, welcome, strlen(welcome));
             } else {
                 const char *busy = "Server busy\n";
