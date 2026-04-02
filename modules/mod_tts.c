@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <dirent.h>
 #include <curl/curl.h>
 
 #ifdef HAVE_NEMO_NORMALIZE
@@ -479,11 +480,23 @@ static int cli_tts(int argc, const char **argv, kerchunk_resp_t *r)
     } else if (argc >= 2 && strcmp(argv[1], "cache-clear") == 0) {
         /* Remove all cached WAV files */
         if (g_cache_dir[0]) {
-            char cmd[600];
-            snprintf(cmd, sizeof(cmd), "rm -f %s/*.wav", g_cache_dir);
-            if (system(cmd) == 0) {
+            DIR *d = opendir(g_cache_dir);
+            if (d) {
+                struct dirent *de;
+                int count = 0;
+                while ((de = readdir(d)) != NULL) {
+                    size_t len = strlen(de->d_name);
+                    if (len > 4 && strcmp(de->d_name + len - 4, ".wav") == 0) {
+                        char path[768];
+                        snprintf(path, sizeof(path), "%s/%s", g_cache_dir, de->d_name);
+                        unlink(path);
+                        count++;
+                    }
+                }
+                closedir(d);
                 resp_bool(r, "ok", 1);
                 resp_str(r, "action", "cache cleared");
+                resp_int(r, "files_removed", count);
             } else {
                 resp_str(r, "error", "Failed to clear cache");
             }

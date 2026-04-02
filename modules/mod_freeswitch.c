@@ -25,6 +25,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <stdatomic.h>
 
 #define LOG_MOD "freeswitch"
 
@@ -84,7 +85,7 @@ static char g_sounds_dir[256]     = "./sounds";
 
 /* Call state */
 static call_state_t g_call_state   = CALL_IDLE;
-static volatile int g_call_active  = 0;
+static atomic_int g_call_active  = 0;
 static char g_call_uuid[64]        = "";
 static char g_call_digits[32]      = "";
 static int  g_call_timer           = -1;
@@ -106,8 +107,8 @@ static struct sockaddr_in g_fs_udp_addr;
 static socklen_t g_fs_udp_addrlen = sizeof(struct sockaddr_in);
 
 /* Audio state */
-static volatile int g_cor_active     = 0;
-static int          g_vox_ptt_held   = 0;
+static atomic_int g_cor_active     = 0;
+static atomic_int g_vox_ptt_held   = 0;
 static int          g_vad_hold_remaining = 0;
 static int          g_speech_frames  = 0;
 static jitter_buf_t g_jitter;

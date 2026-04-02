@@ -418,11 +418,44 @@ static void mg_log_cb(char ch, void *param)
     }
 }
 
+/* ── JSON string escaping ── */
+
+static void json_escape_str(const char *in, char *out, size_t max)
+{
+    size_t j = 0;
+    for (size_t i = 0; in[i] && j < max - 2; i++) {
+        char c = in[i];
+        if (c == '"' || c == '\\') { out[j++] = '\\'; out[j++] = c; }
+        else if (c == '\n') { out[j++] = '\\'; out[j++] = 'n'; }
+        else if (c == '\r') { out[j++] = '\\'; out[j++] = 'r'; }
+        else if (c == '\t') { out[j++] = '\\'; out[j++] = 't'; }
+        else if ((unsigned char)c < 0x20) { /* skip control chars */ }
+        else out[j++] = c;
+    }
+    out[j] = '\0';
+}
+
 /* ── Auth check ── */
+
+/* Constant-time comparison to prevent timing side-channel attacks */
+static int ct_compare(const char *a, const char *b, size_t len)
+{
+    volatile unsigned char result = 0;
+    for (size_t i = 0; i < len; i++)
+        result |= (unsigned char)a[i] ^ (unsigned char)b[i];
+    return result == 0;
+}
 
 static int check_auth(struct mg_http_message *hm)
 {
-    if (g_auth_token[0] == '\0') return 1;  /* No auth configured */
+    if (g_auth_token[0] == '\0') {
+        /* No token configured — only allow when binding to localhost */
+        if (strcmp(g_bind, "127.0.0.1") == 0 || strcmp(g_bind, "localhost") == 0)
+            return 1;  /* localhost only */
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "auth rejected: no token configured on non-localhost bind (%s)", g_bind);
+        return 0;  /* no token + public bind = deny */
+    }
 
     /* Check Authorization header first */
     struct mg_str *auth = mg_http_get_header(hm, "Authorization");
@@ -430,14 +463,16 @@ static int check_auth(struct mg_http_message *hm)
         char expected[160];
         int elen = snprintf(expected, sizeof(expected), "Bearer %s", g_auth_token);
         if ((int)auth->len == elen &&
-            memcmp(auth->buf, expected, (size_t)elen) == 0)
+            ct_compare(auth->buf, expected, (size_t)elen))
             return 1;
     }
 
     /* Fall back to ?token= query parameter (for EventSource/SSE) */
     char token[128] = "";
     if (mg_http_get_var(&hm->query, "token", token, sizeof(token)) > 0) {
-        if (strcmp(token, g_auth_token) == 0)
+        size_t tlen = strlen(token);
+        size_t alen = strlen(g_auth_token);
+        if (tlen == alen && ct_compare(token, g_auth_token, tlen))
             return 1;
     }
 
@@ -483,27 +518,40 @@ typedef struct {
 static void cmd_list_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
 {
     cmd_list_ctx_t *ctx = (cmd_list_ctx_t *)ud;
-    if (ctx->off >= ctx->max - 256) return;
+    if (ctx->off >= ctx->max - 512) return;
     if (!ctx->first) ctx->buf[ctx->off++] = ',';
     ctx->first = 0;
 
+    char e_name[64], e_usage[128], e_desc[256];
+    json_escape_str(cmd->name, e_name, sizeof(e_name));
+    json_escape_str(cmd->usage ? cmd->usage : cmd->name, e_usage, sizeof(e_usage));
+    json_escape_str(cmd->description ? cmd->description : "", e_desc, sizeof(e_desc));
+
     ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
         "{\"name\":\"%s\",\"usage\":\"%s\",\"description\":\"%s\"",
-        cmd->name, cmd->usage ? cmd->usage : cmd->name,
-        cmd->description ? cmd->description : "");
+        e_name, e_usage, e_desc);
 
-    if (cmd->category)
+    if (cmd->category) {
+        char e_cat[64];
+        json_escape_str(cmd->category, e_cat, sizeof(e_cat));
         ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
-            ",\"category\":\"%s\"", cmd->category);
-    if (cmd->ui_label)
+            ",\"category\":\"%s\"", e_cat);
+    }
+    if (cmd->ui_label) {
+        char e_label[64];
+        json_escape_str(cmd->ui_label, e_label, sizeof(e_label));
         ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
-            ",\"ui_label\":\"%s\"", cmd->ui_label);
+            ",\"ui_label\":\"%s\"", e_label);
+    }
     if (cmd->ui_type)
         ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
             ",\"ui_type\":%d", cmd->ui_type);
-    if (cmd->ui_command)
+    if (cmd->ui_command) {
+        char e_uicmd[128];
+        json_escape_str(cmd->ui_command, e_uicmd, sizeof(e_uicmd));
         ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
-            ",\"ui_command\":\"%s\"", cmd->ui_command);
+            ",\"ui_command\":\"%s\"", e_uicmd);
+    }
 
     /* Serialize fields array for FORM types */
     if (cmd->ui_fields && cmd->num_ui_fields > 0) {
@@ -511,15 +559,25 @@ static void cmd_list_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
         for (int i = 0; i < cmd->num_ui_fields; i++) {
             const kerchunk_ui_field_t *f = &cmd->ui_fields[i];
             if (i > 0) ctx->buf[ctx->off++] = ',';
+            char e_fn[64], e_fl[64], e_ft[32];
+            json_escape_str(f->name, e_fn, sizeof(e_fn));
+            json_escape_str(f->label, e_fl, sizeof(e_fl));
+            json_escape_str(f->type, e_ft, sizeof(e_ft));
             ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
                 "{\"name\":\"%s\",\"label\":\"%s\",\"type\":\"%s\"",
-                f->name, f->label, f->type);
-            if (f->options)
+                e_fn, e_fl, e_ft);
+            if (f->options) {
+                char e_fo[128];
+                json_escape_str(f->options, e_fo, sizeof(e_fo));
                 ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
-                    ",\"options\":\"%s\"", f->options);
-            if (f->placeholder)
+                    ",\"options\":\"%s\"", e_fo);
+            }
+            if (f->placeholder) {
+                char e_fp[128];
+                json_escape_str(f->placeholder, e_fp, sizeof(e_fp));
                 ctx->off += snprintf(ctx->buf + ctx->off, ctx->max - ctx->off,
-                    ",\"placeholder\":\"%s\"", f->placeholder);
+                    ",\"placeholder\":\"%s\"", e_fp);
+            }
             ctx->buf[ctx->off++] = '}';
         }
         ctx->buf[ctx->off++] = ']';
@@ -689,17 +747,25 @@ static void handle_api_users(struct mg_connection *c)
         const kerchunk_user_t *u = kerchunk_user_get(i);
         if (!u) continue;
         if (i > 0) buf[off++] = ',';
+        char e_username[128], e_name[128], e_email[256];
+        char e_callsign[32], e_dtmf[16], e_ani[32];
+        json_escape_str(u->username, e_username, sizeof(e_username));
+        json_escape_str(u->name, e_name, sizeof(e_name));
+        json_escape_str(u->email, e_email, sizeof(e_email));
+        json_escape_str(u->callsign, e_callsign, sizeof(e_callsign));
+        json_escape_str(u->dtmf_login, e_dtmf, sizeof(e_dtmf));
+        json_escape_str(u->ani, e_ani, sizeof(e_ani));
         off += snprintf(buf + off, RESP_MAX - off,
             "{\"id\":%d,\"username\":\"%s\",\"name\":\"%s\","
             "\"email\":\"%s\",\"callsign\":\"%s\","
             "\"dtmf_login\":\"%s\",\"ani\":\"%s\",\"access\":%d,"
             "\"voicemail\":%d,\"group\":%d,"
-            "\"totp_secret\":\"%s\"}",
-            u->id, u->username, u->name,
-            u->email, u->callsign,
-            u->dtmf_login, u->ani, u->access,
+            "\"totp_configured\":%s}",
+            u->id, e_username, e_name,
+            e_email, e_callsign,
+            e_dtmf, e_ani, u->access,
             u->voicemail, u->group,
-            u->totp_secret);
+            u->totp_secret[0] ? "true" : "false");
     }
     off += snprintf(buf + off, RESP_MAX - off, "]}");
     (void)off;
@@ -1182,6 +1248,19 @@ static void handle_api_config_put(struct mg_connection *c,
 
 /* ── Registration handler ── */
 
+/* Cryptographically secure random integer from /dev/urandom */
+static int secure_random_int(int min, int max)
+{
+    unsigned int r;
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0 || read(fd, &r, sizeof(r)) != (ssize_t)sizeof(r)) {
+        if (fd >= 0) close(fd);
+        return min;
+    }
+    close(fd);
+    return min + (int)(r % (unsigned)(max - min + 1));
+}
+
 /* Simple rate limit: track last registration time, enforce minimum gap */
 static time_t g_last_register_time;
 #define REGISTER_RATE_LIMIT_S 10  /* one registration per 10 seconds */
@@ -1262,9 +1341,8 @@ static void handle_api_register(struct mg_connection *c,
     /* Generate random 4-digit DTMF login (1000-9999), collision check */
     char dtmf_login[8] = "";
     int attempts = 0;
-    srand((unsigned)(time(NULL) ^ (unsigned)new_id));
     while (attempts < 100) {
-        int code = 1000 + (rand() % 9000);
+        int code = secure_random_int(1000, 9999);
         snprintf(dtmf_login, sizeof(dtmf_login), "%d", code);
         /* Check collision */
         int collision = 0;
@@ -1290,7 +1368,7 @@ static void handle_api_register(struct mg_connection *c,
     char ani[16] = "";
     attempts = 0;
     while (attempts < 100) {
-        int code = 10000 + (rand() % 90000);
+        int code = secure_random_int(10000, 99999);
         snprintf(ani, sizeof(ani), "%d", code);
         if (!kerchunk_user_lookup_by_ani(ani)) break;
         attempts++;
@@ -1390,12 +1468,6 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                 }
             }
 
-            /* WebSocket audio stream — public (PTT still requires WS auth) */
-            if (mg_match(hm->uri, mg_str("/api/audio"), NULL)) {
-                mg_ws_upgrade(c, hm, NULL);
-                return;
-            }
-
             /* Registration — public */
             if (mg_match(hm->method, mg_str("POST"), NULL) &&
                 mg_match(hm->uri, mg_str("/api/register"), NULL)) {
@@ -1407,6 +1479,12 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             if (!check_auth(hm)) {
                 mg_http_reply(c, 401, API_HEADERS,
                               "{\"error\":\"Invalid or missing token\"}");
+                return;
+            }
+
+            /* WebSocket audio stream — requires auth */
+            if (mg_match(hm->uri, mg_str("/api/audio"), NULL)) {
+                mg_ws_upgrade(c, hm, NULL);
                 return;
             }
 

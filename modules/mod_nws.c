@@ -614,6 +614,23 @@ static void nws_unload(void)
     g_alert_count = 0;
 }
 
+/* ── JSON string escaping ── */
+
+static void nws_json_escape(const char *in, char *out, size_t max)
+{
+    size_t j = 0;
+    for (size_t i = 0; in[i] && j < max - 2; i++) {
+        char c = in[i];
+        if (c == '"' || c == '\\') { out[j++] = '\\'; out[j++] = c; }
+        else if (c == '\n') { out[j++] = '\\'; out[j++] = 'n'; }
+        else if (c == '\r') { out[j++] = '\\'; out[j++] = 'r'; }
+        else if (c == '\t') { out[j++] = '\\'; out[j++] = 't'; }
+        else if ((unsigned char)c < 0x20) { /* skip control chars */ }
+        else out[j++] = c;
+    }
+    out[j] = '\0';
+}
+
 /* ── CLI ── */
 
 static int cli_nws(int argc, const char **argv, kerchunk_resp_t *r)
@@ -655,13 +672,18 @@ static int cli_nws(int argc, const char **argv, kerchunk_resp_t *r)
     for (int i = 0; i < MAX_ALERTS; i++) {
         if (!g_alerts[i].active) continue;
         if (!jfirst) resp_json_raw(r, ",");
-        char frag[512];
+        char e_id[ALERT_ID_LEN * 2], e_event[ALERT_EVT_LEN * 2];
+        char e_headline[ALERT_HDL_LEN * 2];
+        nws_json_escape(g_alerts[i].id, e_id, sizeof(e_id));
+        nws_json_escape(g_alerts[i].event, e_event, sizeof(e_event));
+        nws_json_escape(g_alerts[i].headline, e_headline, sizeof(e_headline));
+        char frag[1024];
         snprintf(frag, sizeof(frag),
                  "{\"id\":\"%s\",\"event\":\"%s\",\"severity\":\"%s\","
                  "\"headline\":\"%s\"}",
-                 g_alerts[i].id, g_alerts[i].event,
+                 e_id, e_event,
                  severity_str(g_alerts[i].severity),
-                 g_alerts[i].headline);
+                 e_headline);
         resp_json_raw(r, frag);
         jfirst = 0;
     }

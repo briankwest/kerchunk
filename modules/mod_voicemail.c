@@ -14,6 +14,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <stdatomic.h>
 #include <dirent.h>
 
 #define LOG_MOD "voicemail"
@@ -34,7 +35,7 @@ static int  g_max_duration_s = 60;
 static int  g_enabled = 0;
 
 /* Recording state (g_recording read by audio thread tap) */
-static volatile int g_recording;
+static atomic_int g_recording;
 static int      g_record_user_id;
 static int16_t *g_rec_buf;
 static size_t   g_rec_len;

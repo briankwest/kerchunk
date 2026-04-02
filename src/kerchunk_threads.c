@@ -9,6 +9,7 @@
 #include "kerchunk_log.h"
 #include <string.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <time.h>
 
 #define LOG_MOD "threads"
@@ -19,8 +20,8 @@ typedef struct {
 	int             id;
 	char            name[32];
 	pthread_t       pthread;
-	volatile int    stop_requested;
-	volatile int    running;
+	atomic_int      stop_requested;
+	atomic_int      running;
 	void          *(*fn)(void *);
 	void           *userdata;
 	uint64_t        start_time_us;
@@ -49,9 +50,9 @@ static void *thread_wrapper(void *arg)
 
 	KERCHUNK_LOG_I(LOG_MOD, "thread '%s' [%d] started", mt->name, mt->id);
 
-	mt->running = 1;
+	atomic_store(&mt->running, 1);
 	mt->fn(mt->userdata);
-	mt->running = 0;
+	atomic_store(&mt->running, 0);
 
 	KERCHUNK_LOG_I(LOG_MOD, "thread '%s' [%d] exited", mt->name, mt->id);
 	return NULL;
@@ -74,7 +75,7 @@ void kerchunk_threads_shutdown(void)
 	pthread_mutex_lock(&g_mutex);
 	for (int i = 0; i < MAX_THREADS; i++)
 		if (g_threads[i].active)
-			g_threads[i].stop_requested = 1;
+			atomic_store(&g_threads[i].stop_requested, 1);
 	pthread_mutex_unlock(&g_mutex);
 
 	/* Join all with timeout */
@@ -121,7 +122,7 @@ int kerchunk_thread_create(const char *name,
 	snprintf(mt->name, sizeof(mt->name), "%s", name);
 	mt->fn = fn;
 	mt->userdata = ud;
-	mt->stop_requested = 0;
+	atomic_store(&mt->stop_requested, 0);
 	mt->start_time_us = now_us();
 
 	int rc = pthread_create(&mt->pthread, NULL, thread_wrapper, mt);
@@ -142,7 +143,7 @@ void kerchunk_thread_stop(int tid)
 	pthread_mutex_lock(&g_mutex);
 	for (int i = 0; i < MAX_THREADS; i++) {
 		if (g_threads[i].active && g_threads[i].id == tid) {
-			g_threads[i].stop_requested = 1;
+			atomic_store(&g_threads[i].stop_requested, 1);
 			break;
 		}
 	}
@@ -151,10 +152,10 @@ void kerchunk_thread_stop(int tid)
 
 int kerchunk_thread_should_stop(int tid)
 {
-	/* No lock — stop_requested is volatile and read-only from worker */
+	/* No lock — stop_requested is atomic and read-only from worker */
 	for (int i = 0; i < MAX_THREADS; i++) {
 		if (g_threads[i].active && g_threads[i].id == tid)
-			return g_threads[i].stop_requested;
+			return atomic_load(&g_threads[i].stop_requested);
 	}
 	return 1; /* unknown tid = stop */
 }
@@ -180,7 +181,7 @@ int kerchunk_thread_count(void)
 	int n = 0;
 	pthread_mutex_lock(&g_mutex);
 	for (int i = 0; i < MAX_THREADS; i++)
-		if (g_threads[i].active && g_threads[i].running) n++;
+		if (g_threads[i].active && atomic_load(&g_threads[i].running)) n++;
 	pthread_mutex_unlock(&g_mutex);
 	return n;
 }
@@ -195,7 +196,7 @@ void kerchunk_thread_iter(
 	for (int i = 0; i < MAX_THREADS; i++) {
 		if (!g_threads[i].active) continue;
 		cb(g_threads[i].id, g_threads[i].name,
-		   g_threads[i].running, g_threads[i].start_time_us, ud);
+		   atomic_load(&g_threads[i].running), g_threads[i].start_time_us, ud);
 	}
 	pthread_mutex_unlock(&g_mutex);
 }

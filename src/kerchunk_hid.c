@@ -36,6 +36,7 @@ static int  g_available;
  * MUST be 5 bytes — 4 bytes causes EPIPE on CM108/CM119. */
 static int hid_write_gpio(int fd, int pin_bit, int state)
 {
+    if (pin_bit > 7) pin_bit = 2;  /* default to GPIO2 */
     unsigned char io[5] = {0};
     io[2] = state ? (unsigned char)(1 << pin_bit) : 0;  /* data: pin value */
     io[3] = (unsigned char)(1 << pin_bit);  /* mask: this pin is output */
@@ -60,8 +61,10 @@ int kerchunk_hid_init(const kerchunk_hid_config_t *cfg)
 
     snprintf(g_device, sizeof(g_device), "%s", cfg->device);
     g_cor_bit       = cfg->cor_bit;
+    if (g_cor_bit > 7) g_cor_bit = 2;  /* default to GPIO2 */
     g_cor_active_low = cfg->cor_polarity;
     g_ptt_bit       = cfg->ptt_bit;
+    if (g_ptt_bit > 7) g_ptt_bit = 2;  /* default to GPIO2 */
     g_available     = 1;
 
     /* Log HID device info for diagnostics */
@@ -159,6 +162,7 @@ int kerchunk_hid_set_ptt(int active)
         return -1;
 
     int pin_bit = g_ptt_bit;
+    if (pin_bit > 7) pin_bit = 2;  /* default to GPIO2 */
 
     int rc = hid_write_gpio(g_fd, pin_bit, active);
     if (rc < 0 && (errno == EPIPE || errno == ENODEV || errno == EIO)) {

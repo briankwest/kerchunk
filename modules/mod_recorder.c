@@ -18,6 +18,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <stdatomic.h>
 #include <time.h>
 
 #define LOG_MOD "recorder"
@@ -31,7 +32,7 @@ static char g_dir[256] = "recordings";
 static int  g_max_duration_s = 300;
 
 /* RX recording state (g_rx_active read by audio thread tap) */
-static volatile int g_rx_active;
+static atomic_int g_rx_active;
 static int16_t *g_rx_buf;
 static size_t   g_rx_len;
 static size_t   g_rx_cap;
@@ -39,7 +40,7 @@ static char     g_rx_start_time[20];   /* YYYYMMDD_HHMMSS */
 static int      g_rx_caller_id;
 
 /* TX recording state (g_tx_active read by audio thread tap) */
-static volatile int g_tx_active;
+static atomic_int g_tx_active;
 static int16_t *g_tx_buf;
 static size_t   g_tx_len;
 static size_t   g_tx_cap;
