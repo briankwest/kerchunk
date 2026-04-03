@@ -48,12 +48,12 @@ void resp_finish(kerchunk_resp_t *r);
 /* Version */
 #define KERCHUNK_VERSION_MAJOR 1
 #define KERCHUNK_VERSION_MINOR 0
-#define KERCHUNK_VERSION_PATCH 1
+#define KERCHUNK_VERSION_PATCH 2
 
 #ifdef KERCHUNK_GIT_HASH
-#define KERCHUNK_VERSION_STRING "1.0.1+" KERCHUNK_GIT_HASH
+#define KERCHUNK_VERSION_STRING "1.0.2+" KERCHUNK_GIT_HASH
 #else
-#define KERCHUNK_VERSION_STRING "1.0.1"
+#define KERCHUNK_VERSION_STRING "1.0.2"
 #endif
 
 /* Frame timing: 20ms frames, max rate 48 kHz → max 960 samples/frame */

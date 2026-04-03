@@ -1,3 +1,25 @@
+kerchunk (1.0.2-1) stable; urgency=medium
+
+  * Wall-clock scheduler and managed thread pool
+  * Frame-synchronized FLEX paging (capcode % 128 frame alignment)
+  * FLEX 'now' command for immediate TX (bypass scheduler)
+  * POCSAG/FLEX/APRS tx_level config and modulation mode (baseband/FSK)
+  * POCSAG/FLEX de-emphasis config for direct FM modulators
+  * QUEUE_FLAG_NO_TAIL to suppress courtesy tone on data TX
+  * Dynamic dashboard UI with module-registered controls
+  * 48kHz default sample rate, configurable via config
+  * TX CTCSS/DCS encoding moved to mod_tones
+  * Web audio fix at 48kHz (AudioWorklet sample rate)
+  * Git hash in version string and deb package version
+  * 12 critical/high + 11 medium security fixes from audit
+  * Detailed CLI help text for all module commands
+  * Burst tone CLI commands in mod_txcode
+  * Heartbeat event and version in admin dashboard
+  * Remove GMRS-specific branding from service/docs
+  * Requires libpocsag >= 1.0.2, libflex >= 1.0.2, libaprs >= 1.0.2
+
+ -- Brian West <brian@mcalester.net>  Wed, 02 Apr 2026 00:00:00 +0000
+
 kerchunk (1.0.1-1) stable; urgency=medium
 
   * Fix COR polarity: CM108 inverts internally, default now active_high
