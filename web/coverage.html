@@ -431,12 +431,18 @@ button {
   </div>
 
   <input type="hidden" id="apiKey">
-  <input type="hidden" id="address">
 
   <div class="section">
     <h2>Transmitter Location</h2>
+    <div class="field" style="margin-bottom:8px">
+      <label for="address">Address</label>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="address" placeholder="Enter address or coordinates" style="flex:1" disabled>
+        <button class="btn-secondary" id="btnGeocode" disabled style="white-space:nowrap">Search</button>
+      </div>
+    </div>
     <div class="info-grid">
-      <span class="label">Address</span><span class="value" id="dispAddr">&mdash;</span>
+      <span class="label">Resolved</span><span class="value" id="dispAddr">&mdash;</span>
       <span class="label">Latitude</span><span class="value" id="dispLat">&mdash;</span>
       <span class="label">Longitude</span><span class="value" id="dispLng">&mdash;</span>
       <span class="label">Elev (ASL)</span><span class="value" id="dispElev">&mdash;</span>
@@ -1826,7 +1832,8 @@ function updateProgress(frac) {
 function enableInputs(on) {
   ['txPower', 'txGain', 'txHeight',
    'rxSens', 'systemLoss', 'environment', 'maxRange', 'resolution',
-   'gmrsChannel', 'mobPower', 'mobGain', 'mobHeight', 'btnDropMob'].forEach(id => $(id).disabled = !on);
+   'gmrsChannel', 'mobPower', 'mobGain', 'mobHeight', 'btnDropMob',
+   'address', 'btnGeocode'].forEach(id => $(id).disabled = !on);
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -1877,6 +1884,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btnCalc').addEventListener('click', calculate);
   $('btnClear').addEventListener('click', clearCoverage);
   $('btnExport').addEventListener('click', exportImage);
+  $('btnGeocode').addEventListener('click', geocode);
+  $('address').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); geocode(); } });
   $('btnDropMob').addEventListener('click', startMobilePlacement);
   $('btnRemoveMob').addEventListener('click', removeMobile);
 
