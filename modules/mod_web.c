@@ -1733,7 +1733,7 @@ static void *web_thread(void *arg)
 {
     (void)arg;
     while (!g_core->thread_should_stop(g_web_tid)) {
-        mg_mgr_poll(&g_mgr, 5);  /* 5ms poll timeout */
+        mg_mgr_poll(&g_mgr, 50);  /* 50ms poll — mg_wakeup interrupts for audio */
     }
     return NULL;
 }

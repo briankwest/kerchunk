@@ -273,6 +273,14 @@ modules_mod_aprs_la_LDFLAGS      = $(MOD_LDFLAGS)
 modules_mod_aprs_la_LIBADD       = $(LIBAPRS_LIBS) -lm
 endif
 
+if HAVE_LIBPOC
+kerchunkmod_LTLIBRARIES += modules/mod_poc.la
+modules_mod_poc_la_SOURCES       = modules/mod_poc.c
+modules_mod_poc_la_CFLAGS        = $(MOD_CFLAGS) $(LIBPOC_CFLAGS)
+modules_mod_poc_la_LDFLAGS       = $(MOD_LDFLAGS)
+modules_mod_poc_la_LIBADD        = $(LIBPOC_LIBS)
+endif
+
 # ---------- tests ----------
 
 check_PROGRAMS = test_kerchunk
@@ -315,7 +323,8 @@ test_kerchunk_SOURCES = \
 	src/kerchunk_threads.c \
 	src/kerchunk_user.c \
 	src/kerchunk_resp.c \
-	src/kerchunk_evt_json.c
+	src/kerchunk_evt_json.c \
+	src/kerchunk_rrd.c
 
 test_kerchunk_CFLAGS = $(AM_CFLAGS) \
 		       $(PORTAUDIO_CFLAGS) \
