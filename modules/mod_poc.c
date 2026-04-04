@@ -91,7 +91,7 @@ static void poc_log_bridge(int level, const char *msg, void *ud)
     int klevel;
     switch (level) {
     case POC_LOG_ERROR:   klevel = KERCHUNK_LOG_ERROR; break;
-    case POC_LOG_WARNING: klevel = KERCHUNK_LOG_WARNING; break;
+    case POC_LOG_WARNING: klevel = KERCHUNK_LOG_WARN; break;
     case POC_LOG_INFO:    klevel = KERCHUNK_LOG_INFO; break;
     case POC_LOG_DEBUG:   klevel = KERCHUNK_LOG_DEBUG; break;
     default:              klevel = KERCHUNK_LOG_DEBUG; break;
@@ -172,7 +172,7 @@ static void poc_on_audio(poc_server_t *srv, uint32_t speaker_id,
 
     if (!g_poc_to_rf || gid != g_rf_bridge_group) {
         if (g_audio_frame_count <= 3)
-            g_core->log(KERCHUNK_LOG_WARNING, LOG_MOD,
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                         "audio DROPPED: poc_to_rf=%d gid=%u bridge=%u",
                         g_poc_to_rf, gid, g_rf_bridge_group);
         return;
