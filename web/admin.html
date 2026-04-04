@@ -455,10 +455,13 @@ async function refreshStation() {
 
 // Live stats
 let liveStats = {
-  uptime_ms:0, rx_count:0, rx_time_ms:0, tx_count:0, tx_time_ms:0,
-  duty_pct:0, longest_rx_ms:0, queue_items:0, cdr_records:0, restarts:0,
+  uptime_ms:0, total_uptime_ms:0,
+  rx_count:0, rx_time_ms:0, tx_count:0, tx_time_ms:0,
+  duty_pct:0, longest_rx_ms:0, shortest_rx_ms:0, avg_rx_ms:0, peak_hour:0,
   kerchunk_count:0, dtmf_commands:0, cwid_count:0, pages_sent:0,
-  peak_hour:0, avg_rx_ms:0,
+  weather_count:0, nws_alerts:0, phone_calls:0,
+  tot_events:0, emergency_count:0, access_denied:0,
+  queue_items:0, cdr_records:0, restarts:0,
   hourly:null, minutely:null, daily:null, users:null,
   syncTime:0,
   corActive:false, corStart:0, pttActive:false, pttStart:0,
@@ -561,18 +564,28 @@ function renderStats() {
   const t=document.getElementById('stats-table');
   let h='';
   h+=tr('Uptime',fmtMs(up));
+  if(liveStats.total_uptime_ms>up) h+=tr('Total uptime',fmtMs(liveStats.total_uptime_ms));
+  const idle=Math.max(0,up-rx-tx);
   h+=tr('Inbound (RX)',liveStats.rx_count+' &mdash; '+fmtMs(rx));
   h+=tr('Outbound (TX)',liveStats.tx_count+' &mdash; '+fmtMs(tx));
+  h+=tr('Idle',fmtMs(idle));
   h+=tr('Duty (5m)',duty.toFixed(1)+'%');
   if(liveStats.rx_count>0){
-    h+=tr('Avg inbound',fmtMs(liveStats.avg_rx_ms));
-    h+=tr('Longest',fmtMs(liveStats.longest_rx_ms));
+    h+=tr('Avg RX',fmtMs(liveStats.avg_rx_ms));
+    h+=tr('Shortest RX',fmtMs(liveStats.shortest_rx_ms));
+    h+=tr('Longest RX',fmtMs(liveStats.longest_rx_ms));
     h+=tr('Peak hour',String(liveStats.peak_hour).padStart(2,'0')+':00');
   }
   if(liveStats.kerchunk_count) h+=tr('Kerchunks',liveStats.kerchunk_count);
   if(liveStats.dtmf_commands) h+=tr('DTMF cmds',liveStats.dtmf_commands);
   if(liveStats.cwid_count) h+=tr('CW IDs',liveStats.cwid_count);
   if(liveStats.pages_sent) h+=tr('Pages sent',liveStats.pages_sent);
+  if(liveStats.weather_count) h+=tr('Weather',liveStats.weather_count);
+  if(liveStats.nws_alerts) h+=tr('NWS alerts',liveStats.nws_alerts);
+  if(liveStats.phone_calls) h+=tr('Phone calls',liveStats.phone_calls);
+  if(liveStats.tot_events) h+=tr('TOT events',liveStats.tot_events);
+  if(liveStats.emergency_count) h+=tr('Emergencies',liveStats.emergency_count);
+  if(liveStats.access_denied) h+=tr('Access denied',liveStats.access_denied);
   if(liveStats.queue_items) h+=tr('Queue played',liveStats.queue_items);
   if(liveStats.cdr_records) h+=tr('CDR records',liveStats.cdr_records);
   if(liveStats.restarts>0) h+=tr('Restarts',liveStats.restarts);
@@ -585,6 +598,7 @@ async function refreshStats() {
     const now=Date.now();
     liveStats.syncTime=now;
     liveStats.uptime_ms=d.uptime_ms||0;
+    liveStats.total_uptime_ms=d.total_uptime_ms||0;
     if(d.channel){
       const c=d.channel;
       liveStats.rx_count=c.rx_count||0;
@@ -592,6 +606,7 @@ async function refreshStats() {
       liveStats.tx_count=c.tx_count||0;
       liveStats.tx_time_ms=c.tx_time_ms||0;
       liveStats.longest_rx_ms=c.longest_rx_ms||0;
+      liveStats.shortest_rx_ms=c.shortest_rx_ms||0;
       liveStats.duty_pct=c.duty_pct||0;
       liveStats.avg_rx_ms=c.avg_rx_ms||0;
       liveStats.peak_hour=c.peak_hour||0;
@@ -599,6 +614,12 @@ async function refreshStats() {
       liveStats.dtmf_commands=c.dtmf_commands||0;
       liveStats.cwid_count=c.cwid_count||0;
       liveStats.pages_sent=c.pages_sent||0;
+      liveStats.weather_count=c.weather_count||0;
+      liveStats.nws_alerts=c.nws_alerts||0;
+      liveStats.phone_calls=c.phone_calls||0;
+      liveStats.tot_events=c.tot_events||0;
+      liveStats.emergency_count=c.emergency_count||0;
+      liveStats.access_denied=c.access_denied||0;
     }
     if(d.system){
       liveStats.queue_items=d.system.queue_items||0;
