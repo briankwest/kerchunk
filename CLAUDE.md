@@ -28,6 +28,7 @@ Libraries must be installed before building kerchunk:
 - **libpocsag** (optional, experimental, for POCSAG paging): `github.com/briankwest/libpocsag` — detected by pkg-config
 - **libflex** (optional, experimental, for FLEX paging): `github.com/briankwest/libflex` — detected by pkg-config
 - **libaprs** (optional, for APRS): `github.com/briankwest/libaprs` — detected by pkg-config
+- **libpoc** (optional, for PoC radio bridge): `github.com/briankwest/libpoc` — detected by pkg-config
 
 ## Architecture
 

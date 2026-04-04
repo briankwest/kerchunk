@@ -544,3 +544,25 @@ group = 2
 ; symbol = >
 ; comment = Kerchunk APRS gateway
 ; path = WIDE1-1,WIDE2-1
+
+; ----------------------------------------------------------------------------
+; PoC radio server bridge (requires libpoc)
+;
+; Runs a PoC server inside kerchunk allowing push-to-talk radios
+; (Retevis L71, TYT, etc.) to connect directly.  Audio is bridged
+; between the PoC network and the RF repeater.
+;
+; Per-user access: add poc_password to [user.N] sections.
+; CLI: poc status, poc clients, poc kick, poc broadcast, poc msg
+; ----------------------------------------------------------------------------
+[poc]
+; enabled = on                   ; on | off
+; bind = 0.0.0.0                 ; Listen address
+; port = 29999                   ; Listen port
+; tls_cert =                     ; TLS certificate (PEM, optional)
+; tls_key =                      ; TLS private key (PEM)
+; rf_bridge_group = 1            ; Kerchunk group ID bridged to RF (0 = none)
+; rf_to_poc = on                 ; Forward RF RX audio to PoC clients
+; poc_to_rf = on                 ; Forward PoC client audio to RF TX
+; priority = 3                   ; TX queue priority for PoC→RF audio
+; virtual_user_id = 999          ; Sender ID for RF audio in PoC network
