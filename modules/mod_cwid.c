@@ -351,20 +351,26 @@ static void oc_tail_expire(void *ud)
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: TAIL→IDLE (final ID)");
 }
 
-/* Transition to ACTIVE: mark pending, start repeating timer.
+/* Transition to ACTIVE: start repeating timer.
  * Do NOT send CW ID here — the channel is busy (someone just keyed up).
- * The ID will be sent when the channel goes idle (ACTIVE→TAIL transition)
- * or when the repeating timer fires during a gap in conversation. */
-static void oc_enter_active(void)
+ * The ID will be sent when the repeating timer fires, or when the channel
+ * goes idle if g_pending was set by the timer.
+ *
+ * g_pending is ONLY set here on the initial IDLE→ACTIVE transition (the
+ * first key-up after silence).  Re-entries from TAIL (continuing conversation)
+ * do NOT set pending — the repeating timer handles periodic IDs. */
+static void oc_enter_active(int from_idle)
 {
     oc_cancel_timer();
     g_oc_state = OC_ACTIVE;
-    g_pending = 1;
+
+    if (from_idle)
+        g_pending = 1;  /* initial ID needed after idle period */
 
     g_oc_timer_id = g_core->timer_create(g_cwid_interval_ms, 1,
                                           oc_active_tick, NULL);
-    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: →ACTIVE (pending, timer %dms)",
-                g_cwid_interval_ms);
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: →ACTIVE (%s, timer %dms)",
+                from_idle ? "initial, pending" : "rekey", g_cwid_interval_ms);
 }
 
 /* Transition to TAIL: cancel repeating timer, start one-shot tail timer */
@@ -406,15 +412,14 @@ static void on_state_change(const kerchevt_t *evt, void *ud)
     /* on_call mode state machine */
     switch (g_oc_state) {
     case OC_IDLE:
-        /* Any activity → ACTIVE */
+        /* Any activity → ACTIVE (initial key-up after idle) */
         if (ns != 0)
-            oc_enter_active();
+            oc_enter_active(1);
         break;
 
     case OC_ACTIVE:
-        /* Channel went idle → TAIL */
+        /* Channel went idle → send pending ID if timer fired, then TAIL */
         if (ns == 0) {
-            /* Send any pending deferred ID first */
             if (g_pending && !is_quiet_hour())
                 send_cwid();
             oc_enter_tail();
@@ -422,9 +427,9 @@ static void on_state_change(const kerchevt_t *evt, void *ud)
         break;
 
     case OC_TAIL:
-        /* New activity → back to ACTIVE */
+        /* New activity → back to ACTIVE (continuing conversation) */
         if (ns != 0)
-            oc_enter_active();
+            oc_enter_active(0);
         break;
     }
 }
