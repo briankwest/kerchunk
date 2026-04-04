@@ -115,7 +115,7 @@ static int emergency_load(kerchunk_core_t *core)
 
 static int emergency_configure(const kerchunk_config_t *cfg)
 {
-    g_timeout_ms = kerchunk_config_get_int(cfg, "emergency", "timeout", 1800000);
+    g_timeout_ms = kerchunk_config_get_duration_ms(cfg, "emergency", "timeout", 1800000);
 
     const char *v = kerchunk_config_get(cfg, "general", "sounds_dir");
     if (v) snprintf(g_sounds_dir, sizeof(g_sounds_dir), "%s", v);

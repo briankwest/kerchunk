@@ -509,7 +509,7 @@ static int weather_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "weather", "location");
     if (v) snprintf(g_location, sizeof(g_location), "%s", v);
 
-    g_interval_ms = kerchunk_config_get_int(cfg, "weather", "interval", 1800000);
+    g_interval_ms = kerchunk_config_get_duration_ms(cfg, "weather", "interval", 1800000);
 
     v = kerchunk_config_get(cfg, "weather", "announce_temp");
     g_announce_temp = (!v || strcmp(v, "on") == 0);

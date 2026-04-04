@@ -296,8 +296,8 @@ static int caller_load(kerchunk_core_t *core)
 
 static int caller_configure(const kerchunk_config_t *cfg)
 {
-    g_ani_window_ms    = kerchunk_config_get_int(cfg, "caller", "ani_window", 1000);
-    g_login_timeout_ms = kerchunk_config_get_int(cfg, "caller", "login_timeout", 1800000);
+    g_ani_window_ms    = kerchunk_config_get_duration_ms(cfg, "caller", "ani_window", 1000);
+    g_login_timeout_ms = kerchunk_config_get_duration_ms(cfg, "caller", "login_timeout", 1800000);
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "ani_window=%dms login_timeout=%ds",
                 g_ani_window_ms, g_login_timeout_ms / 1000);

@@ -383,7 +383,7 @@ static int otp_load(kerchunk_core_t *core)
 
 static int otp_configure(const kerchunk_config_t *cfg)
 {
-    g_session_timeout_ms = kerchunk_config_get_int(cfg, "otp", "session_timeout", 120000);
+    g_session_timeout_ms = kerchunk_config_get_duration_ms(cfg, "otp", "session_timeout", 120000);
     g_time_skew = kerchunk_config_get_int(cfg, "otp", "time_skew", 1);
 
     /* Count users with TOTP secrets */

@@ -81,7 +81,7 @@ static int courtesy_load(kerchunk_core_t *core)
 static int courtesy_configure(const kerchunk_config_t *cfg)
 {
     g_default_freq = kerchunk_config_get_int(cfg, "courtesy", "freq", 800);
-    g_default_dur  = kerchunk_config_get_int(cfg, "courtesy", "duration", 100);
+    g_default_dur  = kerchunk_config_get_duration_ms(cfg, "courtesy", "duration", 100);
     g_default_amp  = (int16_t)kerchunk_config_get_int(cfg, "courtesy", "amplitude", 4000);
 
     const char *qc = kerchunk_config_get(cfg, "courtesy", "queue_courtesy");

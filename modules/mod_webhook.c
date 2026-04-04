@@ -351,7 +351,7 @@ static int webhook_configure(const kerchunk_config_t *cfg)
     if (v) snprintf(g_secret, sizeof(g_secret), "%s", v);
     else   g_secret[0] = '\0';
 
-    g_timeout_ms  = kerchunk_config_get_int(cfg, "webhook", "timeout_ms", 5000);
+    g_timeout_ms  = kerchunk_config_get_duration_ms(cfg, "webhook", "timeout_ms", 5000);
     g_retry_count = kerchunk_config_get_int(cfg, "webhook", "retry_count", 2);
 
     if (!g_enabled) {

@@ -440,7 +440,7 @@ static int cwid_load(kerchunk_core_t *core)
 
 static int cwid_configure(const kerchunk_config_t *cfg)
 {
-    g_cwid_interval_ms = kerchunk_config_get_int(cfg, "repeater", "cwid_interval", 600000);
+    g_cwid_interval_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "cwid_interval", 600000);
 
     /* FCC 95.1751: CW ID must repeat at least every 15 minutes */
     if (g_cwid_interval_ms > 900000) {
@@ -507,7 +507,7 @@ static int cwid_configure(const kerchunk_config_t *cfg)
     if (mode_str && strcmp(mode_str, "on_call") == 0)
         g_mode = CWID_MODE_ON_CALL;
 
-    g_cwid_tail_ms = kerchunk_config_get_int(cfg, "repeater", "cwid_tail", 0);
+    g_cwid_tail_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "cwid_tail", 0);
 
     /* Cancel any existing timers/schedules */
     if (g_sched_id >= 0) {

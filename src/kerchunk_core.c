@@ -220,6 +220,11 @@ static int core_config_get_int(const char *section, const char *key, int def)
     return kerchunk_config_get_int(g_config, section, key, def);
 }
 
+static int core_config_get_duration_ms(const char *section, const char *key, int def)
+{
+    return kerchunk_config_get_duration_ms(g_config, section, key, def);
+}
+
 static void core_log(int level, const char *module, const char *fmt, ...)
 {
     va_list ap;
@@ -275,9 +280,10 @@ static kerchunk_core_t g_core = {
     .audio_tap_unregister    = core_audio_tap_unregister,
     .playback_tap_register   = core_playback_tap_register,
     .playback_tap_unregister = core_playback_tap_unregister,
-    .config_get         = core_config_get,
-    .config_get_int     = core_config_get_int,
-    .log                = core_log,
+    .config_get             = core_config_get,
+    .config_get_int         = core_config_get_int,
+    .config_get_duration_ms = core_config_get_duration_ms,
+    .log                    = core_log,
     .tts_speak          = NULL,  /* Set by mod_tts if loaded */
     .dtmf_register      = NULL,
     .dtmf_unregister    = NULL,

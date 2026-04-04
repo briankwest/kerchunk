@@ -1364,8 +1364,8 @@ int main(int argc, char **argv)
     }
 
     /* TX timing (with validation) */
-    g_tx_delay_ms = kerchunk_config_get_int(cfg, "repeater", "tx_delay", 100);
-    g_tx_tail_ms  = kerchunk_config_get_int(cfg, "repeater", "tx_tail", 200);
+    g_tx_delay_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_delay", 100);
+    g_tx_tail_ms  = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_tail", 200);
     if (g_tx_delay_ms < 0) g_tx_delay_ms = 0;
     if (g_tx_delay_ms > 2000) g_tx_delay_ms = 2000;
     if (g_tx_tail_ms < 0)  g_tx_tail_ms = 0;
@@ -1377,7 +1377,7 @@ int main(int argc, char **argv)
     const char *sr = kerchunk_config_get(cfg, "repeater", "software_relay");
     g_software_relay = (sr && strcmp(sr, "on") == 0);
 
-    g_relay_drain_ms = kerchunk_config_get_int(cfg, "repeater", "relay_drain", 500);
+    g_relay_drain_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "relay_drain", 500);
     if (g_relay_drain_ms < 0) g_relay_drain_ms = 0;
     if (g_relay_drain_ms > 5000) g_relay_drain_ms = 5000;
 
@@ -1414,7 +1414,7 @@ int main(int argc, char **argv)
 
     int prev_cor = 0;
     int cor_drop_hold = 0;   /* ticks remaining before COR drop is accepted */
-    int cor_drop_hold_ms = kerchunk_config_get_int(cfg, "repeater", "cor_drop_hold", 1000);
+    int cor_drop_hold_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "cor_drop_hold", 1000);
     if (cor_drop_hold_ms < 0) cor_drop_hold_ms = 0;
     if (cor_drop_hold_ms > 5000) cor_drop_hold_ms = 5000;
     int cor_drop_hold_ticks = cor_drop_hold_ms / 20;  /* convert ms to 20ms ticks */
@@ -1443,8 +1443,8 @@ int main(int argc, char **argv)
                 }
 
                 /* Re-read TX timing */
-                g_tx_delay_ms = kerchunk_config_get_int(cfg, "repeater", "tx_delay", 100);
-                g_tx_tail_ms  = kerchunk_config_get_int(cfg, "repeater", "tx_tail", 200);
+                g_tx_delay_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_delay", 100);
+                g_tx_tail_ms  = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_tail", 200);
                 if (g_tx_delay_ms < 0) g_tx_delay_ms = 0;
                 if (g_tx_delay_ms > 2000) g_tx_delay_ms = 2000;
                 if (g_tx_tail_ms < 0) g_tx_tail_ms = 0;

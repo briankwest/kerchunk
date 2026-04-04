@@ -532,8 +532,8 @@ static int nws_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "nws", "contact");
     if (v) snprintf(g_contact, sizeof(g_contact), "%s", v);
 
-    g_poll_interval_ms = kerchunk_config_get_int(cfg, "nws", "poll_interval", 300000);
-    g_reannounce_ms    = kerchunk_config_get_int(cfg, "nws", "reannounce_interval", 900000);
+    g_poll_interval_ms = kerchunk_config_get_duration_ms(cfg, "nws", "poll_interval", 300000);
+    g_reannounce_ms    = kerchunk_config_get_duration_ms(cfg, "nws", "reannounce_interval", 900000);
 
     v = kerchunk_config_get(cfg, "nws", "min_severity");
     if (v) {

@@ -296,10 +296,10 @@ static int repeater_load(kerchunk_core_t *core)
 
 static int repeater_configure(const kerchunk_config_t *cfg)
 {
-    g_tail_time_ms    = kerchunk_config_get_int(cfg, "repeater", "tail_time", 2000);
-    g_hang_time_ms    = kerchunk_config_get_int(cfg, "repeater", "hang_time", 500);
-    g_tot_time_ms     = kerchunk_config_get_int(cfg, "repeater", "timeout_time", 180000);
-    g_cor_debounce_ms = kerchunk_config_get_int(cfg, "repeater", "cor_debounce", 150);
+    g_tail_time_ms    = kerchunk_config_get_duration_ms(cfg, "repeater", "tail_time", 2000);
+    g_hang_time_ms    = kerchunk_config_get_duration_ms(cfg, "repeater", "hang_time", 500);
+    g_tot_time_ms     = kerchunk_config_get_duration_ms(cfg, "repeater", "timeout_time", 180000);
+    g_cor_debounce_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "cor_debounce", 150);
 
     /* Validate ranges */
     if (g_tail_time_ms < 0)    g_tail_time_ms = 0;

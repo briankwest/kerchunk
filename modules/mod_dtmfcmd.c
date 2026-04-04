@@ -260,8 +260,8 @@ static int dtmfcmd_load(kerchunk_core_t *core)
 
 static int dtmfcmd_configure(const kerchunk_config_t *cfg)
 {
-    g_timeout_ms = kerchunk_config_get_int(cfg, "dtmf", "inter_digit_timeout", 3000);
-    g_cor_gate_ms = kerchunk_config_get_int(cfg, "dtmf", "cor_gate_ms", 200);
+    g_timeout_ms = kerchunk_config_get_duration_ms(cfg, "dtmf", "inter_digit_timeout", 3000);
+    g_cor_gate_ms = kerchunk_config_get_duration_ms(cfg, "dtmf", "cor_gate_ms", 200);
 
     /* Check for pattern overrides from [dtmf] config section */
     for (int i = 0; i < g_cmd_count; i++) {

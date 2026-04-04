@@ -1098,11 +1098,11 @@ static int freeswitch_configure(const kerchunk_config_t *cfg)
     if (v) snprintf(g_sip_gateway, sizeof(g_sip_gateway), "%s", v);
 
     g_udp_base_port  = kerchunk_config_get_int(cfg, "freeswitch", "udp_base_port", 16000);
-    g_max_call_secs  = kerchunk_config_get_int(cfg, "freeswitch", "max_call_duration", 180);
-    g_dial_timeout_ms = kerchunk_config_get_int(cfg, "freeswitch", "dial_timeout", 30) * 1000;
-    g_inactivity_ms  = kerchunk_config_get_int(cfg, "freeswitch", "inactivity_timeout", 60) * 1000;
+    g_max_call_secs  = kerchunk_config_get_duration_ms(cfg, "freeswitch", "max_call_duration", 180000) / 1000;
+    g_dial_timeout_ms = kerchunk_config_get_duration_ms(cfg, "freeswitch", "dial_timeout", 30000);
+    g_inactivity_ms  = kerchunk_config_get_duration_ms(cfg, "freeswitch", "inactivity_timeout", 60000);
     g_vad_threshold  = kerchunk_config_get_int(cfg, "freeswitch", "vad_threshold", VAD_THRESHOLD_DEF);
-    g_vad_hold_ms    = kerchunk_config_get_int(cfg, "freeswitch", "vad_hold_ms", VAD_HOLD_MS_DEF);
+    g_vad_hold_ms    = kerchunk_config_get_duration_ms(cfg, "freeswitch", "vad_hold_ms", VAD_HOLD_MS_DEF);
 
     v = kerchunk_config_get(cfg, "freeswitch", "admin_only");
     g_admin_only = (v && strcmp(v, "on") == 0);

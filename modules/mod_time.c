@@ -206,7 +206,7 @@ static int time_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "time", "enabled");
     g_enabled = (v && strcmp(v, "on") == 0);
 
-    g_interval_ms = kerchunk_config_get_int(cfg, "time", "interval", 900000);
+    g_interval_ms = kerchunk_config_get_duration_ms(cfg, "time", "interval", 900000);
 
     v = kerchunk_config_get(cfg, "time", "timezone");
     if (v) {

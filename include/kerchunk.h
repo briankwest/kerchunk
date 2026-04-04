@@ -103,6 +103,7 @@ struct kerchunk_core {
     /* Config access */
     const char *(*config_get)(const char *section, const char *key);
     int  (*config_get_int)(const char *section, const char *key, int def);
+    int  (*config_get_duration_ms)(const char *section, const char *key, int def);
 
     /* Logging */
     void (*log)(int level, const char *module, const char *fmt, ...);

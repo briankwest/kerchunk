@@ -40,6 +40,16 @@ int  kerchunk_config_get_int(const kerchunk_config_t *cfg,
 float kerchunk_config_get_float(const kerchunk_config_t *cfg,
                                const char *section, const char *key, float def);
 
+/* Parse a human-readable duration string to milliseconds.
+ * Accepts: "10m", "1h30m", "500ms", "2s", or raw digits (ms).
+ * Returns parsed ms, or default_ms on parse error. */
+int  kerchunk_parse_duration_ms(const char *str, int default_ms);
+
+/* Get a duration value with default (human-readable or raw ms). */
+int  kerchunk_config_get_duration_ms(const kerchunk_config_t *cfg,
+                                     const char *section, const char *key,
+                                     int default_ms);
+
 /* Set a value (copies strings). Returns 0 on success. */
 int  kerchunk_config_set(kerchunk_config_t *cfg,
                         const char *section, const char *key, const char *value);

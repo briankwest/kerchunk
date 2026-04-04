@@ -84,13 +84,13 @@ ptt_bit = 2                      ; GPIO number (0-7), CM119 GPIO2 = PTT
 ; Repeater state machine
 ; ----------------------------------------------------------------------------
 [repeater]
-tail_time = 2000                 ; Tail hang time after COR drop (ms)
+tail_time = 2s                   ; Tail hang time after COR drop
 hang_time = 500                  ; Hang time after tail before idle (ms)
-timeout_time = 180000            ; Time-Out Timer — max TX duration (ms, 3 min)
+timeout_time = 3m                ; Time-Out Timer — max TX duration
 cor_debounce = 150               ; COR debounce / kerchunk filter (ms)
 tx_delay = 100                   ; Silence after PTT assert before audio (ms)
 tx_tail = 200                    ; Silence after audio before PTT release (ms)
-cor_drop_hold = 1000             ; COR drop hold time in ms (absorbs DTMF COS glitches, 0-5000)
+cor_drop_hold = 1s               ; COR drop hold time (absorbs DTMF COS glitches)
 
 ; Software relay: kerchunkd captures RX audio and retransmits it in software
 ; Disable the radio's internal relay when using this.
@@ -114,8 +114,8 @@ require_identification = off     ; on | off
 ;                                ;   1. Initial ID on first key-up after idle
 ;                                ;   2. Repeating ID every cwid_interval during convo
 ;                                ;   3. Final ID cwid_tail after last activity, then silent
-cwid_interval = 600000           ; CW ID interval (ms, 10 min)
-; cwid_tail = 600000             ; on_call: final ID delay after last TX (default=cwid_interval)
+cwid_interval = 10m              ; CW ID interval (accepts: 10m, 600000, 15m, etc.)
+; cwid_tail = 10m               ; on_call: final ID delay after last TX (default=cwid_interval)
 ; voice_id = on                  ; Speak frequency/PL via TTS after CW ID
 cwid_wpm = 20                    ; Morse code words per minute
 cwid_freq = 800                  ; CW tone frequency (Hz)
@@ -189,8 +189,8 @@ amplitude = 4000                 ; Tone amplitude (0-32767)
 ; ----------------------------------------------------------------------------
 [caller]
 methods = dtmf_ani,dtmf_login
-ani_window = 1500                ; Window to capture ANI digits (ms, starts on first digit)
-login_timeout = 1800000          ; DTMF login session timeout (ms, 30 min)
+ani_window = 1500ms              ; Window to capture ANI digits (starts on first digit)
+login_timeout = 30m              ; DTMF login session timeout
 
 ; ----------------------------------------------------------------------------
 ; Voicemail
@@ -207,7 +207,7 @@ max_duration = 60                ; Max recording duration (seconds)
 ; DTMF command processing
 ; ----------------------------------------------------------------------------
 [dtmf]
-inter_digit_timeout = 3000       ; Timeout between digits before reset (ms)
+inter_digit_timeout = 3s         ; Timeout between digits before reset
 cor_gate_ms = 200                ; Suppress DTMF during squelch transients (ms, 0=disable)
 ;
 ; DTMF command pattern overrides (modules register defaults, override here)
@@ -256,7 +256,7 @@ file = /var/log/kerchunk/events.log  ; Log file path
 [weather]
 api_key = YOUR_WEATHERAPI_KEY    ; weatherapi.com API key
 location = 74501                 ; ZIP code or city name
-interval = 1800000               ; Auto-announce interval (ms, 30 min)
+interval = 30m                   ; Auto-announce interval
 auto_announce = off              ; on | off
 announce_temp = on               ; Include temperature
 announce_conditions = on         ; Include sky conditions
@@ -282,7 +282,7 @@ max_duration = 300               ; Max recording length (seconds, 5 min)
 ; ----------------------------------------------------------------------------
 [time]
 enabled = off                    ; on | off (auto-announce)
-interval = 900000                ; Auto-announce interval (ms, 15 min)
+interval = 15m                   ; Auto-announce interval
 timezone = central               ; Timezone name for WAV files (sounds/time/)
 
 ; ----------------------------------------------------------------------------
@@ -293,7 +293,7 @@ timezone = central               ; Timezone name for WAV files (sounds/time/)
 ; Auto-deactivates after timeout.
 ; ----------------------------------------------------------------------------
 [emergency]
-timeout = 1800000                ; Auto-deactivate timeout (ms, 30 min)
+timeout = 30m                    ; Auto-deactivate timeout
 
 ; ----------------------------------------------------------------------------
 ; Parrot / echo mode
@@ -350,8 +350,8 @@ enabled = off                    ; on | off
 latitude = 34.9334               ; Location latitude (decimal degrees)
 longitude = -95.7697             ; Location longitude (decimal degrees)
 contact = your@email.com         ; Required by NWS API (User-Agent)
-poll_interval = 300000           ; API poll interval (ms, 5 min)
-reannounce_interval = 900000     ; Re-announce active alerts (ms, 15 min)
+poll_interval = 5m               ; API poll interval
+reannounce_interval = 15m        ; Re-announce active alerts
 min_severity = moderate          ; extreme | severe | moderate | minor
 auto_announce = on               ; Announce new alerts automatically
 attention_tones = on             ; EAS-style tones for extreme alerts
@@ -365,7 +365,7 @@ attention_tones = on             ; EAS-style tones for extreme alerts
 ; Other modules can check kerchunk_core_get_otp_elevated(user_id).
 ; ----------------------------------------------------------------------------
 [otp]
-session_timeout = 120000          ; Elevated session duration (ms, 2 min)
+session_timeout = 2m              ; Elevated session duration
 time_skew = 1                    ; Accept +/- N time steps (each 30s)
 
 ; ----------------------------------------------------------------------------
@@ -383,7 +383,7 @@ time_skew = 1                    ; Accept +/- N time steps (each 30s)
 ;                                ; cor_assert, cor_drop, ptt_assert, ptt_drop,
 ;                                ; caller_identified, caller_cleared, announcement,
 ;                                ; recording_saved, state_change, config_reload, shutdown
-; timeout_ms = 5000              ; HTTP request timeout (ms)
+; timeout_ms = 5s                ; HTTP request timeout
 ; retry_count = 2                ; Retry failed requests (0 = no retry)
 
 ; ----------------------------------------------------------------------------
