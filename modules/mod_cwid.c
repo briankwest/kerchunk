@@ -351,18 +351,19 @@ static void oc_tail_expire(void *ud)
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: TAIL→IDLE (final ID)");
 }
 
-/* Transition to ACTIVE: send initial ID, start repeating timer */
+/* Transition to ACTIVE: mark pending, start repeating timer.
+ * Do NOT send CW ID here — the channel is busy (someone just keyed up).
+ * The ID will be sent when the channel goes idle (ACTIVE→TAIL transition)
+ * or when the repeating timer fires during a gap in conversation. */
 static void oc_enter_active(void)
 {
     oc_cancel_timer();
     g_oc_state = OC_ACTIVE;
-
-    if (!is_quiet_hour())
-        send_cwid();
+    g_pending = 1;
 
     g_oc_timer_id = g_core->timer_create(g_cwid_interval_ms, 1,
                                           oc_active_tick, NULL);
-    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: →ACTIVE (initial ID, timer %dms)",
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: →ACTIVE (pending, timer %dms)",
                 g_cwid_interval_ms);
 }
 
@@ -383,11 +384,11 @@ static void oc_enter_tail(void)
 static void on_tail_start(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    if (g_mode == CWID_MODE_ALWAYS) {
-        if (g_pending && !is_quiet_hour())
-            send_cwid();
-    }
-    /* on_call: TAIL_START is informational; we transition on STATE_CHANGE */
+    /* Tail hang started — TX just ended, channel is momentarily clear.
+     * This is the ideal time to send a pending CW ID without stepping
+     * on live audio. Works for both modes. */
+    if (g_pending && !is_quiet_hour())
+        send_cwid();
 }
 
 static void on_state_change(const kerchevt_t *evt, void *ud)
