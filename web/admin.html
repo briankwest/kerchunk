@@ -498,7 +498,7 @@ function initCharts() {
       {label:'RX',data:[],backgroundColor:'#4fc3f7'},
       {label:'TX',data:[],backgroundColor:'#ffb74d'}
     ]},
-    options:{...chartOpts,scales:{...chartOpts.scales,x:{...chartOpts.scales.x,stacked:true},y:{...chartOpts.scales.y,stacked:true}}}
+    options:{...chartOpts,plugins:{...chartOpts.plugins,legend:{display:false}},scales:{...chartOpts.scales,x:{...chartOpts.scales.x,stacked:true},y:{...chartOpts.scales.y,stacked:true}}}
   });
 
   chartDaily = new Chart(document.getElementById('chart-daily'), {
