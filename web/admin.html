@@ -170,15 +170,15 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
   <div class="card">
     <h2>Statistics</h2>
     <table id="stats-table"><tr><td colspan="2">Loading...</td></tr></table>
-    <div style="margin-top:12px">
+    <div style="margin-top:12px;cursor:pointer" title="Click to enlarge">
       <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">60-Minute Trend</h3>
       <div style="position:relative;height:120px"><canvas id="chart-minute"></canvas></div>
     </div>
-    <div style="margin-top:12px">
+    <div style="margin-top:12px;cursor:pointer" title="Click to enlarge">
       <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">24-Hour Activity</h3>
       <div style="position:relative;height:120px"><canvas id="chart-hourly"></canvas></div>
     </div>
-    <div style="margin-top:12px">
+    <div style="margin-top:12px;cursor:pointer" title="Click to enlarge">
       <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">30-Day History</h3>
       <div style="position:relative;height:120px"><canvas id="chart-daily"></canvas></div>
     </div>
@@ -471,10 +471,51 @@ let chartMinute=null, chartHourly=null, chartDaily=null;
 const chartOpts = {
   responsive:true, maintainAspectRatio:false,
   animation:{duration:300},
-  plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:8,font:{size:10}}}},
+  interaction:{mode:'index',intersect:false},
+  plugins:{
+    legend:{display:true,position:'bottom',labels:{boxWidth:8,font:{size:10}}},
+    tooltip:{enabled:true,mode:'index',intersect:false,
+      backgroundColor:'rgba(30,30,30,0.95)',titleFont:{size:11},bodyFont:{size:11},
+      padding:8,cornerRadius:4}
+  },
   scales:{x:{grid:{display:false},border:{display:true},ticks:{font:{size:9}}},
           y:{beginAtZero:true,ticks:{font:{size:9},stepSize:1}}}
 };
+
+/* Zoom modal: click a chart to view it full-screen */
+let zoomChart = null;
+function openZoom(srcChart) {
+  let overlay = document.getElementById('chart-zoom-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'chart-zoom-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:24px;box-sizing:border-box';
+    overlay.innerHTML = '<div style="width:100%;max-width:900px;height:70vh;position:relative"><canvas id="chart-zoom-canvas"></canvas></div>';
+    overlay.addEventListener('click', closeZoom);
+    document.body.appendChild(overlay);
+  }
+  overlay.style.display = 'flex';
+
+  const src = srcChart.config;
+  const zoomOpts = JSON.parse(JSON.stringify(src.options));
+  zoomOpts.plugins.legend = {display:true,position:'bottom',labels:{boxWidth:10,font:{size:12}}};
+  zoomOpts.plugins.tooltip.titleFont = {size:13};
+  zoomOpts.plugins.tooltip.bodyFont = {size:13};
+  zoomOpts.scales.x.ticks.font = {size:11};
+  zoomOpts.scales.y.ticks.font = {size:11};
+
+  if (zoomChart) { zoomChart.destroy(); zoomChart = null; }
+  zoomChart = new Chart(document.getElementById('chart-zoom-canvas'), {
+    type: src.type,
+    data: JSON.parse(JSON.stringify(srcChart.data)),
+    options: zoomOpts
+  });
+}
+function closeZoom() {
+  const overlay = document.getElementById('chart-zoom-overlay');
+  if (overlay) overlay.style.display = 'none';
+  if (zoomChart) { zoomChart.destroy(); zoomChart = null; }
+}
 
 function initCharts() {
   if (typeof Chart === 'undefined') return;
@@ -484,11 +525,12 @@ function initCharts() {
   chartMinute = new Chart(document.getElementById('chart-minute'), {
     type:'line',
     data:{labels:[], datasets:[
-      {label:'RX',data:[],borderColor:'#4fc3f7',backgroundColor:'rgba(79,195,247,0.1)',fill:true,tension:0.3,pointRadius:0},
-      {label:'TX',data:[],borderColor:'#ffb74d',backgroundColor:'rgba(255,183,77,0.1)',fill:true,tension:0.3,pointRadius:0}
+      {label:'RX',data:[],borderColor:'#4fc3f7',backgroundColor:'rgba(79,195,247,0.1)',fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4},
+      {label:'TX',data:[],borderColor:'#ffb74d',backgroundColor:'rgba(255,183,77,0.1)',fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4}
     ]},
     options:{...chartOpts,plugins:{...chartOpts.plugins,legend:{display:false}}}
   });
+  document.getElementById('chart-minute').addEventListener('click', () => openZoom(chartMinute));
 
   chartHourly = new Chart(document.getElementById('chart-hourly'), {
     type:'bar',
@@ -498,6 +540,7 @@ function initCharts() {
     ]},
     options:{...chartOpts,plugins:{...chartOpts.plugins,legend:{display:false}},scales:{...chartOpts.scales,x:{...chartOpts.scales.x,stacked:true},y:{...chartOpts.scales.y,stacked:true}}}
   });
+  document.getElementById('chart-hourly').addEventListener('click', () => openZoom(chartHourly));
 
   chartDaily = new Chart(document.getElementById('chart-daily'), {
     type:'bar',
@@ -507,6 +550,7 @@ function initCharts() {
     ]},
     options:{...chartOpts,scales:{...chartOpts.scales,x:{...chartOpts.scales.x,stacked:true},y:{...chartOpts.scales.y,stacked:true}}}
   });
+  document.getElementById('chart-daily').addEventListener('click', () => openZoom(chartDaily));
 }
 
 function updateCharts(d) {
