@@ -62,11 +62,10 @@ void resp_finish(kerchunk_resp_t *r);
 #define KERCHUNK_MAX_FRAME_SAMPLES ((KERCHUNK_MAX_SAMPLE_RATE * KERCHUNK_FRAME_MS) / 1000)
 
 /* Queue priority levels (higher = plays sooner when queue is idle) */
-#define KERCHUNK_PRI_LOW          1   /* Voicemail playback, GPIO confirms */
+#define KERCHUNK_PRI_LOW          1   /* CW ID, voicemail, GPIO confirms */
 #define KERCHUNK_PRI_NORMAL       2   /* Time, parrot, courtesy tones, web PTT */
 #define KERCHUNK_PRI_ELEVATED     3   /* Weather, OTP, TTS announcements */
 #define KERCHUNK_PRI_HIGH         4   /* Repeater system tones, NWS errors */
-#define KERCHUNK_PRI_IDENT        5   /* Station identification (CW ID) */
 #define KERCHUNK_PRI_CRITICAL    10   /* Emergency, timeout warning */
 
 /* Core API passed to modules */
