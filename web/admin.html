@@ -170,19 +170,17 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
   <div class="card">
     <h2>Statistics</h2>
     <table id="stats-table"><tr><td colspan="2">Loading...</td></tr></table>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
-      <div>
-        <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">60-Minute Trend</h3>
-        <div style="position:relative;height:140px"><canvas id="chart-minute"></canvas></div>
-      </div>
-      <div>
-        <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">24-Hour Activity</h3>
-        <div style="position:relative;height:140px"><canvas id="chart-hourly"></canvas></div>
-      </div>
+    <div style="margin-top:12px">
+      <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">60-Minute Trend</h3>
+      <div style="position:relative;height:120px"><canvas id="chart-minute"></canvas></div>
+    </div>
+    <div style="margin-top:12px">
+      <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">24-Hour Activity</h3>
+      <div style="position:relative;height:120px"><canvas id="chart-hourly"></canvas></div>
     </div>
     <div style="margin-top:12px">
       <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">30-Day History</h3>
-      <div style="position:relative;height:100px"><canvas id="chart-daily"></canvas></div>
+      <div style="position:relative;height:120px"><canvas id="chart-daily"></canvas></div>
     </div>
     <div style="margin-top:12px">
       <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">Top Users</h3>
