@@ -302,8 +302,22 @@ function toggleCmd(uiCmd, btn) {
   const isOn = btn.classList.contains('toggle-on');
   const newState = isOn ? 'off' : 'on';
   cmd(uiCmd + ' ' + newState);
-  btn.classList.toggle('toggle-on');
-  btn.textContent = btn.dataset.label + ' ' + (isOn ? 'OFF' : 'ON');
+  /* Don't flip the button here — wait for the server event (ptt_assert /
+   * ptt_drop) to confirm the state change.  This prevents the button
+   * from getting out of sync with reality (e.g. after a page reload). */
+}
+
+/* Sync a toggle button's visual state to match the server */
+function syncToggle(uiCmd, on) {
+  const btn = document.querySelector('.btn[data-ui-cmd="' + uiCmd + '"]');
+  if (!btn) return;
+  if (on) {
+    btn.classList.add('toggle-on');
+    btn.textContent = btn.dataset.label + ' ON';
+  } else {
+    btn.classList.remove('toggle-on');
+    btn.textContent = btn.dataset.label + ' OFF';
+  }
 }
 
 async function buildDynamicControls() {
@@ -368,9 +382,10 @@ async function buildDynamicControls() {
           forms += '<button class="btn" onclick="submitForm(this,\'' + c.ui_command + '\')">Send</button>';
           forms += '</div>';
         } else if (c.ui_type === 3) {
-          /* TOGGLE */
+          /* TOGGLE — data-ui-cmd lets syncToggle find the button by command name */
           buttons += '<button class="btn" data-label="' + c.ui_label
-                   + '" onclick="toggleCmd(\'' + c.ui_command + '\',this)">'
+                   + '" data-ui-cmd="' + c.ui_command + '"'
+                   + ' onclick="toggleCmd(\'' + c.ui_command + '\',this)">'
                    + c.ui_label + '</button>';
         }
       });
@@ -405,6 +420,7 @@ function updatePTT(on) {
   const b=document.getElementById('ptt-badge');
   b.textContent=on?'PTT on':'PTT off';
   b.className='badge '+(on?'badge-tx':'badge-off');
+  syncToggle('ptt', on);
 }
 
 function updateTxState(txstate) {
@@ -981,7 +997,7 @@ function setAudioVolume(v) {
   refreshAlerts();
   refreshWeather();
   refreshUsers();
-  buildDynamicControls();
+  buildDynamicControls().then(() => refreshStatus());
   connectSSE();
   setInterval(renderStats,1000);   // live tick — uptime + active timers
   setInterval(refreshStats,30000); // full server sync
