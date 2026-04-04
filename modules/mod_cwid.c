@@ -2,7 +2,15 @@
  * mod_cwid.c — Morse CW callsign identification
  *
  * Uses libplcode's plcode_cwid_enc for Morse generation.
- * 10-minute timer. Queues CW audio during tail or idle.
+ *
+ * Two modes:
+ *   "always"  — Fixed wall-clock timer (default). IDs every N minutes
+ *               regardless of activity.
+ *   "on_call" — Event-driven. IDs only during and after activity:
+ *               1. ID on initial key-up (IDLE→ACTIVE)
+ *               2. ID every N minutes during conversation
+ *               3. Final ID N minutes after last activity
+ *               4. Silent when idle (RT97L-style)
  */
 
 #include "kerchunk.h"
@@ -35,6 +43,24 @@ static int  g_quiet_solar   = 0;  /* Use sunrise-sunset.org for quiet hours */
 static int  g_solar_offset  = 0;  /* minutes: quiet starts offset after sunset, ends offset before sunrise */
 static char g_latitude[16]  = "";
 static char g_longitude[16] = "";
+
+/* ── on_call mode state ── */
+
+typedef enum {
+    CWID_MODE_ALWAYS  = 0,
+    CWID_MODE_ON_CALL = 1
+} cwid_mode_t;
+
+typedef enum {
+    OC_IDLE   = 0,   /* no activity, no timers */
+    OC_ACTIVE = 1,   /* conversation in progress, repeating timer */
+    OC_TAIL   = 2    /* activity ended, waiting for final ID */
+} oc_state_t;
+
+static cwid_mode_t g_mode      = CWID_MODE_ALWAYS;
+static oc_state_t  g_oc_state  = OC_IDLE;
+static int g_oc_timer_id       = -1;  /* repeating timer (ACTIVE) or one-shot (TAIL) */
+static int g_cwid_tail_ms      = 0;   /* tail timer duration (0 = use cwid_interval) */
 
 /* ── libcurl helpers ── */
 
@@ -272,6 +298,8 @@ static int is_quiet_hour(void)
         return hour >= g_quiet_start || hour < g_quiet_end;
 }
 
+/* ── "always" mode: fixed wall-clock timer ── */
+
 static void cwid_timer_cb(void *ud)
 {
     (void)ud;
@@ -287,22 +315,120 @@ static void cwid_timer_cb(void *ud)
     }
 }
 
+/* ── "on_call" mode: event-driven state machine ── */
+
+static void oc_cancel_timer(void)
+{
+    if (g_oc_timer_id >= 0) {
+        g_core->timer_cancel(g_oc_timer_id);
+        g_oc_timer_id = -1;
+    }
+}
+
+/* Repeating timer fires during ACTIVE state */
+static void oc_active_tick(void *ud)
+{
+    (void)ud;
+    if (is_quiet_hour()) return;
+
+    if (!g_core->is_receiving() && !g_core->is_transmitting()) {
+        send_cwid();
+    } else {
+        g_pending = 1;
+    }
+}
+
+/* One-shot timer fires during TAIL state — final ID then go idle */
+static void oc_tail_expire(void *ud)
+{
+    (void)ud;
+    g_oc_timer_id = -1;
+
+    if (!is_quiet_hour())
+        send_cwid();
+
+    g_oc_state = OC_IDLE;
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: TAIL→IDLE (final ID)");
+}
+
+/* Transition to ACTIVE: send initial ID, start repeating timer */
+static void oc_enter_active(void)
+{
+    oc_cancel_timer();
+    g_oc_state = OC_ACTIVE;
+
+    if (!is_quiet_hour())
+        send_cwid();
+
+    g_oc_timer_id = g_core->timer_create(g_cwid_interval_ms, 1,
+                                          oc_active_tick, NULL);
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: →ACTIVE (initial ID, timer %dms)",
+                g_cwid_interval_ms);
+}
+
+/* Transition to TAIL: cancel repeating timer, start one-shot tail timer */
+static void oc_enter_tail(void)
+{
+    oc_cancel_timer();
+    g_oc_state = OC_TAIL;
+
+    int tail_ms = g_cwid_tail_ms > 0 ? g_cwid_tail_ms : g_cwid_interval_ms;
+    g_oc_timer_id = g_core->timer_create(tail_ms, 0, oc_tail_expire, NULL);
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: →TAIL (final ID in %dms)",
+                tail_ms);
+}
+
+/* ── event handlers (shared by both modes) ── */
+
 static void on_tail_start(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    if (g_pending && !is_quiet_hour())
-        send_cwid();
+    if (g_mode == CWID_MODE_ALWAYS) {
+        if (g_pending && !is_quiet_hour())
+            send_cwid();
+    }
+    /* on_call: TAIL_START is informational; we transition on STATE_CHANGE */
 }
 
 static void on_state_change(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    if (evt->state.new_state == 0 && g_pending && !is_quiet_hour()) {  /* 0 = RPT_IDLE */
-        /* Don't assert PTT here — the queue handles its own PTT cycle.
-         * An extra ref here would never be released, leaking PTT forever. */
-        send_cwid();
+    int ns = evt->state.new_state;
+
+    if (g_mode == CWID_MODE_ALWAYS) {
+        /* Original behavior: send pending ID when channel goes idle */
+        if (ns == 0 && g_pending && !is_quiet_hour())
+            send_cwid();
+        return;
+    }
+
+    /* on_call mode state machine */
+    switch (g_oc_state) {
+    case OC_IDLE:
+        /* Any activity → ACTIVE */
+        if (ns != 0)
+            oc_enter_active();
+        break;
+
+    case OC_ACTIVE:
+        /* Channel went idle → TAIL */
+        if (ns == 0) {
+            /* Send any pending deferred ID first */
+            if (g_pending && !is_quiet_hour())
+                send_cwid();
+            oc_enter_tail();
+        }
+        break;
+
+    case OC_TAIL:
+        /* New activity → back to ACTIVE */
+        if (ns != 0)
+            oc_enter_active();
+        break;
     }
 }
+
+/* ── module lifecycle ── */
 
 static int cwid_load(kerchunk_core_t *core)
 {
@@ -375,15 +501,36 @@ static int cwid_configure(const kerchunk_config_t *cfg)
         g_solar_timer = g_core->timer_create(86400000, 1, fetch_solar_times, NULL); /* 24h */
     }
 
-    if (g_sched_id >= 0)
-        g_core->schedule_cancel(g_sched_id);
-    g_sched_id = g_core->schedule_aligned(g_cwid_interval_ms, 0, 1,
-                                          cwid_timer_cb, NULL);
+    /* CW ID mode: "always" (fixed timer) or "on_call" (event-driven) */
+    const char *mode_str = kerchunk_config_get(cfg, "repeater", "cwid_mode");
+    g_mode = CWID_MODE_ALWAYS;
+    if (mode_str && strcmp(mode_str, "on_call") == 0)
+        g_mode = CWID_MODE_ON_CALL;
 
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "callsign=%s interval=%dms wpm=%d freq=%d",
-                g_callsign, g_cwid_interval_ms, g_cwid_wpm, g_cwid_freq);
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "CW ID wall-clock aligned (every %ds)", g_cwid_interval_ms / 1000);
+    g_cwid_tail_ms = kerchunk_config_get_int(cfg, "repeater", "cwid_tail", 0);
+
+    /* Cancel any existing timers/schedules */
+    if (g_sched_id >= 0) {
+        g_core->schedule_cancel(g_sched_id);
+        g_sched_id = -1;
+    }
+    oc_cancel_timer();
+    g_oc_state = OC_IDLE;
+
+    if (g_mode == CWID_MODE_ALWAYS) {
+        g_sched_id = g_core->schedule_aligned(g_cwid_interval_ms, 0, 1,
+                                              cwid_timer_cb, NULL);
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "mode=always callsign=%s interval=%ds wpm=%d freq=%d",
+                    g_callsign, g_cwid_interval_ms / 1000, g_cwid_wpm, g_cwid_freq);
+    } else {
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "mode=on_call callsign=%s interval=%ds tail=%ds wpm=%d freq=%d",
+                    g_callsign, g_cwid_interval_ms / 1000,
+                    (g_cwid_tail_ms > 0 ? g_cwid_tail_ms : g_cwid_interval_ms) / 1000,
+                    g_cwid_wpm, g_cwid_freq);
+    }
+
     if (g_quiet_start >= 0 && g_quiet_end >= 0)
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "quiet hours: %02d:00-%02d:00",
                     g_quiet_start, g_quiet_end);
@@ -398,6 +545,7 @@ static void cwid_unload(void)
         g_core->schedule_cancel(g_sched_id);
         g_sched_id = -1;
     }
+    oc_cancel_timer();
     if (g_solar_timer >= 0) {
         g_core->timer_cancel(g_solar_timer);
         g_solar_timer = -1;
@@ -414,6 +562,13 @@ static int cli_cwid(int argc, const char **argv, kerchunk_resp_t *r)
         resp_str(r, "callsign", g_callsign);
     } else {
         resp_str(r, "callsign", g_callsign);
+        resp_str(r, "mode", g_mode == CWID_MODE_ON_CALL ? "on_call" : "always");
+        if (g_mode == CWID_MODE_ON_CALL) {
+            const char *st = "idle";
+            if (g_oc_state == OC_ACTIVE) st = "active";
+            else if (g_oc_state == OC_TAIL) st = "tail";
+            resp_str(r, "on_call_state", st);
+        }
         resp_bool(r, "pending", g_pending);
         resp_int(r, "interval_s", g_cwid_interval_ms / 1000);
         resp_int(r, "quiet_start", g_quiet_start);
@@ -426,16 +581,20 @@ static int cli_cwid(int argc, const char **argv, kerchunk_resp_t *r)
 usage:
     resp_text_raw(r, "Morse CW callsign identification\n\n"
         "  cwid\n"
-        "    Show CW ID status: callsign, interval, quiet hours, pending state.\n\n"
+        "    Show CW ID status: callsign, mode, interval, quiet hours.\n\n"
         "  cwid now\n"
         "    Immediately send CW ID (bypasses quiet hour check).\n\n"
-        "    CW ID is sent automatically on a clock-aligned interval\n"
-        "    (default 10 minutes, FCC max 15 minutes). Deferred if\n"
-        "    channel is busy; sent during tail or idle. Optional voice\n"
-        "    ID follows CW with frequency and PL tone via TTS.\n\n"
-        "    Quiet hours suppress CW ID (fixed times or solar-based).\n\n"
-        "Config: [repeater] cwid_interval, cwid_wpm, cwid_freq,\n"
-        "        voice_id, quiet_start, quiet_end, quiet_mode, solar_offset\n"
+        "Modes:\n"
+        "  always  — Fixed timer (default). IDs every N minutes regardless\n"
+        "            of activity. Clock-aligned, no drift.\n\n"
+        "  on_call — Event-driven (RT97L-style). IDs only during activity:\n"
+        "            1. Initial ID on first key-up after idle\n"
+        "            2. Repeating ID every N minutes during conversation\n"
+        "            3. Final ID N minutes after last activity\n"
+        "            4. Silent when idle\n\n"
+        "Config: [repeater] cwid_mode, cwid_interval, cwid_tail,\n"
+        "        cwid_wpm, cwid_freq, voice_id, tx_ctcss, tx_dcs, pl_tone,\n"
+        "        quiet_start, quiet_end, quiet_mode, solar_offset\n"
         "        [general] callsign, frequency, latitude, longitude\n");
     resp_str(r, "error", "usage: cwid [now]");
     resp_finish(r);
@@ -451,7 +610,7 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
 
 static kerchunk_module_def_t mod_cwid = {
     .name         = "mod_cwid",
-    .version      = "1.0.0",
+    .version      = "2.0.0",
     .description  = "CW callsign identification",
     .load         = cwid_load,
     .configure    = cwid_configure,

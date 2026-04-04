@@ -626,11 +626,18 @@ Config section: `[repeater]`
 
 ### mod_cwid — CW Callsign Identification
 
-Morse CW ID + voice ID ("WRDP519 repeater, 462.550, PL 131.8") via TTS. Sends immediately when idle, defers when busy. Interval capped at 15 min (FCC 95.1751).
+Morse CW ID + voice ID ("WRDP519 repeater, 462.550, PL 131.8") via TTS. Two modes:
+
+- **always** (default) — Fixed wall-clock timer. IDs every N minutes regardless of activity.
+- **on_call** — Event-driven (RT97L-style). IDs only during and after activity: initial ID on first key-up, repeating ID during conversation, final ID after last TX, then silent.
+
+Interval capped at 15 min (FCC 95.1751).
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `cwid_interval` | ms | `600000` | ID interval (capped at 900000) |
+| `cwid_mode` | string | `always` | `always` = fixed timer, `on_call` = activity-triggered |
+| `cwid_interval` | ms | `600000` | ID interval during active conversation (capped at 900000) |
+| `cwid_tail` | ms | (interval) | on_call: delay before final ID after last activity |
 | `cwid_wpm` | int | `20` | Words per minute (min 5) |
 | `cwid_freq` | Hz | `800` | Tone frequency |
 | `tx_ctcss` | int | -- | CTCSS freq x10 (e.g., 1318 = 131.8 Hz). Announced in voice ID as "PL 131.8" |

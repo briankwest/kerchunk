@@ -109,7 +109,13 @@ relay_drain = 500                ; ms to continue relaying after COR drop (0-500
 require_identification = off     ; on | off
 
 ; CW ID settings (FCC 95.1751: max 15 min interval)
+; cwid_mode = always             ; "always" = fixed timer (default)
+;                                ; "on_call" = ID only during activity (RT97L-style):
+;                                ;   1. Initial ID on first key-up after idle
+;                                ;   2. Repeating ID every cwid_interval during convo
+;                                ;   3. Final ID cwid_tail after last activity, then silent
 cwid_interval = 600000           ; CW ID interval (ms, 10 min)
+; cwid_tail = 600000             ; on_call: final ID delay after last TX (default=cwid_interval)
 ; voice_id = on                  ; Speak frequency/PL via TTS after CW ID
 cwid_wpm = 20                    ; Morse code words per minute
 cwid_freq = 800                  ; CW tone frequency (Hz)
