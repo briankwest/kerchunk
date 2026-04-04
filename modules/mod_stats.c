@@ -1,9 +1,11 @@
 /*
  * mod_stats.c — Repeater statistics and metrics
  *
- * Tracks channel, per-user, and system metrics via event subscriptions.
- * Three history levels: per-minute (60), per-hour (24), per-day (30).
- * Persists to disk on shutdown, restores on startup.
+ * Uses kerchunk_rrd for mmap'd round-robin storage:
+ *   60 x 1-minute slots, 24 x 1-hour slots, 30 x 1-day slots
+ *   + scalar counters + per-user stats
+ *
+ * Data survives restarts. No explicit save/load — mmap handles it.
  *
  * CLI: stats, stats user <name>, stats reset, stats save
  */
@@ -11,6 +13,7 @@
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
+#include "kerchunk_rrd.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,220 +23,74 @@
 #define LOG_MOD "stats"
 
 static kerchunk_core_t *g_core;
+static kerchunk_rrd_t  *g_rrd;
+static char g_rrd_path[256] = "/var/lib/kerchunk/stats.rrd";
 
-/* Config */
-static int  g_persist       = 0;
-static char g_persist_file[256] = "stats.dat";
+/* In-progress tracking (not persisted — reconstructed on events) */
+static uint64_t g_cor_start_us;
+static uint64_t g_ptt_start_us;
+static int      g_cor_active;
+static int      g_ptt_active;
+static int      g_current_user_id;
 
-/* ── Channel stats ── */
+/* Rolling 5-minute duty cycle (kept in-memory, cheap to lose) */
+static uint32_t g_duty_bucket[5];
+static int      g_duty_idx;
+static time_t   g_duty_time;
 
-static struct {
-    uint64_t rx_time_ms;
-    uint64_t tx_time_ms;
-    uint32_t rx_count;
-    uint32_t tx_count;         /* Queue playback cycles */
-    uint32_t tot_events;
-    uint32_t emergency_count;
-    uint32_t longest_rx_ms;
-    uint32_t shortest_rx_ms;
-    uint32_t access_denied;
-    uint32_t kerchunk_count;   /* Short key-ups < 1s */
-
-    /* New counters */
-    uint32_t dtmf_commands;
-    uint32_t cwid_count;
-    uint32_t pages_sent;       /* POCSAG + FLEX + APRS */
-    uint32_t weather_count;
-    uint32_t nws_alerts;
-    uint32_t phone_calls;
-
-    /* Rolling 24h histogram */
-    uint32_t hourly_rx_count[24];
-    uint32_t hourly_rx_ms[24];
-    uint32_t hourly_tx_count[24];
-    int      current_hour;
-
-    /* Rolling 60-minute histogram */
-    uint32_t minute_rx_count[60];
-    uint32_t minute_tx_count[60];
-    int      current_minute;
-
-    /* Rolling 30-day histogram */
-    uint32_t daily_rx_count[30];
-    uint32_t daily_tx_count[30];
-    int      current_day;       /* day-of-year % 30 */
-
-    /* In-progress */
-    uint64_t cor_start_us;
-    uint64_t ptt_start_us;
-    int      cor_active;
-    int      ptt_active;
-    int      current_user_id;
-
-    /* Rolling 5-minute duty cycle (five 1-minute buckets) */
-    uint32_t duty_bucket[5];    /* busy ms per minute */
-    int      duty_bucket_idx;   /* current bucket */
-    time_t   duty_bucket_time;  /* start of current bucket */
-} g_ch;
-
-/* ── Per-user stats ── */
-
-#define MAX_USER_STATS 64
-
-typedef struct {
-    int      user_id;
-    char     name[32];
-    uint32_t tx_count;
-    uint64_t tx_time_ms;
-    time_t   last_heard;
-    uint32_t longest_ms;
-} user_stats_t;
-
-static user_stats_t g_users[MAX_USER_STATS];
-static int          g_user_count;
-
-/* ── System stats ── */
-
-static struct {
-    time_t   start_time;       /* This session's start */
-    uint64_t total_uptime_ms;  /* Accumulated across all sessions */
-    uint32_t cdr_records;
-    uint32_t queue_items;
-    uint32_t restarts;
-} g_sys;
-
-/* ── Helpers ── */
-
-static user_stats_t *find_or_create_user(int user_id)
-{
-    for (int i = 0; i < g_user_count; i++) {
-        if (g_users[i].user_id == user_id)
-            return &g_users[i];
-    }
-    if (g_user_count >= MAX_USER_STATS)
-        return NULL;
-
-    user_stats_t *u = &g_users[g_user_count++];
-    memset(u, 0, sizeof(*u));
-    u->user_id = user_id;
-
-    const kerchunk_user_t *db = g_core->user_lookup_by_id(user_id);
-    if (db)
-        snprintf(u->name, sizeof(u->name), "%s", db->name);
-    else
-        snprintf(u->name, sizeof(u->name), "user_%d", user_id);
-
-    return u;
-}
+/* ── Duty cycle ── */
 
 static void duty_rotate(void)
 {
     time_t now = time(NULL);
-    int elapsed = (int)difftime(now, g_ch.duty_bucket_time);
+    int elapsed = (int)(now - g_duty_time);
     if (elapsed >= 60) {
         int advance = elapsed / 60;
         if (advance > 5) advance = 5;
         for (int i = 0; i < advance; i++) {
-            g_ch.duty_bucket_idx = (g_ch.duty_bucket_idx + 1) % 5;
-            g_ch.duty_bucket[g_ch.duty_bucket_idx] = 0;
+            g_duty_idx = (g_duty_idx + 1) % 5;
+            g_duty_bucket[g_duty_idx] = 0;
         }
-        g_ch.duty_bucket_time = now - (elapsed % 60);
+        g_duty_time = now - (elapsed % 60);
     }
 }
 
 static void duty_add_ms(uint32_t ms)
 {
     duty_rotate();
-    g_ch.duty_bucket[g_ch.duty_bucket_idx] += ms;
+    g_duty_bucket[g_duty_idx] += ms;
 }
 
 static float duty_pct(void)
 {
     duty_rotate();
     uint64_t sum = 0;
-    for (int i = 0; i < 5; i++)
-        sum += g_ch.duty_bucket[i];
-    if (g_ch.cor_active) {
+    for (int i = 0; i < 5; i++) sum += g_duty_bucket[i];
+    if (g_cor_active) {
         uint64_t now_us = (uint64_t)time(NULL) * 1000000ULL;
-        if (now_us > g_ch.cor_start_us)
-            sum += (now_us - g_ch.cor_start_us) / 1000;
+        if (now_us > g_cor_start_us) sum += (now_us - g_cor_start_us) / 1000;
     }
-    if (g_ch.ptt_active) {
+    if (g_ptt_active) {
         uint64_t now_us = (uint64_t)time(NULL) * 1000000ULL;
-        if (now_us > g_ch.ptt_start_us)
-            sum += (now_us - g_ch.ptt_start_us) / 1000;
+        if (now_us > g_ptt_start_us) sum += (now_us - g_ptt_start_us) / 1000;
     }
     if (sum > 300000) sum = 300000;
     return (float)sum / 300000.0f * 100.0f;
 }
 
-static void rotate_hour(void)
-{
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    int hour = t->tm_hour;
-
-    if (hour != g_ch.current_hour) {
-        g_ch.hourly_rx_count[hour] = 0;
-        g_ch.hourly_rx_ms[hour] = 0;
-        g_ch.hourly_tx_count[hour] = 0;
-        g_ch.current_hour = hour;
-    }
-}
-
-static void rotate_minute(void)
-{
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    int minute = t->tm_min;
-
-    if (minute != g_ch.current_minute) {
-        /* Clear skipped minutes */
-        int delta = minute - g_ch.current_minute;
-        if (delta < 0) delta += 60;
-        if (delta > 60) delta = 60;
-        for (int i = 0; i < delta; i++) {
-            int m = (g_ch.current_minute + 1 + i) % 60;
-            g_ch.minute_rx_count[m] = 0;
-            g_ch.minute_tx_count[m] = 0;
-        }
-        g_ch.current_minute = minute;
-    }
-}
-
-static void rotate_day(void)
-{
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    int day = t->tm_yday % 30;
-
-    if (day != g_ch.current_day) {
-        g_ch.daily_rx_count[day] = 0;
-        g_ch.daily_tx_count[day] = 0;
-        g_ch.current_day = day;
-    }
-}
+/* ── Formatters ── */
 
 static int fmt_duration(char *buf, size_t max, uint64_t ms)
 {
-    uint64_t secs = ms / 1000;
-    if (secs >= 3600)
-        return snprintf(buf, max, "%lluh %02llum %02llus",
-                 (unsigned long long)(secs / 3600),
-                 (unsigned long long)((secs % 3600) / 60),
-                 (unsigned long long)(secs % 60));
-    else if (secs >= 60)
-        return snprintf(buf, max, "%llum %02llus",
-                 (unsigned long long)(secs / 60),
-                 (unsigned long long)(secs % 60));
-    else if (secs > 0)
-        return snprintf(buf, max, "%llu.%llus",
-                 (unsigned long long)secs,
-                 (unsigned long long)((ms % 1000) / 100));
-    else if (ms > 0)
-        return snprintf(buf, max, "%llums", (unsigned long long)ms);
-    else
-        return snprintf(buf, max, "0s");
+    uint64_t s = ms / 1000;
+    if (s >= 3600) return snprintf(buf, max, "%lluh %02llum %02llus",
+        (unsigned long long)(s/3600), (unsigned long long)((s%3600)/60), (unsigned long long)(s%60));
+    if (s >= 60) return snprintf(buf, max, "%llum %02llus",
+        (unsigned long long)(s/60), (unsigned long long)(s%60));
+    if (s > 0) return snprintf(buf, max, "%llu.%llus",
+        (unsigned long long)s, (unsigned long long)((ms%1000)/100));
+    if (ms > 0) return snprintf(buf, max, "%llums", (unsigned long long)ms);
+    return snprintf(buf, max, "0s");
 }
 
 static int fmt_ago(char *buf, size_t max, time_t then)
@@ -245,207 +102,45 @@ static int fmt_ago(char *buf, size_t max, time_t then)
     return snprintf(buf, max, "%dh %dm ago", ago / 3600, (ago % 3600) / 60);
 }
 
-/* ── Persistence ── */
-
-#define STATS_MAGIC 0x52505453  /* "RPTS" */
-#define STATS_VERSION 3
-
-typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    /* Channel */
-    uint64_t rx_time_ms;
-    uint64_t tx_time_ms;
-    uint32_t rx_count;
-    uint32_t tx_count;
-    uint32_t tot_events;
-    uint32_t emergency_count;
-    uint32_t longest_rx_ms;
-    uint32_t shortest_rx_ms;
-    uint32_t access_denied;
-    uint32_t kerchunk_count;
-    uint32_t dtmf_commands;
-    uint32_t cwid_count;
-    uint32_t pages_sent;
-    uint32_t weather_count;
-    uint32_t nws_alerts;
-    uint32_t phone_calls;
-    /* Hourly histogram (24 slots) */
-    uint32_t hourly_rx_count[24];
-    uint32_t hourly_rx_ms[24];
-    uint32_t hourly_tx_count[24];
-    int32_t  saved_hour;
-    /* Daily histogram (30 slots) */
-    uint32_t daily_rx_count[30];
-    uint32_t daily_tx_count[30];
-    int32_t  saved_day;
-    /* System */
-    uint64_t total_uptime_ms;
-    uint32_t cdr_records;
-    uint32_t queue_items;
-    uint32_t restarts;
-    /* Users */
-    uint32_t user_count;
-    /* Followed by user_count * user_stats_t */
-} stats_file_header_t;
-
-static void save_stats(void)
-{
-    if (!g_persist) return;
-
-    FILE *fp = fopen(g_persist_file, "wb");
-    if (!fp) {
-        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "cannot save stats: %s",
-                    g_persist_file);
-        return;
-    }
-
-    uint64_t session_ms = (uint64_t)difftime(time(NULL), g_sys.start_time) * 1000;
-
-    stats_file_header_t hdr;
-    memset(&hdr, 0, sizeof(hdr));
-    hdr.magic           = STATS_MAGIC;
-    hdr.version         = STATS_VERSION;
-    hdr.rx_time_ms      = g_ch.rx_time_ms;
-    hdr.tx_time_ms      = g_ch.tx_time_ms;
-    hdr.rx_count        = g_ch.rx_count;
-    hdr.tx_count        = g_ch.tx_count;
-    hdr.tot_events      = g_ch.tot_events;
-    hdr.emergency_count = g_ch.emergency_count;
-    hdr.longest_rx_ms   = g_ch.longest_rx_ms;
-    hdr.shortest_rx_ms  = g_ch.shortest_rx_ms;
-    hdr.access_denied   = g_ch.access_denied;
-    hdr.kerchunk_count  = g_ch.kerchunk_count;
-    hdr.dtmf_commands   = g_ch.dtmf_commands;
-    hdr.cwid_count      = g_ch.cwid_count;
-    hdr.pages_sent      = g_ch.pages_sent;
-    hdr.weather_count   = g_ch.weather_count;
-    hdr.nws_alerts      = g_ch.nws_alerts;
-    hdr.phone_calls     = g_ch.phone_calls;
-    hdr.saved_hour      = g_ch.current_hour;
-    hdr.saved_day       = g_ch.current_day;
-    hdr.total_uptime_ms = g_sys.total_uptime_ms + session_ms;
-    hdr.cdr_records     = g_sys.cdr_records;
-    hdr.queue_items     = g_sys.queue_items;
-    hdr.restarts        = g_sys.restarts;
-    hdr.user_count      = (uint32_t)g_user_count;
-    memcpy(hdr.hourly_rx_count, g_ch.hourly_rx_count, sizeof(hdr.hourly_rx_count));
-    memcpy(hdr.hourly_rx_ms, g_ch.hourly_rx_ms, sizeof(hdr.hourly_rx_ms));
-    memcpy(hdr.hourly_tx_count, g_ch.hourly_tx_count, sizeof(hdr.hourly_tx_count));
-    memcpy(hdr.daily_rx_count, g_ch.daily_rx_count, sizeof(hdr.daily_rx_count));
-    memcpy(hdr.daily_tx_count, g_ch.daily_tx_count, sizeof(hdr.daily_tx_count));
-
-    fwrite(&hdr, sizeof(hdr), 1, fp);
-    fwrite(g_users, sizeof(user_stats_t), (size_t)g_user_count, fp);
-    fclose(fp);
-
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "stats saved to %s", g_persist_file);
-}
-
-static void load_stats(void)
-{
-    if (!g_persist) return;
-
-    FILE *fp = fopen(g_persist_file, "rb");
-    if (!fp) return;
-
-    stats_file_header_t hdr;
-    if (fread(&hdr, sizeof(hdr), 1, fp) != 1 ||
-        hdr.magic != STATS_MAGIC || hdr.version != STATS_VERSION) {
-        fclose(fp);
-        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                    "invalid stats file (version mismatch), starting fresh");
-        return;
-    }
-
-    g_ch.rx_time_ms      = hdr.rx_time_ms;
-    g_ch.tx_time_ms      = hdr.tx_time_ms;
-    g_ch.rx_count        = hdr.rx_count;
-    g_ch.tx_count        = hdr.tx_count;
-    g_ch.tot_events      = hdr.tot_events;
-    g_ch.emergency_count = hdr.emergency_count;
-    g_ch.longest_rx_ms   = hdr.longest_rx_ms;
-    g_ch.shortest_rx_ms  = hdr.shortest_rx_ms;
-    g_ch.access_denied   = hdr.access_denied;
-    g_ch.kerchunk_count  = hdr.kerchunk_count;
-    g_ch.dtmf_commands   = hdr.dtmf_commands;
-    g_ch.cwid_count      = hdr.cwid_count;
-    g_ch.pages_sent      = hdr.pages_sent;
-    g_ch.weather_count   = hdr.weather_count;
-    g_ch.nws_alerts      = hdr.nws_alerts;
-    g_ch.phone_calls     = hdr.phone_calls;
-    g_ch.current_hour    = hdr.saved_hour;
-    g_ch.current_day     = hdr.saved_day;
-    memcpy(g_ch.hourly_rx_count, hdr.hourly_rx_count, sizeof(g_ch.hourly_rx_count));
-    memcpy(g_ch.hourly_rx_ms, hdr.hourly_rx_ms, sizeof(g_ch.hourly_rx_ms));
-    memcpy(g_ch.hourly_tx_count, hdr.hourly_tx_count, sizeof(g_ch.hourly_tx_count));
-    memcpy(g_ch.daily_rx_count, hdr.daily_rx_count, sizeof(g_ch.daily_rx_count));
-    memcpy(g_ch.daily_tx_count, hdr.daily_tx_count, sizeof(g_ch.daily_tx_count));
-    g_sys.total_uptime_ms = hdr.total_uptime_ms;
-    g_sys.cdr_records    = hdr.cdr_records;
-    g_sys.queue_items    = hdr.queue_items;
-    g_sys.restarts       = hdr.restarts + 1;
-
-    int n = (int)hdr.user_count;
-    if (n > MAX_USER_STATS) n = MAX_USER_STATS;
-    if (fread(g_users, sizeof(user_stats_t), (size_t)n, fp) == (size_t)n)
-        g_user_count = n;
-
-    fclose(fp);
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "stats restored from %s (restart #%u)",
-                g_persist_file, g_sys.restarts);
-}
-
 /* ── Event handlers ── */
 
 static void on_cor_assert(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    g_ch.cor_active = 1;
-    g_ch.cor_start_us = evt->timestamp_us;
-    g_ch.current_user_id = 0;
+    g_cor_active = 1;
+    g_cor_start_us = evt->timestamp_us;
+    g_current_user_id = 0;
 }
 
 static void on_cor_drop(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    if (!g_ch.cor_active) return;
-    g_ch.cor_active = 0;
+    if (!g_cor_active) return;
+    g_cor_active = 0;
 
-    uint64_t dur_ms = (evt->timestamp_us - g_ch.cor_start_us) / 1000;
+    uint32_t dur_ms = (uint32_t)((evt->timestamp_us - g_cor_start_us) / 1000);
+    duty_add_ms(dur_ms);
 
-    g_ch.rx_time_ms += dur_ms;
-    g_ch.rx_count++;
-    duty_add_ms((uint32_t)dur_ms);
+    /* Record into RRD — handles minute slot, counters, user, kerchunk */
+    kerchunk_rrd_record_rx(g_rrd, dur_ms, g_current_user_id);
 
-    /* Kerchunk detection: key-up < 1 second */
-    if (dur_ms < 1000)
-        g_ch.kerchunk_count++;
-
-    if (dur_ms > g_ch.longest_rx_ms)
-        g_ch.longest_rx_ms = (uint32_t)dur_ms;
-    if (g_ch.shortest_rx_ms == 0 || dur_ms < g_ch.shortest_rx_ms)
-        g_ch.shortest_rx_ms = (uint32_t)dur_ms;
-
-    rotate_hour();
-    g_ch.hourly_rx_count[g_ch.current_hour]++;
-    g_ch.hourly_rx_ms[g_ch.current_hour] += (uint32_t)dur_ms;
-
-    rotate_minute();
-    g_ch.minute_rx_count[g_ch.current_minute]++;
-
-    rotate_day();
-    g_ch.daily_rx_count[g_ch.current_day]++;
-
-    if (g_ch.current_user_id > 0) {
-        user_stats_t *u = find_or_create_user(g_ch.current_user_id);
-        if (u) {
-            u->tx_count++;
-            u->tx_time_ms += dur_ms;
-            u->last_heard = time(NULL);
-            if (dur_ms > u->longest_ms)
-                u->longest_ms = (uint32_t)dur_ms;
+    /* If user not yet in RRD, create entry */
+    if (g_current_user_id > 0) {
+        const rrd_file_t *d = kerchunk_rrd_data(g_rrd);
+        int found = 0;
+        for (uint32_t i = 0; i < d->user_count; i++) {
+            if (d->users[i].user_id == g_current_user_id) { found = 1; break; }
+        }
+        if (!found) {
+            const kerchunk_user_t *db = g_core->user_lookup_by_id(g_current_user_id);
+            rrd_user_t *u = kerchunk_rrd_user(g_rrd, g_current_user_id,
+                db ? db->name : NULL);
+            if (u) {
+                u->tx_count = 1;
+                u->tx_time_ms = dur_ms;
+                u->last_heard = time(NULL);
+                u->longest_ms = dur_ms;
+            }
         }
     }
 }
@@ -453,54 +148,45 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
 static void on_ptt_assert(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    if (!g_ch.ptt_active) {
-        g_ch.ptt_active = 1;
-        g_ch.ptt_start_us = evt->timestamp_us;
+    if (!g_ptt_active) {
+        g_ptt_active = 1;
+        g_ptt_start_us = evt->timestamp_us;
     }
 }
 
 static void on_ptt_drop(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    if (!g_ch.ptt_active) return;
-    g_ch.ptt_active = 0;
-
-    uint64_t dur_ms = (evt->timestamp_us - g_ch.ptt_start_us) / 1000;
-    g_ch.tx_time_ms += dur_ms;
-    duty_add_ms((uint32_t)dur_ms);
+    if (!g_ptt_active) return;
+    g_ptt_active = 0;
+    uint32_t dur_ms = (uint32_t)((evt->timestamp_us - g_ptt_start_us) / 1000);
+    duty_add_ms(dur_ms);
 }
 
 static void on_caller_identified(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    g_ch.current_user_id = evt->caller.user_id;
+    g_current_user_id = evt->caller.user_id;
 }
 
 static void on_timeout(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    g_ch.tot_events++;
+    kerchunk_rrd_inc(g_rrd, "tot");
 }
 
 static void on_queue_complete(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    g_sys.queue_items++;
-    g_ch.tx_count++;
-    rotate_hour();
-    g_ch.hourly_tx_count[g_ch.current_hour]++;
-    rotate_minute();
-    g_ch.minute_tx_count[g_ch.current_minute]++;
-    rotate_day();
-    g_ch.daily_tx_count[g_ch.current_day]++;
+    /* Record TX into current minute slot */
+    kerchunk_rrd_record_tx(g_rrd, 0);
 }
 
 static void on_recording_saved(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    if (evt->recording.direction &&
-        strcmp(evt->recording.direction, "RX") == 0)
-        g_sys.cdr_records++;
+    if (evt->recording.direction && strcmp(evt->recording.direction, "RX") == 0)
+        kerchunk_rrd_inc(g_rrd, "cdr");
 }
 
 static void on_announcement(const kerchevt_t *evt, void *ud)
@@ -509,29 +195,30 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
     const char *src = evt->announcement.source;
     if (!src) return;
 
-    if (strcmp(src, "cwid") == 0)
-        g_ch.cwid_count++;
+    if (strcmp(src, "cwid") == 0) kerchunk_rrd_inc(g_rrd, "cwid");
     else if (strcmp(src, "pocsag") == 0 || strcmp(src, "flex") == 0 ||
-             strcmp(src, "aprs") == 0)
-        g_ch.pages_sent++;
-    else if (strcmp(src, "weather") == 0)
-        g_ch.weather_count++;
-    else if (strcmp(src, "nws") == 0)
-        g_ch.nws_alerts++;
-    else if (strcmp(src, "freeswitch") == 0)
-        g_ch.phone_calls++;
+             strcmp(src, "aprs") == 0) kerchunk_rrd_inc(g_rrd, "page");
+    else if (strcmp(src, "weather") == 0) kerchunk_rrd_inc(g_rrd, "weather");
+    else if (strcmp(src, "nws") == 0) kerchunk_rrd_inc(g_rrd, "nws");
+    else if (strcmp(src, "freeswitch") == 0) kerchunk_rrd_inc(g_rrd, "phone");
 }
 
 static void on_dtmf_end(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    g_ch.dtmf_commands++;
+    kerchunk_rrd_inc(g_rrd, "dtmf");
+}
+
+static void on_tick(const kerchevt_t *evt, void *ud)
+{
+    (void)evt; (void)ud;
+    kerchunk_rrd_tick(g_rrd);
 }
 
 static void on_shutdown(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    save_stats();
+    kerchunk_rrd_sync(g_rrd);
 }
 
 /* ── Module lifecycle ── */
@@ -549,54 +236,49 @@ static int stats_load(kerchunk_core_t *core)
     core->subscribe(KERCHEVT_RECORDING_SAVED,   on_recording_saved, NULL);
     core->subscribe(KERCHEVT_ANNOUNCEMENT,      on_announcement, NULL);
     core->subscribe(KERCHEVT_DTMF_END,          on_dtmf_end, NULL);
+    core->subscribe(KERCHEVT_TICK,              on_tick, NULL);
     core->subscribe(KERCHEVT_SHUTDOWN,          on_shutdown, NULL);
     return 0;
 }
 
 static int stats_configure(const kerchunk_config_t *cfg)
 {
-    const char *v;
+    const char *v = kerchunk_config_get(cfg, "stats", "rrd_file");
+    if (v) snprintf(g_rrd_path, sizeof(g_rrd_path), "%s", v);
 
-    v = kerchunk_config_get(cfg, "stats", "persist");
-    g_persist = (v && strcmp(v, "on") == 0);
-
-    v = kerchunk_config_get(cfg, "stats", "persist_file");
-    if (v) snprintf(g_persist_file, sizeof(g_persist_file), "%s", v);
-
-    time_t saved_start = g_sys.start_time;
-    uint64_t saved_uptime = g_sys.total_uptime_ms;
-    memset(&g_ch, 0, sizeof(g_ch));
-    memset(&g_users, 0, sizeof(g_users));
-    g_user_count = 0;
-    memset(&g_sys, 0, sizeof(g_sys));
-    if (saved_start > 0) {
-        g_sys.start_time = saved_start;
-        g_sys.total_uptime_ms = saved_uptime;
-    } else {
-        g_sys.start_time = time(NULL);
-        g_sys.total_uptime_ms = 0;
+    /* Legacy compat: if persist_file is set but rrd_file isn't, use a .rrd alongside it */
+    if (!v) {
+        v = kerchunk_config_get(cfg, "stats", "persist_file");
+        if (v) {
+            snprintf(g_rrd_path, sizeof(g_rrd_path), "%s", v);
+            /* Replace .dat extension with .rrd */
+            char *dot = strrchr(g_rrd_path, '.');
+            if (dot) snprintf(dot, sizeof(g_rrd_path) - (size_t)(dot - g_rrd_path), ".rrd");
+        }
     }
 
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    g_ch.current_hour = t->tm_hour;
-    g_ch.current_minute = t->tm_min;
-    g_ch.current_day = t->tm_yday % 30;
-    g_ch.duty_bucket_time = now;
+    if (g_rrd) kerchunk_rrd_close(g_rrd);
+    g_rrd = kerchunk_rrd_open(g_rrd_path);
 
-    load_stats();
+    if (!g_rrd) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "failed to open RRD: %s", g_rrd_path);
+        return -1;
+    }
 
+    memset(g_duty_bucket, 0, sizeof(g_duty_bucket));
+    g_duty_idx = 0;
+    g_duty_time = time(NULL);
+
+    const rrd_counters_t *c = &kerchunk_rrd_data(g_rrd)->counters;
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "started (persist=%s, rx=%u, tx=%u, users=%d)",
-                g_persist ? g_persist_file : "off",
-                g_ch.rx_count, g_ch.tx_count, g_user_count);
+                "RRD opened: %s (rx=%u tx=%u users=%u restarts=%u)",
+                g_rrd_path, c->rx_count, c->tx_count,
+                kerchunk_rrd_data(g_rrd)->user_count, c->restarts);
     return 0;
 }
 
 static void stats_unload(void)
 {
-    save_stats();
-
     g_core->unsubscribe(KERCHEVT_COR_ASSERT,       on_cor_assert);
     g_core->unsubscribe(KERCHEVT_COR_DROP,          on_cor_drop);
     g_core->unsubscribe(KERCHEVT_PTT_ASSERT,        on_ptt_assert);
@@ -607,7 +289,10 @@ static void stats_unload(void)
     g_core->unsubscribe(KERCHEVT_RECORDING_SAVED,   on_recording_saved);
     g_core->unsubscribe(KERCHEVT_ANNOUNCEMENT,      on_announcement);
     g_core->unsubscribe(KERCHEVT_DTMF_END,          on_dtmf_end);
+    g_core->unsubscribe(KERCHEVT_TICK,              on_tick);
     g_core->unsubscribe(KERCHEVT_SHUTDOWN,          on_shutdown);
+
+    if (g_rrd) { kerchunk_rrd_close(g_rrd); g_rrd = NULL; }
 }
 
 /* ── CLI ── */
@@ -615,41 +300,32 @@ static void stats_unload(void)
 static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
 {
     if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+    if (!g_rrd) { resp_str(r, "error", "RRD not open"); return -1; }
+
+    const rrd_file_t *d = kerchunk_rrd_data(g_rrd);
+    const rrd_counters_t *c = &d->counters;
 
     /* stats reset */
     if (argc >= 2 && strcmp(argv[1], "reset") == 0) {
-        memset(&g_ch, 0, sizeof(g_ch));
-        memset(&g_users, 0, sizeof(g_users));
-        g_user_count = 0;
-        uint32_t restarts = g_sys.restarts;
-        memset(&g_sys, 0, sizeof(g_sys));
-        g_sys.start_time = time(NULL);
-        g_sys.total_uptime_ms = 0;
-        g_sys.restarts = restarts;
-        time_t now = time(NULL);
-        struct tm *t = localtime(&now);
-        g_ch.current_hour = t->tm_hour;
-        g_ch.current_minute = t->tm_min;
-        g_ch.current_day = t->tm_yday % 30;
+        kerchunk_rrd_reset(g_rrd);
         resp_bool(r, "ok", 1);
         resp_str(r, "action", "reset");
         return 0;
     }
 
-    /* stats save */
+    /* stats save (force sync) */
     if (argc >= 2 && strcmp(argv[1], "save") == 0) {
-        g_persist = 1;
-        save_stats();
+        kerchunk_rrd_sync(g_rrd);
         resp_bool(r, "ok", 1);
-        resp_str(r, "file", g_persist_file);
+        resp_str(r, "file", g_rrd_path);
         return 0;
     }
 
     /* stats user <name> */
     if (argc >= 3 && strcmp(argv[1], "user") == 0) {
-        for (int i = 0; i < g_user_count; i++) {
-            if (strcasecmp(g_users[i].name, argv[2]) == 0) {
-                user_stats_t *u = &g_users[i];
+        for (uint32_t i = 0; i < d->user_count; i++) {
+            if (strcasecmp(d->users[i].name, argv[2]) == 0) {
+                const rrd_user_t *u = &d->users[i];
                 resp_str(r, "name", u->name);
                 resp_int(r, "user_id", u->user_id);
                 resp_int(r, "tx_count", (int)u->tx_count);
@@ -663,280 +339,212 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
         return 0;
     }
 
-    /* ── Full stats dashboard ── */
+    /* ── Full dashboard ── */
 
     time_t now = time(NULL);
-    uint64_t uptime_ms = (uint64_t)difftime(now, g_sys.start_time) * 1000;
+    uint64_t uptime_ms = (uint64_t)difftime(now, c->start_time) * 1000;
     if (uptime_ms == 0) uptime_ms = 1;
-    uint64_t total_ms = g_sys.total_uptime_ms + uptime_ms;
+    uint64_t total_ms = c->total_uptime_ms + uptime_ms;
     float duty = duty_pct();
+    uint32_t avg_rx = c->rx_count > 0 ? (uint32_t)(c->rx_time_ms / c->rx_count) : 0;
 
-    /* JSON top-level */
-    {
-        char jfrag[128];
-        snprintf(jfrag, sizeof(jfrag),
-            "\"uptime_ms\":%llu,\"total_uptime_ms\":%llu,\"restarts\":%u,",
-            (unsigned long long)uptime_ms,
-            (unsigned long long)total_ms,
-            g_sys.restarts);
-        resp_json_raw(r, jfrag);
+    /* Peak hour */
+    uint32_t peak_val = 0; int peak_hour = 0;
+    for (int i = 0; i < RRD_HOURS; i++) {
+        uint32_t v = d->hours[i].rx_count + d->hours[i].tx_count;
+        if (v > peak_val) { peak_val = v; peak_hour = i; }
     }
+
+    /* JSON: top-level */
+    { char f[128]; snprintf(f, sizeof(f),
+        "\"uptime_ms\":%llu,\"total_uptime_ms\":%llu,\"restarts\":%u,",
+        (unsigned long long)uptime_ms, (unsigned long long)total_ms, c->restarts);
+      resp_json_raw(r, f); }
 
     /* JSON: channel */
-    {
-        uint32_t avg_rx = g_ch.rx_count > 0 ? (uint32_t)(g_ch.rx_time_ms / g_ch.rx_count) : 0;
-        /* Find peak hour */
-        uint32_t peak_val = 0;
-        int peak_hour = 0;
-        for (int i = 0; i < 24; i++) {
-            uint32_t v = g_ch.hourly_rx_count[i] + g_ch.hourly_tx_count[i];
-            if (v > peak_val) { peak_val = v; peak_hour = i; }
-        }
+    { char f[768]; snprintf(f, sizeof(f),
+        "\"channel\":{"
+        "\"rx_count\":%u,\"rx_time_ms\":%llu,"
+        "\"tx_count\":%u,\"tx_time_ms\":%llu,"
+        "\"duty_pct\":%.1f,\"avg_rx_ms\":%u,"
+        "\"longest_rx_ms\":%u,\"shortest_rx_ms\":%u,"
+        "\"peak_hour\":%d,\"kerchunk_count\":%u,"
+        "\"tot_events\":%u,\"emergency_count\":%u,\"access_denied\":%u,"
+        "\"dtmf_commands\":%u,\"cwid_count\":%u,\"pages_sent\":%u,"
+        "\"weather_count\":%u,\"nws_alerts\":%u,\"phone_calls\":%u}",
+        c->rx_count, (unsigned long long)c->rx_time_ms,
+        c->tx_count, (unsigned long long)c->tx_time_ms,
+        duty, avg_rx, c->longest_rx_ms, c->shortest_rx_ms,
+        peak_hour, c->kerchunk_count,
+        c->tot_events, c->emergency_count, c->access_denied,
+        c->dtmf_commands, c->cwid_count, c->pages_sent,
+        c->weather_count, c->nws_alerts, c->phone_calls);
+      resp_json_raw(r, f); }
 
-        char ch_frag[768];
-        snprintf(ch_frag, sizeof(ch_frag),
-            "\"channel\":{"
-            "\"rx_count\":%u,\"rx_time_ms\":%llu,"
-            "\"tx_count\":%u,\"tx_time_ms\":%llu,"
-            "\"duty_pct\":%.1f,\"avg_rx_ms\":%u,"
-            "\"longest_rx_ms\":%u,\"shortest_rx_ms\":%u,"
-            "\"peak_hour\":%d,"
-            "\"kerchunk_count\":%u,"
-            "\"tot_events\":%u,\"emergency_count\":%u,\"access_denied\":%u,"
-            "\"dtmf_commands\":%u,\"cwid_count\":%u,\"pages_sent\":%u,"
-            "\"weather_count\":%u,\"nws_alerts\":%u,\"phone_calls\":%u}",
-            g_ch.rx_count, (unsigned long long)g_ch.rx_time_ms,
-            g_ch.tx_count, (unsigned long long)g_ch.tx_time_ms,
-            duty, avg_rx,
-            g_ch.longest_rx_ms, g_ch.shortest_rx_ms,
-            peak_hour,
-            g_ch.kerchunk_count,
-            g_ch.tot_events, g_ch.emergency_count, g_ch.access_denied,
-            g_ch.dtmf_commands, g_ch.cwid_count, g_ch.pages_sent,
-            g_ch.weather_count, g_ch.nws_alerts, g_ch.phone_calls);
-        resp_json_raw(r, ch_frag);
-    }
-
-    /* JSON: hourly histogram */
-    rotate_hour();
-    struct tm *tnow = localtime(&now);
-    resp_json_raw(r, ",\"hourly\":[");
-    for (int i = 0; i < 24; i++) {
-        int h = (tnow->tm_hour + 1 + i) % 24;
-        if (i > 0) resp_json_raw(r, ",");
-        char hfrag[64];
-        snprintf(hfrag, sizeof(hfrag),
-            "{\"hour\":%d,\"rx\":%u,\"tx\":%u}",
-            h, g_ch.hourly_rx_count[h], g_ch.hourly_tx_count[h]);
-        resp_json_raw(r, hfrag);
-    }
-    resp_json_raw(r, "]");
-
-    /* JSON: minutely histogram */
-    rotate_minute();
+    /* JSON: minutely (oldest first) */
     resp_json_raw(r, ",\"minutely\":[");
-    for (int i = 0; i < 60; i++) {
-        int m = (tnow->tm_min + 1 + i) % 60;
+    for (int i = 0; i < RRD_MINUTES; i++) {
+        int idx = (d->minute_idx + 1 + i) % RRD_MINUTES;
         if (i > 0) resp_json_raw(r, ",");
-        char mfrag[64];
-        snprintf(mfrag, sizeof(mfrag),
-            "{\"min\":%d,\"rx\":%u,\"tx\":%u}",
-            m, g_ch.minute_rx_count[m], g_ch.minute_tx_count[m]);
-        resp_json_raw(r, mfrag);
+        char f[64]; snprintf(f, sizeof(f), "{\"min\":%d,\"rx\":%u,\"tx\":%u}",
+            i, d->minutes[idx].rx_count, d->minutes[idx].tx_count);
+        resp_json_raw(r, f);
     }
     resp_json_raw(r, "]");
 
-    /* JSON: daily histogram */
-    rotate_day();
+    /* JSON: hourly (oldest first) */
+    resp_json_raw(r, ",\"hourly\":[");
+    for (int i = 0; i < RRD_HOURS; i++) {
+        int idx = (d->hour_idx + 1 + i) % RRD_HOURS;
+        if (i > 0) resp_json_raw(r, ",");
+        char f[64]; snprintf(f, sizeof(f), "{\"hour\":%d,\"rx\":%u,\"tx\":%u}",
+            i, d->hours[idx].rx_count, d->hours[idx].tx_count);
+        resp_json_raw(r, f);
+    }
+    resp_json_raw(r, "]");
+
+    /* JSON: daily (oldest first) */
     resp_json_raw(r, ",\"daily\":[");
-    for (int i = 0; i < 30; i++) {
-        int d = (g_ch.current_day + 1 + i) % 30;
+    for (int i = 0; i < RRD_DAYS; i++) {
+        int idx = (d->day_idx + 1 + i) % RRD_DAYS;
         if (i > 0) resp_json_raw(r, ",");
-        char dfrag[64];
-        snprintf(dfrag, sizeof(dfrag),
-            "{\"day\":%d,\"rx\":%u,\"tx\":%u}",
-            i, g_ch.daily_rx_count[d], g_ch.daily_tx_count[d]);
-        resp_json_raw(r, dfrag);
+        char f[64]; snprintf(f, sizeof(f), "{\"day\":%d,\"rx\":%u,\"tx\":%u}",
+            i, d->days[idx].rx_count, d->days[idx].tx_count);
+        resp_json_raw(r, f);
     }
     resp_json_raw(r, "]");
 
-    /* JSON: users array */
+    /* JSON: users */
     resp_json_raw(r, ",\"users\":[");
-    for (int i = 0; i < g_user_count; i++) {
-        user_stats_t *u = &g_users[i];
+    for (uint32_t i = 0; i < d->user_count; i++) {
+        const rrd_user_t *u = &d->users[i];
         if (i > 0) resp_json_raw(r, ",");
-        char ufrag[256];
-        snprintf(ufrag, sizeof(ufrag),
+        char f[256]; snprintf(f, sizeof(f),
             "{\"id\":%d,\"name\":\"%s\",\"tx_count\":%u,"
-            "\"tx_time_ms\":%llu,\"last_heard\":%ld,\"longest_ms\":%u}",
+            "\"tx_time_ms\":%llu,\"last_heard\":%lld,\"longest_ms\":%u}",
             u->user_id, u->name, u->tx_count,
             (unsigned long long)u->tx_time_ms,
-            (long)u->last_heard, u->longest_ms);
-        resp_json_raw(r, ufrag);
+            (long long)u->last_heard, u->longest_ms);
+        resp_json_raw(r, f);
     }
     resp_json_raw(r, "]");
 
     /* JSON: system */
-    {
-        char sfrag[128];
-        snprintf(sfrag, sizeof(sfrag),
-            ",\"system\":{\"queue_items\":%u,\"cdr_records\":%u,"
-            "\"nws_alerts\":%u,\"phone_calls\":%u}",
-            g_sys.queue_items, g_sys.cdr_records,
-            g_ch.nws_alerts, g_ch.phone_calls);
-        resp_json_raw(r, sfrag);
-    }
+    { char f[128]; snprintf(f, sizeof(f),
+        ",\"system\":{\"queue_items\":%u,\"cdr_records\":%u}",
+        c->queue_items, c->cdr_records);
+      resp_json_raw(r, f); }
     r->jfirst = 0;
 
-    /* ── Text: human-readable dashboard ── */
+    /* ── Text dashboard ── */
     char up_s[32], rx_s[32], tx_s[32], idle_s[32];
     fmt_duration(up_s, sizeof(up_s), uptime_ms);
-    fmt_duration(rx_s, sizeof(rx_s), g_ch.rx_time_ms);
-    fmt_duration(tx_s, sizeof(tx_s), g_ch.tx_time_ms);
-    uint64_t busy_ms = g_ch.rx_time_ms + g_ch.tx_time_ms;
-    if (busy_ms > uptime_ms) busy_ms = uptime_ms;
-    uint64_t idle_ms = uptime_ms - busy_ms;
-    fmt_duration(idle_s, sizeof(idle_s), idle_ms);
+    fmt_duration(rx_s, sizeof(rx_s), c->rx_time_ms);
+    fmt_duration(tx_s, sizeof(tx_s), c->tx_time_ms);
+    uint64_t busy = c->rx_time_ms + c->tx_time_ms;
+    if (busy > uptime_ms) busy = uptime_ms;
+    fmt_duration(idle_s, sizeof(idle_s), uptime_ms - busy);
 
-    {
-        char line[256];
-        snprintf(line, sizeof(line),
-            "Repeater Statistics\n===================\nUptime: %s", up_s);
-        resp_text_raw(r, line);
-    }
-    if (g_sys.restarts > 0) {
-        char total_s[32], line[128];
-        fmt_duration(total_s, sizeof(total_s), total_ms);
-        snprintf(line, sizeof(line), " (total %s, %u restart%s)",
-                 total_s, g_sys.restarts, g_sys.restarts == 1 ? "" : "s");
-        resp_text_raw(r, line);
+    { char l[256]; snprintf(l, sizeof(l),
+        "Repeater Statistics\n===================\nUptime: %s", up_s);
+      resp_text_raw(r, l); }
+    if (c->restarts > 0) {
+        char ts[32], l[128];
+        fmt_duration(ts, sizeof(ts), total_ms);
+        snprintf(l, sizeof(l), " (total %s, %u restart%s)",
+            ts, c->restarts, c->restarts == 1 ? "" : "s");
+        resp_text_raw(r, l);
     }
     resp_text_raw(r, "\n\n");
-    {
-        char line[256];
-        snprintf(line, sizeof(line),
-            "Channel:\n"
-            "  Inbound (RX):   %u transmissions, %s\n"
-            "  Outbound (TX):  %u announcements, %s (duty %.1f%%)\n"
-            "  Idle:           %s\n",
-            g_ch.rx_count, rx_s, g_ch.tx_count, tx_s, duty, idle_s);
-        resp_text_raw(r, line);
+    { char l[256]; snprintf(l, sizeof(l),
+        "Channel:\n"
+        "  Inbound (RX):   %u transmissions, %s\n"
+        "  Outbound (TX):  %u announcements, %s (duty %.1f%%)\n"
+        "  Idle:           %s\n",
+        c->rx_count, rx_s, c->tx_count, tx_s, duty, idle_s);
+      resp_text_raw(r, l); }
+    if (c->rx_count > 0) {
+        char a[32], lo[32], sh[32], l[160];
+        fmt_duration(a, sizeof(a), avg_rx);
+        fmt_duration(lo, sizeof(lo), c->longest_rx_ms);
+        fmt_duration(sh, sizeof(sh), c->shortest_rx_ms);
+        snprintf(l, sizeof(l), "  Avg inbound:    %s  (shortest %s, longest %s)\n", a, sh, lo);
+        resp_text_raw(r, l);
     }
-    if (g_ch.rx_count > 0) {
-        char avg[32], longest[32], shortest[32], line[160];
-        fmt_duration(avg, sizeof(avg), g_ch.rx_time_ms / g_ch.rx_count);
-        fmt_duration(longest, sizeof(longest), g_ch.longest_rx_ms);
-        fmt_duration(shortest, sizeof(shortest), g_ch.shortest_rx_ms);
-        snprintf(line, sizeof(line),
-            "  Avg inbound:    %s  (shortest %s, longest %s)\n",
-            avg, shortest, longest);
-        resp_text_raw(r, line);
-    }
-    /* Extra counters */
-    {
-        char line[256];
-        snprintf(line, sizeof(line),
-            "  Kerchunks:      %u\n"
-            "  DTMF commands:  %u\n"
-            "  CW IDs:         %u\n"
-            "  Pages sent:     %u\n",
-            g_ch.kerchunk_count, g_ch.dtmf_commands,
-            g_ch.cwid_count, g_ch.pages_sent);
-        resp_text_raw(r, line);
-    }
-    if (g_ch.tot_events > 0 || g_ch.emergency_count > 0) {
-        char line[96];
-        snprintf(line, sizeof(line), "  TOT events:     %u  Emergencies: %u\n",
-                 g_ch.tot_events, g_ch.emergency_count);
-        resp_text_raw(r, line);
+    { char l[256]; snprintf(l, sizeof(l),
+        "  Kerchunks:      %u\n  DTMF commands:  %u\n  CW IDs:         %u\n  Pages sent:     %u\n",
+        c->kerchunk_count, c->dtmf_commands, c->cwid_count, c->pages_sent);
+      resp_text_raw(r, l); }
+    if (c->tot_events || c->emergency_count) {
+        char l[96]; snprintf(l, sizeof(l), "  TOT events:     %u  Emergencies: %u\n",
+            c->tot_events, c->emergency_count);
+        resp_text_raw(r, l);
     }
 
-    /* Text: 24h histogram */
-    {
-        uint32_t max_hr = 0;
-        int has_data = 0;
-        for (int i = 0; i < 24; i++) {
-            uint32_t total = g_ch.hourly_rx_count[i] + g_ch.hourly_tx_count[i];
-            if (total > max_hr) max_hr = total;
-            if (total > 0) has_data = 1;
-        }
-        if (has_data) {
-            resp_text_raw(r, "\n24h Activity:\n");
-            for (int i = 0; i < 24; i++) {
-                int h = (tnow->tm_hour + 1 + i) % 24;
-                uint32_t rx = g_ch.hourly_rx_count[h];
-                uint32_t tx = g_ch.hourly_tx_count[h];
-                uint32_t total = rx + tx;
-                int bars = (max_hr > 0) ? (int)((total * 10 + max_hr - 1) / max_hr) : 0;
-                if (total == 0) bars = 0;
-                char bar[11];
-                int b;
-                for (b = 0; b < bars && b < 10; b++) bar[b] = '#';
-                for (; b < 10; b++) bar[b] = '.';
-                bar[10] = '\0';
-                char line[80];
-                snprintf(line, sizeof(line), "  %02d %s %3u rx %3u tx%s\n",
-                         h, bar, rx, tx,
-                         (h == tnow->tm_hour) ? "  <-- now" : "");
-                resp_text_raw(r, line);
-            }
-        }
+    /* Text: hourly histogram */
+    { uint32_t mx = 0; int has = 0;
+      for (int i = 0; i < RRD_HOURS; i++) {
+          uint32_t t = d->hours[i].rx_count + d->hours[i].tx_count;
+          if (t > mx) mx = t; if (t) has = 1;
+      }
+      if (has) {
+          resp_text_raw(r, "\n24h Activity:\n");
+          for (int i = 0; i < RRD_HOURS; i++) {
+              int idx = (d->hour_idx + 1 + i) % RRD_HOURS;
+              uint32_t rx = d->hours[idx].rx_count, tx = d->hours[idx].tx_count;
+              uint32_t t = rx + tx;
+              int bars = mx > 0 ? (int)((t * 10 + mx - 1) / mx) : 0;
+              if (!t) bars = 0;
+              char bar[11]; int b;
+              for (b = 0; b < bars && b < 10; b++) bar[b] = '#';
+              for (; b < 10; b++) bar[b] = '.'; bar[10] = '\0';
+              char l[80]; snprintf(l, sizeof(l), "  %02d %s %3u rx %3u tx%s\n",
+                  i, bar, rx, tx, i == RRD_HOURS - 1 ? "  <-- now" : "");
+              resp_text_raw(r, l);
+          }
+      }
     }
 
     /* Text: top users */
-    if (g_user_count > 0) {
+    if (d->user_count > 0) {
         resp_text_raw(r, "\nTop Users:\n");
-        int idx[MAX_USER_STATS];
-        for (int i = 0; i < g_user_count; i++) idx[i] = i;
-        for (int i = 0; i < g_user_count - 1; i++) {
-            for (int j = i + 1; j < g_user_count; j++) {
-                if (g_users[idx[j]].tx_count > g_users[idx[i]].tx_count) {
-                    int tmp = idx[i]; idx[i] = idx[j]; idx[j] = tmp;
-                }
-            }
-        }
-        int show = g_user_count < 10 ? g_user_count : 10;
-        for (int i = 0; i < show; i++) {
-            user_stats_t *u = &g_users[idx[i]];
-            char dur[32], last[32], line[128];
+        int idx[RRD_MAX_USERS];
+        for (uint32_t i = 0; i < d->user_count; i++) idx[i] = (int)i;
+        for (uint32_t i = 0; i < d->user_count - 1; i++)
+            for (uint32_t j = i + 1; j < d->user_count; j++)
+                if (d->users[idx[j]].tx_count > d->users[idx[i]].tx_count)
+                    { int t = idx[i]; idx[i] = idx[j]; idx[j] = t; }
+        uint32_t show = d->user_count < 10 ? d->user_count : 10;
+        for (uint32_t i = 0; i < show; i++) {
+            const rrd_user_t *u = &d->users[idx[i]];
+            char dur[32], last[32], l[128];
             fmt_duration(dur, sizeof(dur), u->tx_time_ms);
-            fmt_ago(last, sizeof(last), u->last_heard);
-            snprintf(line, sizeof(line), "  %-14s  %4u TX  %10s  %s\n",
-                     u->name, u->tx_count, dur, last);
-            resp_text_raw(r, line);
+            fmt_ago(last, sizeof(last), (time_t)u->last_heard);
+            snprintf(l, sizeof(l), "  %-14s  %4u TX  %10s  %s\n",
+                u->name, u->tx_count, dur, last);
+            resp_text_raw(r, l);
         }
     }
 
-    {
-        char line[288];
-        snprintf(line, sizeof(line),
-            "\nSystem:\n  Queue played:   %u\n  CDR records:    %u\n",
-            g_sys.queue_items, g_sys.cdr_records);
-        resp_text_raw(r, line);
-        if (g_persist) {
-            snprintf(line, sizeof(line), "  Persistence:    %s\n",
-                     g_persist_file);
-            resp_text_raw(r, line);
-        }
-    }
+    { char l[288]; snprintf(l, sizeof(l),
+        "\nSystem:\n  Queue played:   %u\n  CDR records:    %u\n  Storage:        %s (mmap'd RRD)\n",
+        c->queue_items, c->cdr_records, g_rrd_path);
+      resp_text_raw(r, l); }
 
     return 0;
 
 usage:
     resp_text_raw(r, "Repeater statistics and metrics\n\n"
         "  stats\n"
-        "    Show full statistics dashboard: uptime, channel activity,\n"
-        "    24-hour histogram, top users, and system counters.\n\n"
+        "    Full dashboard: uptime, channel, histograms, top users.\n\n"
         "  stats user <name>\n"
-        "    Show per-user statistics for a specific user.\n\n"
+        "    Per-user statistics.\n\n"
         "  stats reset\n"
-        "    Reset all statistics to zero (preserves restart count).\n\n"
+        "    Reset all data (preserves restart count).\n\n"
         "  stats save\n"
-        "    Force-save statistics to disk immediately.\n\n"
-        "Tracks: RX/TX counts, durations, duty cycle (5-min rolling),\n"
-        "kerchunks, DTMF commands, CW IDs, pages sent, weather/NWS,\n"
-        "phone calls, per-user stats, 60-min/24h/30-day histograms.\n\n"
-        "Config: [stats] persist, persist_file\n");
+        "    Force sync RRD to disk.\n\n"
+        "Storage: mmap'd round-robin database (survives restarts).\n"
+        "Config: [stats] rrd_file (default /var/lib/kerchunk/stats.rrd)\n");
     resp_str(r, "error", "usage: stats [user <name>|reset|save]");
     resp_finish(r);
     return -1;
@@ -949,8 +557,8 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
 
 static kerchunk_module_def_t mod_stats = {
     .name             = "mod_stats",
-    .version          = "2.0.0",
-    .description      = "Repeater statistics and metrics",
+    .version          = "3.0.0",
+    .description      = "Repeater statistics (mmap'd RRD)",
     .load             = stats_load,
     .configure        = stats_configure,
     .unload           = stats_unload,

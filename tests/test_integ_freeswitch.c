@@ -34,9 +34,9 @@ void test_integ_freeswitch(void)
         kerchunk_config_set(cfg, "freeswitch", "esl_password", "TestPass");
         kerchunk_config_set(cfg, "freeswitch", "sip_gateway", "test_gw");
         kerchunk_config_set(cfg, "freeswitch", "udp_base_port", "18000");
-        kerchunk_config_set(cfg, "freeswitch", "max_call_duration", "120");
-        kerchunk_config_set(cfg, "freeswitch", "dial_timeout", "20");
-        kerchunk_config_set(cfg, "freeswitch", "inactivity_timeout", "45");
+        kerchunk_config_set(cfg, "freeswitch", "max_call_duration", "2m");
+        kerchunk_config_set(cfg, "freeswitch", "dial_timeout", "20s");
+        kerchunk_config_set(cfg, "freeswitch", "inactivity_timeout", "45s");
         kerchunk_config_set(cfg, "freeswitch", "vad_threshold", "900");
         kerchunk_config_set(cfg, "freeswitch", "vad_hold_ms", "600");
         kerchunk_config_set(cfg, "freeswitch", "admin_only", "on");

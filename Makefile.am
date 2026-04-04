@@ -44,7 +44,8 @@ kerchunkd_SOURCES = \
 	src/kerchunk_threads.c \
 	src/kerchunk_resp.c \
 	src/kerchunk_evt_json.c \
-	src/kerchunk_console.c
+	src/kerchunk_console.c \
+	src/kerchunk_rrd.c
 
 kerchunkd_CFLAGS = $(AM_CFLAGS) \
 		   -Icli \
