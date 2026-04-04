@@ -170,8 +170,27 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
   <div class="card">
     <h2>Statistics</h2>
     <table id="stats-table"><tr><td colspan="2">Loading...</td></tr></table>
-    <h2 style="margin-top:10px">24h Activity</h2>
-    <div id="hist" class="hist"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+      <div>
+        <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">60-Minute Trend</h3>
+        <canvas id="chart-minute" height="140"></canvas>
+      </div>
+      <div>
+        <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">24-Hour Activity</h3>
+        <canvas id="chart-hourly" height="140"></canvas>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">30-Day History</h3>
+      <canvas id="chart-daily" height="100"></canvas>
+    </div>
+    <div style="margin-top:12px">
+      <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">Top Users</h3>
+      <table id="users-table" style="font-size:11px;width:100%">
+        <tr><td colspan="4" style="color:var(--dim)">No user data yet</td></tr>
+      </table>
+    </div>
+    <div id="hist" class="hist" style="display:none"></div>
   </div>
 
   <!-- Dynamic Controls -->
@@ -218,6 +237,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
 const API = '';
 const TOKEN = localStorage.getItem('kerchunk_token') || '';
@@ -433,14 +453,101 @@ async function refreshStation() {
   } catch(e){}
 }
 
-// Live stats — updated in real-time from SSE events + 1s tick
+// Live stats
 let liveStats = {
   uptime_ms:0, rx_count:0, rx_time_ms:0, tx_count:0, tx_time_ms:0,
   duty_pct:0, longest_rx_ms:0, queue_items:0, cdr_records:0, restarts:0,
-  hourly:null, syncTime:0,
+  kerchunk_count:0, dtmf_commands:0, cwid_count:0, pages_sent:0,
+  peak_hour:0, avg_rx_ms:0,
+  hourly:null, minutely:null, daily:null, users:null,
+  syncTime:0,
   corActive:false, corStart:0, pttActive:false, pttStart:0,
   lastDutySync:0
 };
+
+// Chart.js instances
+let chartMinute=null, chartHourly=null, chartDaily=null;
+const chartOpts = {
+  responsive:true, maintainAspectRatio:false,
+  animation:{duration:300},
+  plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:8,font:{size:10}}}},
+  scales:{x:{grid:{display:false},ticks:{font:{size:9}}},
+          y:{beginAtZero:true,ticks:{font:{size:9},stepSize:1}}}
+};
+
+function initCharts() {
+  if (typeof Chart === 'undefined') return;
+  Chart.defaults.color = '#aaa';
+  Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
+
+  chartMinute = new Chart(document.getElementById('chart-minute'), {
+    type:'line',
+    data:{labels:[], datasets:[
+      {label:'RX',data:[],borderColor:'#4fc3f7',backgroundColor:'rgba(79,195,247,0.1)',fill:true,tension:0.3,pointRadius:0},
+      {label:'TX',data:[],borderColor:'#ffb74d',backgroundColor:'rgba(255,183,77,0.1)',fill:true,tension:0.3,pointRadius:0}
+    ]},
+    options:{...chartOpts,plugins:{...chartOpts.plugins,legend:{display:false}}}
+  });
+
+  chartHourly = new Chart(document.getElementById('chart-hourly'), {
+    type:'bar',
+    data:{labels:[], datasets:[
+      {label:'RX',data:[],backgroundColor:'#4fc3f7'},
+      {label:'TX',data:[],backgroundColor:'#ffb74d'}
+    ]},
+    options:{...chartOpts,scales:{...chartOpts.scales,x:{...chartOpts.scales.x,stacked:true},y:{...chartOpts.scales.y,stacked:true}}}
+  });
+
+  chartDaily = new Chart(document.getElementById('chart-daily'), {
+    type:'bar',
+    data:{labels:[], datasets:[
+      {label:'RX',data:[],backgroundColor:'#4fc3f7'},
+      {label:'TX',data:[],backgroundColor:'#ffb74d'}
+    ]},
+    options:{...chartOpts,scales:{...chartOpts.scales,x:{...chartOpts.scales.x,stacked:true},y:{...chartOpts.scales.y,stacked:true}}}
+  });
+}
+
+function updateCharts(d) {
+  if (!chartMinute) return;
+
+  if (d.minutely) {
+    chartMinute.data.labels = d.minutely.map(m => String(m.min).padStart(2,'0'));
+    chartMinute.data.datasets[0].data = d.minutely.map(m => m.rx);
+    chartMinute.data.datasets[1].data = d.minutely.map(m => m.tx);
+    chartMinute.update('none');
+  }
+
+  if (d.hourly) {
+    chartHourly.data.labels = d.hourly.map(h => String(h.hour).padStart(2,'0'));
+    chartHourly.data.datasets[0].data = d.hourly.map(h => h.rx);
+    chartHourly.data.datasets[1].data = d.hourly.map(h => h.tx);
+    chartHourly.update('none');
+  }
+
+  if (d.daily) {
+    chartDaily.data.labels = d.daily.map((_,i) => i===29?'today': i===28?'1d':'');
+    chartDaily.data.datasets[0].data = d.daily.map(d => d.rx);
+    chartDaily.data.datasets[1].data = d.daily.map(d => d.tx);
+    chartDaily.update('none');
+  }
+}
+
+function updateUsersTable(users) {
+  const t = document.getElementById('users-table');
+  if (!users || users.length === 0) {
+    t.innerHTML = '<tr><td colspan="4" style="color:var(--dim)">No user data yet</td></tr>';
+    return;
+  }
+  users.sort((a,b) => b.tx_count - a.tx_count);
+  const show = users.slice(0, 10);
+  let h = '<tr style="font-weight:600;color:var(--dim)"><td>User</td><td>TX</td><td>Time</td><td>Last</td></tr>';
+  show.forEach(u => {
+    const ago = u.last_heard ? fmtMs((Date.now()/1000 - u.last_heard)*1000) + ' ago' : 'never';
+    h += '<tr><td>' + u.name + '</td><td>' + u.tx_count + '</td><td>' + fmtMs(u.tx_time_ms) + '</td><td>' + ago + '</td></tr>';
+  });
+  t.innerHTML = h;
+}
 
 function renderStats() {
   const now=Date.now();
@@ -449,7 +556,7 @@ function renderStats() {
   let tx=liveStats.tx_time_ms;
   if(liveStats.corActive) rx += now - liveStats.corStart;
   if(liveStats.pttActive) tx += now - liveStats.pttStart;
-  const duty=liveStats.duty_pct; // rolling 5-min from server
+  const duty=liveStats.duty_pct;
 
   const t=document.getElementById('stats-table');
   let h='';
@@ -458,9 +565,14 @@ function renderStats() {
   h+=tr('Outbound (TX)',liveStats.tx_count+' &mdash; '+fmtMs(tx));
   h+=tr('Duty (5m)',duty.toFixed(1)+'%');
   if(liveStats.rx_count>0){
-    h+=tr('Avg inbound',fmtMs(Math.floor(rx/liveStats.rx_count)));
+    h+=tr('Avg inbound',fmtMs(liveStats.avg_rx_ms));
     h+=tr('Longest',fmtMs(liveStats.longest_rx_ms));
+    h+=tr('Peak hour',String(liveStats.peak_hour).padStart(2,'0')+':00');
   }
+  if(liveStats.kerchunk_count) h+=tr('Kerchunks',liveStats.kerchunk_count);
+  if(liveStats.dtmf_commands) h+=tr('DTMF cmds',liveStats.dtmf_commands);
+  if(liveStats.cwid_count) h+=tr('CW IDs',liveStats.cwid_count);
+  if(liveStats.pages_sent) h+=tr('Pages sent',liveStats.pages_sent);
   if(liveStats.queue_items) h+=tr('Queue played',liveStats.queue_items);
   if(liveStats.cdr_records) h+=tr('CDR records',liveStats.cdr_records);
   if(liveStats.restarts>0) h+=tr('Restarts',liveStats.restarts);
@@ -474,12 +586,19 @@ async function refreshStats() {
     liveStats.syncTime=now;
     liveStats.uptime_ms=d.uptime_ms||0;
     if(d.channel){
-      liveStats.rx_count=d.channel.rx_count||0;
-      liveStats.rx_time_ms=d.channel.rx_time_ms||0;
-      liveStats.tx_count=d.channel.tx_count||0;
-      liveStats.tx_time_ms=d.channel.tx_time_ms||0;
-      liveStats.longest_rx_ms=d.channel.longest_rx_ms||0;
-      liveStats.duty_pct=d.channel.duty_pct||0;
+      const c=d.channel;
+      liveStats.rx_count=c.rx_count||0;
+      liveStats.rx_time_ms=c.rx_time_ms||0;
+      liveStats.tx_count=c.tx_count||0;
+      liveStats.tx_time_ms=c.tx_time_ms||0;
+      liveStats.longest_rx_ms=c.longest_rx_ms||0;
+      liveStats.duty_pct=c.duty_pct||0;
+      liveStats.avg_rx_ms=c.avg_rx_ms||0;
+      liveStats.peak_hour=c.peak_hour||0;
+      liveStats.kerchunk_count=c.kerchunk_count||0;
+      liveStats.dtmf_commands=c.dtmf_commands||0;
+      liveStats.cwid_count=c.cwid_count||0;
+      liveStats.pages_sent=c.pages_sent||0;
     }
     if(d.system){
       liveStats.queue_items=d.system.queue_items||0;
@@ -487,22 +606,8 @@ async function refreshStats() {
     }
     liveStats.restarts=d.restarts||0;
 
-    // Histogram
-    const el=document.getElementById('hist');
-    if(d.hourly){
-      liveStats.hourly=d.hourly;
-      const max=Math.max(...d.hourly.map(h=>h.rx+h.tx),1);
-      const hr_now=new Date().getHours();
-      let hh='';
-      d.hourly.forEach(hr=>{
-        const total=hr.rx+hr.tx;
-        if(total===0 && hr.hour!==hr_now) return;
-        const w=Math.round(total/max*80);
-        hh+='<div>'+String(hr.hour).padStart(2,'0')+' <span class="hist-bar" style="width:'+w+'px"></span> '+total+(hr.hour===hr_now?' &#9664;':'')+'</div>';
-      });
-      if(!hh) hh='<div style="color:var(--dim)">No activity yet</div>';
-      el.innerHTML=hh;
-    }
+    updateCharts(d);
+    if(d.users) updateUsersTable(d.users);
     renderStats();
   } catch(e){}
 }
@@ -806,6 +911,7 @@ function setAudioVolume(v) {
     }
   } catch(_) {}
 
+  initCharts();
   refreshStation();
   refreshStatus();
   refreshStats();

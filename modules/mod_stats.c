@@ -2,10 +2,10 @@
  * mod_stats.c — Repeater statistics and metrics
  *
  * Tracks channel, per-user, and system metrics via event subscriptions.
- * Rolling 24-hour histogram by hour. Persists to disk on shutdown,
- * restores on startup.
+ * Three history levels: per-minute (60), per-hour (24), per-day (30).
+ * Persists to disk on shutdown, restores on startup.
  *
- * CLI: stats, stats user <name>, stats reset
+ * CLI: stats, stats user <name>, stats reset, stats save
  */
 
 #include "kerchunk.h"
@@ -37,12 +37,31 @@ static struct {
     uint32_t longest_rx_ms;
     uint32_t shortest_rx_ms;
     uint32_t access_denied;
+    uint32_t kerchunk_count;   /* Short key-ups < 1s */
+
+    /* New counters */
+    uint32_t dtmf_commands;
+    uint32_t cwid_count;
+    uint32_t pages_sent;       /* POCSAG + FLEX + APRS */
+    uint32_t weather_count;
+    uint32_t nws_alerts;
+    uint32_t phone_calls;
 
     /* Rolling 24h histogram */
     uint32_t hourly_rx_count[24];
     uint32_t hourly_rx_ms[24];
     uint32_t hourly_tx_count[24];
     int      current_hour;
+
+    /* Rolling 60-minute histogram */
+    uint32_t minute_rx_count[60];
+    uint32_t minute_tx_count[60];
+    int      current_minute;
+
+    /* Rolling 30-day histogram */
+    uint32_t daily_rx_count[30];
+    uint32_t daily_tx_count[30];
+    int      current_day;       /* day-of-year % 30 */
 
     /* In-progress */
     uint64_t cor_start_us;
@@ -112,7 +131,6 @@ static void duty_rotate(void)
     time_t now = time(NULL);
     int elapsed = (int)difftime(now, g_ch.duty_bucket_time);
     if (elapsed >= 60) {
-        /* Advance buckets — clear skipped ones */
         int advance = elapsed / 60;
         if (advance > 5) advance = 5;
         for (int i = 0; i < advance; i++) {
@@ -135,7 +153,6 @@ static float duty_pct(void)
     uint64_t sum = 0;
     for (int i = 0; i < 5; i++)
         sum += g_ch.duty_bucket[i];
-    /* Include in-progress COR/PTT time */
     if (g_ch.cor_active) {
         uint64_t now_us = (uint64_t)time(NULL) * 1000000ULL;
         if (now_us > g_ch.cor_start_us)
@@ -146,7 +163,7 @@ static float duty_pct(void)
         if (now_us > g_ch.ptt_start_us)
             sum += (now_us - g_ch.ptt_start_us) / 1000;
     }
-    if (sum > 300000) sum = 300000;  /* cap at 5 min */
+    if (sum > 300000) sum = 300000;
     return (float)sum / 300000.0f * 100.0f;
 }
 
@@ -161,6 +178,39 @@ static void rotate_hour(void)
         g_ch.hourly_rx_ms[hour] = 0;
         g_ch.hourly_tx_count[hour] = 0;
         g_ch.current_hour = hour;
+    }
+}
+
+static void rotate_minute(void)
+{
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    int minute = t->tm_min;
+
+    if (minute != g_ch.current_minute) {
+        /* Clear skipped minutes */
+        int delta = minute - g_ch.current_minute;
+        if (delta < 0) delta += 60;
+        if (delta > 60) delta = 60;
+        for (int i = 0; i < delta; i++) {
+            int m = (g_ch.current_minute + 1 + i) % 60;
+            g_ch.minute_rx_count[m] = 0;
+            g_ch.minute_tx_count[m] = 0;
+        }
+        g_ch.current_minute = minute;
+    }
+}
+
+static void rotate_day(void)
+{
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    int day = t->tm_yday % 30;
+
+    if (day != g_ch.current_day) {
+        g_ch.daily_rx_count[day] = 0;
+        g_ch.daily_tx_count[day] = 0;
+        g_ch.current_day = day;
     }
 }
 
@@ -198,7 +248,7 @@ static int fmt_ago(char *buf, size_t max, time_t then)
 /* ── Persistence ── */
 
 #define STATS_MAGIC 0x52505453  /* "RPTS" */
-#define STATS_VERSION 2
+#define STATS_VERSION 3
 
 typedef struct {
     uint32_t magic;
@@ -213,13 +263,24 @@ typedef struct {
     uint32_t longest_rx_ms;
     uint32_t shortest_rx_ms;
     uint32_t access_denied;
+    uint32_t kerchunk_count;
+    uint32_t dtmf_commands;
+    uint32_t cwid_count;
+    uint32_t pages_sent;
+    uint32_t weather_count;
+    uint32_t nws_alerts;
+    uint32_t phone_calls;
     /* Hourly histogram (24 slots) */
     uint32_t hourly_rx_count[24];
     uint32_t hourly_rx_ms[24];
     uint32_t hourly_tx_count[24];
     int32_t  saved_hour;
+    /* Daily histogram (30 slots) */
+    uint32_t daily_rx_count[30];
+    uint32_t daily_tx_count[30];
+    int32_t  saved_day;
     /* System */
-    uint64_t total_uptime_ms;  /* Accumulated across all sessions */
+    uint64_t total_uptime_ms;
     uint32_t cdr_records;
     uint32_t queue_items;
     uint32_t restarts;
@@ -239,38 +300,46 @@ static void save_stats(void)
         return;
     }
 
-    /* Accumulate this session's uptime into total */
     uint64_t session_ms = (uint64_t)difftime(time(NULL), g_sys.start_time) * 1000;
 
-    stats_file_header_t hdr = {
-        .magic           = STATS_MAGIC,
-        .version         = STATS_VERSION,
-        .rx_time_ms      = g_ch.rx_time_ms,
-        .tx_time_ms      = g_ch.tx_time_ms,
-        .rx_count        = g_ch.rx_count,
-        .tx_count        = g_ch.tx_count,
-        .tot_events      = g_ch.tot_events,
-        .emergency_count = g_ch.emergency_count,
-        .longest_rx_ms   = g_ch.longest_rx_ms,
-        .shortest_rx_ms  = g_ch.shortest_rx_ms,
-        .access_denied   = g_ch.access_denied,
-        .saved_hour      = g_ch.current_hour,
-        .total_uptime_ms = g_sys.total_uptime_ms + session_ms,
-        .cdr_records     = g_sys.cdr_records,
-        .queue_items     = g_sys.queue_items,
-        .restarts        = g_sys.restarts,
-        .user_count      = (uint32_t)g_user_count,
-    };
+    stats_file_header_t hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.magic           = STATS_MAGIC;
+    hdr.version         = STATS_VERSION;
+    hdr.rx_time_ms      = g_ch.rx_time_ms;
+    hdr.tx_time_ms      = g_ch.tx_time_ms;
+    hdr.rx_count        = g_ch.rx_count;
+    hdr.tx_count        = g_ch.tx_count;
+    hdr.tot_events      = g_ch.tot_events;
+    hdr.emergency_count = g_ch.emergency_count;
+    hdr.longest_rx_ms   = g_ch.longest_rx_ms;
+    hdr.shortest_rx_ms  = g_ch.shortest_rx_ms;
+    hdr.access_denied   = g_ch.access_denied;
+    hdr.kerchunk_count  = g_ch.kerchunk_count;
+    hdr.dtmf_commands   = g_ch.dtmf_commands;
+    hdr.cwid_count      = g_ch.cwid_count;
+    hdr.pages_sent      = g_ch.pages_sent;
+    hdr.weather_count   = g_ch.weather_count;
+    hdr.nws_alerts      = g_ch.nws_alerts;
+    hdr.phone_calls     = g_ch.phone_calls;
+    hdr.saved_hour      = g_ch.current_hour;
+    hdr.saved_day       = g_ch.current_day;
+    hdr.total_uptime_ms = g_sys.total_uptime_ms + session_ms;
+    hdr.cdr_records     = g_sys.cdr_records;
+    hdr.queue_items     = g_sys.queue_items;
+    hdr.restarts        = g_sys.restarts;
+    hdr.user_count      = (uint32_t)g_user_count;
     memcpy(hdr.hourly_rx_count, g_ch.hourly_rx_count, sizeof(hdr.hourly_rx_count));
     memcpy(hdr.hourly_rx_ms, g_ch.hourly_rx_ms, sizeof(hdr.hourly_rx_ms));
     memcpy(hdr.hourly_tx_count, g_ch.hourly_tx_count, sizeof(hdr.hourly_tx_count));
+    memcpy(hdr.daily_rx_count, g_ch.daily_rx_count, sizeof(hdr.daily_rx_count));
+    memcpy(hdr.daily_tx_count, g_ch.daily_tx_count, sizeof(hdr.daily_tx_count));
 
     fwrite(&hdr, sizeof(hdr), 1, fp);
     fwrite(g_users, sizeof(user_stats_t), (size_t)g_user_count, fp);
     fclose(fp);
 
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "stats saved to %s",
-                g_persist_file);
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "stats saved to %s", g_persist_file);
 }
 
 static void load_stats(void)
@@ -285,7 +354,7 @@ static void load_stats(void)
         hdr.magic != STATS_MAGIC || hdr.version != STATS_VERSION) {
         fclose(fp);
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                    "invalid stats file, starting fresh");
+                    "invalid stats file (version mismatch), starting fresh");
         return;
     }
 
@@ -298,10 +367,20 @@ static void load_stats(void)
     g_ch.longest_rx_ms   = hdr.longest_rx_ms;
     g_ch.shortest_rx_ms  = hdr.shortest_rx_ms;
     g_ch.access_denied   = hdr.access_denied;
+    g_ch.kerchunk_count  = hdr.kerchunk_count;
+    g_ch.dtmf_commands   = hdr.dtmf_commands;
+    g_ch.cwid_count      = hdr.cwid_count;
+    g_ch.pages_sent      = hdr.pages_sent;
+    g_ch.weather_count   = hdr.weather_count;
+    g_ch.nws_alerts      = hdr.nws_alerts;
+    g_ch.phone_calls     = hdr.phone_calls;
     g_ch.current_hour    = hdr.saved_hour;
+    g_ch.current_day     = hdr.saved_day;
     memcpy(g_ch.hourly_rx_count, hdr.hourly_rx_count, sizeof(g_ch.hourly_rx_count));
     memcpy(g_ch.hourly_rx_ms, hdr.hourly_rx_ms, sizeof(g_ch.hourly_rx_ms));
     memcpy(g_ch.hourly_tx_count, hdr.hourly_tx_count, sizeof(g_ch.hourly_tx_count));
+    memcpy(g_ch.daily_rx_count, hdr.daily_rx_count, sizeof(g_ch.daily_rx_count));
+    memcpy(g_ch.daily_tx_count, hdr.daily_tx_count, sizeof(g_ch.daily_tx_count));
     g_sys.total_uptime_ms = hdr.total_uptime_ms;
     g_sys.cdr_records    = hdr.cdr_records;
     g_sys.queue_items    = hdr.queue_items;
@@ -340,6 +419,10 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
     g_ch.rx_count++;
     duty_add_ms((uint32_t)dur_ms);
 
+    /* Kerchunk detection: key-up < 1 second */
+    if (dur_ms < 1000)
+        g_ch.kerchunk_count++;
+
     if (dur_ms > g_ch.longest_rx_ms)
         g_ch.longest_rx_ms = (uint32_t)dur_ms;
     if (g_ch.shortest_rx_ms == 0 || dur_ms < g_ch.shortest_rx_ms)
@@ -348,6 +431,12 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
     rotate_hour();
     g_ch.hourly_rx_count[g_ch.current_hour]++;
     g_ch.hourly_rx_ms[g_ch.current_hour] += (uint32_t)dur_ms;
+
+    rotate_minute();
+    g_ch.minute_rx_count[g_ch.current_minute]++;
+
+    rotate_day();
+    g_ch.daily_rx_count[g_ch.current_day]++;
 
     if (g_ch.current_user_id > 0) {
         user_stats_t *u = find_or_create_user(g_ch.current_user_id);
@@ -400,6 +489,10 @@ static void on_queue_complete(const kerchevt_t *evt, void *ud)
     g_ch.tx_count++;
     rotate_hour();
     g_ch.hourly_tx_count[g_ch.current_hour]++;
+    rotate_minute();
+    g_ch.minute_tx_count[g_ch.current_minute]++;
+    rotate_day();
+    g_ch.daily_tx_count[g_ch.current_day]++;
 }
 
 static void on_recording_saved(const kerchevt_t *evt, void *ud)
@@ -408,6 +501,31 @@ static void on_recording_saved(const kerchevt_t *evt, void *ud)
     if (evt->recording.direction &&
         strcmp(evt->recording.direction, "RX") == 0)
         g_sys.cdr_records++;
+}
+
+static void on_announcement(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    const char *src = evt->announcement.source;
+    if (!src) return;
+
+    if (strcmp(src, "cwid") == 0)
+        g_ch.cwid_count++;
+    else if (strcmp(src, "pocsag") == 0 || strcmp(src, "flex") == 0 ||
+             strcmp(src, "aprs") == 0)
+        g_ch.pages_sent++;
+    else if (strcmp(src, "weather") == 0)
+        g_ch.weather_count++;
+    else if (strcmp(src, "nws") == 0)
+        g_ch.nws_alerts++;
+    else if (strcmp(src, "freeswitch") == 0)
+        g_ch.phone_calls++;
+}
+
+static void on_dtmf_end(const kerchevt_t *evt, void *ud)
+{
+    (void)evt; (void)ud;
+    g_ch.dtmf_commands++;
 }
 
 static void on_shutdown(const kerchevt_t *evt, void *ud)
@@ -429,6 +547,8 @@ static int stats_load(kerchunk_core_t *core)
     core->subscribe(KERCHEVT_TIMEOUT,           on_timeout, NULL);
     core->subscribe(KERCHEVT_QUEUE_COMPLETE,    on_queue_complete, NULL);
     core->subscribe(KERCHEVT_RECORDING_SAVED,   on_recording_saved, NULL);
+    core->subscribe(KERCHEVT_ANNOUNCEMENT,      on_announcement, NULL);
+    core->subscribe(KERCHEVT_DTMF_END,          on_dtmf_end, NULL);
     core->subscribe(KERCHEVT_SHUTDOWN,          on_shutdown, NULL);
     return 0;
 }
@@ -443,7 +563,6 @@ static int stats_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "stats", "persist_file");
     if (v) snprintf(g_persist_file, sizeof(g_persist_file), "%s", v);
 
-    /* Initialize fresh — but preserve start_time across reloads */
     time_t saved_start = g_sys.start_time;
     uint64_t saved_uptime = g_sys.total_uptime_ms;
     memset(&g_ch, 0, sizeof(g_ch));
@@ -461,9 +580,10 @@ static int stats_configure(const kerchunk_config_t *cfg)
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
     g_ch.current_hour = t->tm_hour;
+    g_ch.current_minute = t->tm_min;
+    g_ch.current_day = t->tm_yday % 30;
     g_ch.duty_bucket_time = now;
 
-    /* Restore from disk if persistence is on */
     load_stats();
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
@@ -485,6 +605,8 @@ static void stats_unload(void)
     g_core->unsubscribe(KERCHEVT_TIMEOUT,           on_timeout);
     g_core->unsubscribe(KERCHEVT_QUEUE_COMPLETE,    on_queue_complete);
     g_core->unsubscribe(KERCHEVT_RECORDING_SAVED,   on_recording_saved);
+    g_core->unsubscribe(KERCHEVT_ANNOUNCEMENT,      on_announcement);
+    g_core->unsubscribe(KERCHEVT_DTMF_END,          on_dtmf_end);
     g_core->unsubscribe(KERCHEVT_SHUTDOWN,          on_shutdown);
 }
 
@@ -507,6 +629,8 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
         time_t now = time(NULL);
         struct tm *t = localtime(&now);
         g_ch.current_hour = t->tm_hour;
+        g_ch.current_minute = t->tm_min;
+        g_ch.current_day = t->tm_yday % 30;
         resp_bool(r, "ok", 1);
         resp_str(r, "action", "reset");
         return 0;
@@ -545,9 +669,9 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
     uint64_t uptime_ms = (uint64_t)difftime(now, g_sys.start_time) * 1000;
     if (uptime_ms == 0) uptime_ms = 1;
     uint64_t total_ms = g_sys.total_uptime_ms + uptime_ms;
-    float duty = duty_pct();  /* rolling 5-minute window */
+    float duty = duty_pct();
 
-    /* JSON-only top-level fields (text uses custom dashboard below) */
+    /* JSON top-level */
     {
         char jfrag[128];
         snprintf(jfrag, sizeof(jfrag),
@@ -557,20 +681,41 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
             g_sys.restarts);
         resp_json_raw(r, jfrag);
     }
-    char ch_frag[512];
-    snprintf(ch_frag, sizeof(ch_frag),
-        "\"channel\":{"
-        "\"rx_count\":%u,\"rx_time_ms\":%llu,"
-        "\"tx_count\":%u,\"tx_time_ms\":%llu,"
-        "\"duty_pct\":%.1f,"
-        "\"longest_rx_ms\":%u,\"shortest_rx_ms\":%u,"
-        "\"tot_events\":%u,\"emergency_count\":%u,\"access_denied\":%u}",
-        g_ch.rx_count, (unsigned long long)g_ch.rx_time_ms,
-        g_ch.tx_count, (unsigned long long)g_ch.tx_time_ms,
-        duty,
-        g_ch.longest_rx_ms, g_ch.shortest_rx_ms,
-        g_ch.tot_events, g_ch.emergency_count, g_ch.access_denied);
-    resp_json_raw(r, ch_frag);
+
+    /* JSON: channel */
+    {
+        uint32_t avg_rx = g_ch.rx_count > 0 ? (uint32_t)(g_ch.rx_time_ms / g_ch.rx_count) : 0;
+        /* Find peak hour */
+        uint32_t peak_val = 0;
+        int peak_hour = 0;
+        for (int i = 0; i < 24; i++) {
+            uint32_t v = g_ch.hourly_rx_count[i] + g_ch.hourly_tx_count[i];
+            if (v > peak_val) { peak_val = v; peak_hour = i; }
+        }
+
+        char ch_frag[768];
+        snprintf(ch_frag, sizeof(ch_frag),
+            "\"channel\":{"
+            "\"rx_count\":%u,\"rx_time_ms\":%llu,"
+            "\"tx_count\":%u,\"tx_time_ms\":%llu,"
+            "\"duty_pct\":%.1f,\"avg_rx_ms\":%u,"
+            "\"longest_rx_ms\":%u,\"shortest_rx_ms\":%u,"
+            "\"peak_hour\":%d,"
+            "\"kerchunk_count\":%u,"
+            "\"tot_events\":%u,\"emergency_count\":%u,\"access_denied\":%u,"
+            "\"dtmf_commands\":%u,\"cwid_count\":%u,\"pages_sent\":%u,"
+            "\"weather_count\":%u,\"nws_alerts\":%u,\"phone_calls\":%u}",
+            g_ch.rx_count, (unsigned long long)g_ch.rx_time_ms,
+            g_ch.tx_count, (unsigned long long)g_ch.tx_time_ms,
+            duty, avg_rx,
+            g_ch.longest_rx_ms, g_ch.shortest_rx_ms,
+            peak_hour,
+            g_ch.kerchunk_count,
+            g_ch.tot_events, g_ch.emergency_count, g_ch.access_denied,
+            g_ch.dtmf_commands, g_ch.cwid_count, g_ch.pages_sent,
+            g_ch.weather_count, g_ch.nws_alerts, g_ch.phone_calls);
+        resp_json_raw(r, ch_frag);
+    }
 
     /* JSON: hourly histogram */
     rotate_hour();
@@ -584,6 +729,34 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
             "{\"hour\":%d,\"rx\":%u,\"tx\":%u}",
             h, g_ch.hourly_rx_count[h], g_ch.hourly_tx_count[h]);
         resp_json_raw(r, hfrag);
+    }
+    resp_json_raw(r, "]");
+
+    /* JSON: minutely histogram */
+    rotate_minute();
+    resp_json_raw(r, ",\"minutely\":[");
+    for (int i = 0; i < 60; i++) {
+        int m = (tnow->tm_min + 1 + i) % 60;
+        if (i > 0) resp_json_raw(r, ",");
+        char mfrag[64];
+        snprintf(mfrag, sizeof(mfrag),
+            "{\"min\":%d,\"rx\":%u,\"tx\":%u}",
+            m, g_ch.minute_rx_count[m], g_ch.minute_tx_count[m]);
+        resp_json_raw(r, mfrag);
+    }
+    resp_json_raw(r, "]");
+
+    /* JSON: daily histogram */
+    rotate_day();
+    resp_json_raw(r, ",\"daily\":[");
+    for (int i = 0; i < 30; i++) {
+        int d = (g_ch.current_day + 1 + i) % 30;
+        if (i > 0) resp_json_raw(r, ",");
+        char dfrag[64];
+        snprintf(dfrag, sizeof(dfrag),
+            "{\"day\":%d,\"rx\":%u,\"tx\":%u}",
+            i, g_ch.daily_rx_count[d], g_ch.daily_tx_count[d]);
+        resp_json_raw(r, dfrag);
     }
     resp_json_raw(r, "]");
 
@@ -607,8 +780,10 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
     {
         char sfrag[128];
         snprintf(sfrag, sizeof(sfrag),
-            ",\"system\":{\"queue_items\":%u,\"cdr_records\":%u}",
-            g_sys.queue_items, g_sys.cdr_records);
+            ",\"system\":{\"queue_items\":%u,\"cdr_records\":%u,"
+            "\"nws_alerts\":%u,\"phone_calls\":%u}",
+            g_sys.queue_items, g_sys.cdr_records,
+            g_ch.nws_alerts, g_ch.phone_calls);
         resp_json_raw(r, sfrag);
     }
     r->jfirst = 0;
@@ -657,12 +832,26 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
             avg, shortest, longest);
         resp_text_raw(r, line);
     }
-    if (g_ch.tot_events > 0) {
-        char line[64];
-        snprintf(line, sizeof(line), "  TOT events:     %u\n", g_ch.tot_events);
+    /* Extra counters */
+    {
+        char line[256];
+        snprintf(line, sizeof(line),
+            "  Kerchunks:      %u\n"
+            "  DTMF commands:  %u\n"
+            "  CW IDs:         %u\n"
+            "  Pages sent:     %u\n",
+            g_ch.kerchunk_count, g_ch.dtmf_commands,
+            g_ch.cwid_count, g_ch.pages_sent);
         resp_text_raw(r, line);
     }
-    /* Text: 24h histogram (only if data exists) */
+    if (g_ch.tot_events > 0 || g_ch.emergency_count > 0) {
+        char line[96];
+        snprintf(line, sizeof(line), "  TOT events:     %u  Emergencies: %u\n",
+                 g_ch.tot_events, g_ch.emergency_count);
+        resp_text_raw(r, line);
+    }
+
+    /* Text: 24h histogram */
     {
         uint32_t max_hr = 0;
         int has_data = 0;
@@ -739,15 +928,14 @@ usage:
         "    Show full statistics dashboard: uptime, channel activity,\n"
         "    24-hour histogram, top users, and system counters.\n\n"
         "  stats user <name>\n"
-        "    Show per-user statistics for a specific user.\n"
-        "    name: case-insensitive username match\n\n"
+        "    Show per-user statistics for a specific user.\n\n"
         "  stats reset\n"
         "    Reset all statistics to zero (preserves restart count).\n\n"
         "  stats save\n"
         "    Force-save statistics to disk immediately.\n\n"
-        "    Tracks RX/TX counts, durations, duty cycle (rolling 5-min),\n"
-        "    per-user TX stats, 24-hour activity histogram, TOT events,\n"
-        "    and emergency activations. Persists to disk on shutdown.\n\n"
+        "Tracks: RX/TX counts, durations, duty cycle (5-min rolling),\n"
+        "kerchunks, DTMF commands, CW IDs, pages sent, weather/NWS,\n"
+        "phone calls, per-user stats, 60-min/24h/30-day histograms.\n\n"
         "Config: [stats] persist, persist_file\n");
     resp_str(r, "error", "usage: stats [user <name>|reset|save]");
     resp_finish(r);
@@ -761,7 +949,7 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
 
 static kerchunk_module_def_t mod_stats = {
     .name             = "mod_stats",
-    .version          = "1.0.0",
+    .version          = "2.0.0",
     .description      = "Repeater statistics and metrics",
     .load             = stats_load,
     .configure        = stats_configure,
