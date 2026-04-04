@@ -15,6 +15,8 @@
 
 static kerchunk_core_t *g_core;
 
+static int g_enabled = 1;          /* master enable (default on for compat) */
+
 /* Default courtesy tone: 800 Hz, 100ms */
 static int g_default_freq = 800;
 static int g_default_dur  = 100;
@@ -27,6 +29,7 @@ static int g_courtesy_pending;  /* 1 while our own tone is in the queue */
 
 static void queue_tone(const char *reason)
 {
+    if (!g_enabled) return;
     g_core->queue_silence(50, KERCHUNK_PRI_NORMAL);
     g_core->queue_tone(g_default_freq, g_default_dur, g_default_amp, KERCHUNK_PRI_NORMAL);
     g_courtesy_pending = 1;
@@ -80,6 +83,9 @@ static int courtesy_load(kerchunk_core_t *core)
 
 static int courtesy_configure(const kerchunk_config_t *cfg)
 {
+    const char *en = kerchunk_config_get(cfg, "courtesy", "enabled");
+    g_enabled = (!en || strcmp(en, "off") != 0);  /* default on, "off" disables */
+
     g_default_freq = kerchunk_config_get_int(cfg, "courtesy", "freq", 800);
     g_default_dur  = kerchunk_config_get_duration_ms(cfg, "courtesy", "duration", 100);
     g_default_amp  = (int16_t)kerchunk_config_get_int(cfg, "courtesy", "amplitude", 4000);
@@ -87,6 +93,8 @@ static int courtesy_configure(const kerchunk_config_t *cfg)
     const char *qc = kerchunk_config_get(cfg, "courtesy", "queue_courtesy");
     g_queue_courtesy = (qc && strcmp(qc, "on") == 0);
 
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "courtesy tone %s (%d Hz, %d ms)",
+                g_enabled ? "enabled" : "disabled", g_default_freq, g_default_dur);
     return 0;
 }
 
