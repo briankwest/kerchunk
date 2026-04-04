@@ -56,6 +56,7 @@ static uint32_t g_virtual_user_id;
 static int      g_rf_rx_active;       /* COR is asserted */
 static int      g_poc_ptt_active;     /* a PoC client is transmitting */
 static uint32_t g_poc_ptt_speaker;    /* who holds the floor */
+static int      g_audio_frame_count;  /* frames received this PTT session */
 
 /* ── Resampling ────────────────────────────────────────────────── */
 
@@ -80,6 +81,22 @@ static void upsample_8_to_48(const int16_t *in, int in_count,
             out[i] = in[in_count - 1];
         }
     }
+}
+
+/* ── libpoc log bridge ─────────────────────────────────────────── */
+
+static void poc_log_bridge(int level, const char *msg, void *ud)
+{
+    (void)ud;
+    int klevel;
+    switch (level) {
+    case POC_LOG_ERROR:   klevel = KERCHUNK_LOG_ERROR; break;
+    case POC_LOG_WARNING: klevel = KERCHUNK_LOG_WARNING; break;
+    case POC_LOG_INFO:    klevel = KERCHUNK_LOG_INFO; break;
+    case POC_LOG_DEBUG:   klevel = KERCHUNK_LOG_DEBUG; break;
+    default:              klevel = KERCHUNK_LOG_DEBUG; break;
+    }
+    g_core->log(klevel, LOG_MOD, "%s", msg);
 }
 
 /* ── Server callbacks ──────────────────────────────────────────── */
@@ -110,6 +127,9 @@ static bool poc_on_ptt_request(poc_server_t *srv, uint32_t uid,
 {
     (void)srv; (void)ud;
 
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "PTT request from user %u group %u (rf_busy=%d)", uid, gid, g_rf_rx_active);
+
     /* Deny if RF channel is busy and this is the bridge group */
     if (gid == g_rf_bridge_group && g_rf_rx_active) {
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
@@ -119,6 +139,9 @@ static bool poc_on_ptt_request(poc_server_t *srv, uint32_t uid,
 
     g_poc_ptt_active = 1;
     g_poc_ptt_speaker = uid;
+    g_audio_frame_count = 0;
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "PTT granted to user %u on group %u", uid, gid);
     return true;
 }
 
@@ -126,6 +149,8 @@ static void poc_on_ptt_end(poc_server_t *srv, uint32_t uid,
                            uint32_t gid, void *ud)
 {
     (void)srv; (void)gid; (void)ud;
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "PTT end from user %u (%d audio frames received)", uid, g_audio_frame_count);
     if (uid == g_poc_ptt_speaker) {
         g_poc_ptt_active = 0;
         g_poc_ptt_speaker = 0;
@@ -136,10 +161,22 @@ static void poc_on_audio(poc_server_t *srv, uint32_t speaker_id,
                          uint32_t gid, const int16_t *pcm,
                          int n_samples, void *ud)
 {
-    (void)srv; (void)speaker_id; (void)ud;
+    (void)srv; (void)ud;
 
-    if (!g_poc_to_rf || gid != g_rf_bridge_group)
+    g_audio_frame_count++;
+    if (g_audio_frame_count <= 3 || (g_audio_frame_count % 50) == 0)
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "audio frame #%d from user %u group %u (%d samples) poc_to_rf=%d bridge_group=%u",
+                    g_audio_frame_count, speaker_id, gid, n_samples,
+                    g_poc_to_rf, g_rf_bridge_group);
+
+    if (!g_poc_to_rf || gid != g_rf_bridge_group) {
+        if (g_audio_frame_count <= 3)
+            g_core->log(KERCHUNK_LOG_WARNING, LOG_MOD,
+                        "audio DROPPED: poc_to_rf=%d gid=%u bridge=%u",
+                        g_poc_to_rf, gid, g_rf_bridge_group);
         return;
+    }
 
     /* Upsample 8kHz → 48kHz */
     int16_t upsampled[960];
@@ -483,6 +520,16 @@ static int mod_configure(const kerchunk_config_t *cfg)
 
     g_enabled = g_core->config_get_int("poc", "enabled", 1);
     if (!g_enabled) {
+        /* Tear down if previously running */
+        if (g_poll_timer >= 0) {
+            g_core->timer_cancel(g_poll_timer);
+            g_poll_timer = -1;
+        }
+        if (g_srv) {
+            poc_server_stop(g_srv);
+            poc_server_destroy(g_srv);
+            g_srv = NULL;
+        }
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "disabled by config");
         return 0;
     }
@@ -504,6 +551,21 @@ static int mod_configure(const kerchunk_config_t *cfg)
     else g_tls_cert[0] = '\0';
     if (key) snprintf(g_tls_key, sizeof(g_tls_key), "%s", key);
     else g_tls_key[0] = '\0';
+
+    /* Tear down existing server on reconfigure (e.g. SIGHUP reload) */
+    if (g_poll_timer >= 0) {
+        g_core->timer_cancel(g_poll_timer);
+        g_poll_timer = -1;
+    }
+    if (g_srv) {
+        poc_server_stop(g_srv);
+        poc_server_destroy(g_srv);
+        g_srv = NULL;
+    }
+
+    /* Wire libpoc logging into kerchunk logger */
+    poc_set_log_callback(poc_log_bridge, NULL);
+    poc_set_log_level(POC_LOG_DEBUG);
 
     /* Create server */
     poc_server_config_t scfg = {
