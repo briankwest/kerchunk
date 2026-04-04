@@ -4,6 +4,10 @@
 ; Copy to kerchunk.conf and edit for your installation.
 ; Lines starting with ; are comments. All values shown are defaults
 ; unless noted otherwise.
+;
+; Duration values accept: 10s, 5m, 1h, 1h30m, 500ms, or compound forms.
+; Bare numbers (no suffix) are treated as raw milliseconds for backwards
+; compatibility — use a suffix for clarity (e.g. 300s not 300).
 ; ============================================================================
 
 ; ----------------------------------------------------------------------------
@@ -169,11 +173,16 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; persist_file = /var/lib/kerchunk/stats.dat  ; Binary file for persistence
 
 ; ----------------------------------------------------------------------------
-; Courtesy tone (boop after COR drop)
+; Courtesy tone (short beep after user unkeys)
+;
+; Plays a tone on every COR drop to confirm the repeater heard the
+; transmission. Set enabled = off to silence it. The tone is queued
+; through the normal audio path so it appears in TX recordings.
 ; ----------------------------------------------------------------------------
 [courtesy]
+; enabled = off                  ; on (default) | off — disable the courtesy beep
 freq = 800                       ; Tone frequency (Hz)
-duration = 100                   ; Tone duration (ms)
+duration = 100ms                 ; Tone duration
 amplitude = 4000                 ; Tone amplitude (0-32767)
 ; queue_courtesy = off            ; Also beep after queue playback (CW ID, weather, etc.)
 
@@ -268,11 +277,15 @@ announce_wind = on               ; Include wind speed/direction
 ; Records every RX and TX transmission to timestamped WAV files.
 ; Files: recordings/YYYYMMDD_HHMMSS_RX_username.wav
 ; Also maintains recordings/activity.log for FCC 95.1705 compliance.
+;
+; max_duration uses standard duration format: 5m, 300s, 300000ms, etc.
+; Bare "300" = 300 milliseconds (not seconds!) — always use a suffix.
+; Hard cap: 5 minutes (300s).
 ; ----------------------------------------------------------------------------
 [recording]
 enabled = on                     ; on | off
 directory = /var/lib/kerchunk/recordings  ; Output directory
-max_duration = 5m                ; Max recording length (5 min)
+max_duration = 5m                ; Max recording length (5m = 300s)
 
 ; ----------------------------------------------------------------------------
 ; Time announcements
