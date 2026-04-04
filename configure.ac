@@ -85,6 +85,13 @@ if test "x$have_libflex" = "xyes"; then
   AC_DEFINE([HAVE_LIBFLEX], [1], [Have libflex])
 fi
 
+# Optional: libpoc
+PKG_CHECK_MODULES([LIBPOC], [libpoc], [have_libpoc=yes], [have_libpoc=no])
+AM_CONDITIONAL([HAVE_LIBPOC], [test "x$have_libpoc" = "xyes"])
+if test "x$have_libpoc" = "xyes"; then
+  AC_DEFINE([HAVE_LIBPOC], [1], [Have libpoc])
+fi
+
 # Optional: libnemo_normalize
 PKG_CHECK_MODULES([NEMO], [nemo_normalize], [have_nemo=yes], [have_nemo=no])
 AM_CONDITIONAL([HAVE_NEMO], [test "x$have_nemo" = "xyes"])

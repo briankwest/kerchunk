@@ -155,7 +155,7 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; tls_cert =                    ; Path to TLS certificate (PEM). Enables HTTPS.
 ; tls_key =                     ; Path to TLS private key (PEM). Required with tls_cert.
 ; ptt_enabled = off              ; Enable WebSocket push-to-talk
-; ptt_max_duration = 30          ; Max PTT duration (seconds)
+; ptt_max_duration = 30s         ; Max PTT duration
 ; ptt_priority = 2               ; Queue priority for PTT audio
 ; registration_enabled = off     ; Enable public user self-registration
 
@@ -201,7 +201,7 @@ login_timeout = 30m              ; DTMF login session timeout
 enabled = on                     ; on | off
 voicemail_dir = /var/lib/kerchunk/voicemail
 max_messages = 20                ; Max messages per user
-max_duration = 60                ; Max recording duration (seconds)
+max_duration = 60s               ; Max recording duration
 
 ; ----------------------------------------------------------------------------
 ; DTMF command processing
@@ -272,7 +272,7 @@ announce_wind = on               ; Include wind speed/direction
 [recording]
 enabled = on                     ; on | off
 directory = /var/lib/kerchunk/recordings  ; Output directory
-max_duration = 300               ; Max recording length (seconds, 5 min)
+max_duration = 5m                ; Max recording length (5 min)
 
 ; ----------------------------------------------------------------------------
 ; Time announcements
@@ -303,7 +303,7 @@ timeout = 30m                    ; Auto-deactivate timeout
 ; ----------------------------------------------------------------------------
 [parrot]
 ; enabled = on                   ; on | off (default: on)
-max_duration = 10                ; Max recording length (seconds, capped at 30)
+max_duration = 10s               ; Max recording length (capped at 30s)
 
 ; ----------------------------------------------------------------------------
 ; Call Detail Records (CDR)
