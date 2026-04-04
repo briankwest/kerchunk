@@ -114,6 +114,12 @@ cwid_interval = 600000           ; CW ID interval (ms, 10 min)
 cwid_wpm = 20                    ; Morse code words per minute
 cwid_freq = 800                  ; CW tone frequency (Hz)
 
+; TX tone for voice ID announcement (announced via TTS, not encoded on TX).
+; Set ONE of these. pl_tone overrides tx_ctcss/tx_dcs if both are set.
+; tx_ctcss = 1318                ; CTCSS freq x10 — announces "PL 131.8"
+; tx_dcs = 23                    ; DCS code — announces "DCS 023"
+; pl_tone = PL 131.8             ; Explicit override string for voice ID
+
 ; Quiet hours: suppress CW ID and voice ID during this window.
 ; Uses 24-hour local time. Wraps midnight (e.g., 22-6 = 10PM-6AM).
 ; Omit or set to -1 to disable (24/7 operation).

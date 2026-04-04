@@ -633,8 +633,11 @@ Morse CW ID + voice ID ("WRDP519 repeater, 462.550, PL 131.8") via TTS. Sends im
 | `cwid_interval` | ms | `600000` | ID interval (capped at 900000) |
 | `cwid_wpm` | int | `20` | Words per minute (min 5) |
 | `cwid_freq` | Hz | `800` | Tone frequency |
+| `tx_ctcss` | int | -- | CTCSS freq x10 (e.g., 1318 = 131.8 Hz). Announced in voice ID as "PL 131.8" |
+| `tx_dcs` | int | -- | DCS code (e.g., 23). Announced in voice ID as "DCS 023" |
+| `pl_tone` | string | -- | Explicit PL/DCS string for voice ID (overrides tx_ctcss/tx_dcs) |
 
-Config section: `[repeater]`. Callsign from `[general] callsign`. Frequency from `[general] frequency`.
+Config section: `[repeater]`. Callsign from `[general] callsign`. Frequency from `[general] frequency`. Set `voice_id = on` and one of `tx_ctcss`, `tx_dcs`, or `pl_tone` to announce the access tone after the CW ID.
 
 ### mod_courtesy — Courtesy Tone
 
