@@ -187,6 +187,148 @@ void test_integ_cwid_module(void)
     }
     test_end();
 
+    /* ── on_call mode tests ── */
+
+    /* Reconfigure for on_call mode */
+    kerchunk_config_set(cfg, "repeater", "cwid_mode", "on_call");
+    kerchunk_config_set(cfg, "repeater", "cwid_interval", "600000");
+    kerchunk_config_set(cfg, "repeater", "quiet_start", "-1");
+    kerchunk_config_set(cfg, "repeater", "quiet_end", "-1");
+    mod_cwid.load(&g_mock_core);
+    cwid_configure(cfg);
+
+    /* 15. on_call: starts in IDLE, no schedule timer */
+    test_begin("cwid: on_call starts in IDLE");
+    test_assert(g_mode == CWID_MODE_ON_CALL, "mode not on_call");
+    test_assert(g_oc_state == OC_IDLE, "state not IDLE");
+    test_assert(g_sched_id < 0, "schedule should not exist in on_call mode");
+    test_end();
+
+    /* 16. on_call: first key-up transitions IDLE→ACTIVE with pending */
+    test_begin("cwid: on_call IDLE→ACTIVE on first keyup");
+    g_mock.receiving = 1;
+    g_mock.buffer_calls = 0;
+    {
+        kerchevt_t e = {
+            .type = KERCHEVT_STATE_CHANGE,
+            .state = { .old_state = 0, .new_state = 1 },
+        };
+        kerchevt_fire(&e);
+    }
+    test_assert(g_oc_state == OC_ACTIVE, "state not ACTIVE");
+    test_assert(g_pending == 1, "pending not set on initial keyup");
+    test_assert(g_oc_timer_id >= 0, "repeating timer not started");
+    test_assert(g_mock.buffer_calls == 0, "should not ID while channel busy");
+    test_end();
+
+    /* 17. on_call: unkey sends pending ID, transitions to TAIL */
+    test_begin("cwid: on_call ACTIVE→TAIL sends initial ID");
+    g_mock.receiving = 0;
+    g_mock.transmitting = 0;
+    g_mock.buffer_calls = 0;
+    {
+        kerchevt_t e = {
+            .type = KERCHEVT_STATE_CHANGE,
+            .state = { .old_state = 1, .new_state = 0 },
+        };
+        kerchevt_fire(&e);
+    }
+    test_assert(g_oc_state == OC_TAIL, "state not TAIL");
+    test_assert(g_mock.buffer_calls >= 1, "initial CW ID not sent");
+    test_assert(g_pending == 0, "pending not cleared");
+    test_end();
+
+    /* 18. on_call: rekey from TAIL → ACTIVE without setting pending */
+    test_begin("cwid: on_call TAIL→ACTIVE no pending on rekey");
+    g_mock.receiving = 1;
+    g_mock.buffer_calls = 0;
+    {
+        kerchevt_t e = {
+            .type = KERCHEVT_STATE_CHANGE,
+            .state = { .old_state = 0, .new_state = 1 },
+        };
+        kerchevt_fire(&e);
+    }
+    test_assert(g_oc_state == OC_ACTIVE, "state not ACTIVE");
+    test_assert(g_pending == 0, "pending should NOT be set on rekey from TAIL");
+    test_end();
+
+    /* 19. on_call: unkey after rekey does NOT send CW ID */
+    test_begin("cwid: on_call no ID on normal unkey");
+    g_mock.receiving = 0;
+    g_mock.transmitting = 0;
+    g_mock.buffer_calls = 0;
+    {
+        kerchevt_t e = {
+            .type = KERCHEVT_STATE_CHANGE,
+            .state = { .old_state = 1, .new_state = 0 },
+        };
+        kerchevt_fire(&e);
+    }
+    test_assert(g_oc_state == OC_TAIL, "state not TAIL");
+    test_assert(g_mock.buffer_calls == 0, "CW ID should NOT fire on every unkey");
+    test_end();
+
+    /* 20. on_call: repeating timer sets pending during ACTIVE */
+    test_begin("cwid: on_call timer sets pending during conversation");
+    /* Re-enter ACTIVE */
+    g_mock.receiving = 1;
+    {
+        kerchevt_t e = {
+            .type = KERCHEVT_STATE_CHANGE,
+            .state = { .old_state = 0, .new_state = 1 },
+        };
+        kerchevt_fire(&e);
+    }
+    test_assert(g_oc_state == OC_ACTIVE, "state not ACTIVE");
+    /* Simulate timer firing while channel is busy */
+    g_mock.buffer_calls = 0;
+    oc_active_tick(NULL);
+    test_assert(g_pending == 1, "timer should set pending when busy");
+    test_assert(g_mock.buffer_calls == 0, "should not send while receiving");
+    test_end();
+
+    /* 21. on_call: pending from timer sent on next unkey */
+    test_begin("cwid: on_call timer-pending sent on unkey");
+    g_mock.receiving = 0;
+    g_mock.transmitting = 0;
+    g_mock.buffer_calls = 0;
+    {
+        kerchevt_t e = {
+            .type = KERCHEVT_STATE_CHANGE,
+            .state = { .old_state = 1, .new_state = 0 },
+        };
+        kerchevt_fire(&e);
+    }
+    test_assert(g_mock.buffer_calls >= 1, "timer-pending CW ID not sent");
+    test_assert(g_pending == 0, "pending not cleared");
+    test_end();
+
+    /* 22. on_call: tail timer fires → final ID → IDLE */
+    test_begin("cwid: on_call tail timer final ID");
+    g_mock.buffer_calls = 0;
+    g_mock.receiving = 0;
+    g_mock.transmitting = 0;
+    oc_tail_expire(NULL);
+    test_assert(g_oc_state == OC_IDLE, "state not IDLE after tail expire");
+    test_assert(g_mock.buffer_calls >= 1, "final CW ID not sent");
+    test_end();
+
+    /* 23. on_call: stays silent in IDLE (no spurious IDs) */
+    test_begin("cwid: on_call silent when idle");
+    g_mock.buffer_calls = 0;
+    {
+        /* Fire a tick — nothing should happen */
+        kerchevt_t e = {
+            .type = KERCHEVT_STATE_CHANGE,
+            .state = { .old_state = 0, .new_state = 0 },
+        };
+        kerchevt_fire(&e);
+    }
+    test_assert(g_oc_state == OC_IDLE, "state should remain IDLE");
+    test_assert(g_mock.buffer_calls == 0, "no CW ID in IDLE");
+    test_end();
+
     mod_cwid.unload();
     kerchevt_shutdown();
     kerchunk_config_destroy(cfg);
