@@ -246,9 +246,9 @@ static void send_cwid(void)
     plcode_cwid_enc_destroy(enc);
 
     if (pos > 0) {
-        g_core->queue_silence(200, KERCHUNK_PRI_IDENT);
-        g_core->queue_audio_buffer(buf, pos, KERCHUNK_PRI_IDENT, 0);
-        g_core->queue_silence(100, KERCHUNK_PRI_IDENT);
+        g_core->queue_silence(200, KERCHUNK_PRI_LOW);
+        g_core->queue_audio_buffer(buf, pos, KERCHUNK_PRI_LOW, 0);
+        g_core->queue_silence(100, KERCHUNK_PRI_LOW);
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "CW ID queued: %s (%zu samples)",
                     g_callsign, pos);
     }
@@ -276,8 +276,8 @@ static void send_cwid(void)
             snprintf(text, sizeof(text), "%s repeater, %s megahertz.",
                      spaced, freq_spoken);
 
-        g_core->queue_silence(500, KERCHUNK_PRI_IDENT);  /* gap between CW and voice */
-        g_core->tts_speak(text, KERCHUNK_PRI_IDENT);
+        g_core->queue_silence(500, KERCHUNK_PRI_LOW);  /* gap between CW and voice */
+        g_core->tts_speak(text, KERCHUNK_PRI_LOW);
     }
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
