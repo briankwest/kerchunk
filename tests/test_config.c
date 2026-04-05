@@ -128,6 +128,104 @@ void test_config(void)
     kerchunk_config_destroy(empty);
     test_end();
 
+    /* ── duration_ms parser (bare digits = ms) ── */
+
+    test_begin("duration_ms: bare digits = milliseconds");
+    test_assert(kerchunk_parse_duration_ms("500", 0) == 500, "500 != 500ms");
+    test_assert(kerchunk_parse_duration_ms("100", 0) == 100, "100 != 100ms");
+    test_assert(kerchunk_parse_duration_ms("0", 0) == 0, "0 != 0ms");
+    test_end();
+
+    test_begin("duration_ms: suffix s");
+    test_assert(kerchunk_parse_duration_ms("10s", 0) == 10000, "10s != 10000ms");
+    test_assert(kerchunk_parse_duration_ms("1s", 0) == 1000, "1s != 1000ms");
+    test_end();
+
+    test_begin("duration_ms: suffix m");
+    test_assert(kerchunk_parse_duration_ms("5m", 0) == 300000, "5m != 300000ms");
+    test_assert(kerchunk_parse_duration_ms("1m", 0) == 60000, "1m != 60000ms");
+    test_end();
+
+    test_begin("duration_ms: suffix h");
+    test_assert(kerchunk_parse_duration_ms("1h", 0) == 3600000, "1h != 3600000ms");
+    test_end();
+
+    test_begin("duration_ms: suffix ms");
+    test_assert(kerchunk_parse_duration_ms("500ms", 0) == 500, "500ms != 500ms");
+    test_end();
+
+    test_begin("duration_ms: compound 1h30m");
+    test_assert(kerchunk_parse_duration_ms("1h30m", 0) == 5400000, "1h30m wrong");
+    test_end();
+
+    test_begin("duration_ms: compound 1m30s");
+    test_assert(kerchunk_parse_duration_ms("1m30s", 0) == 90000, "1m30s wrong");
+    test_end();
+
+    test_begin("duration_ms: decimal 0.5s");
+    test_assert(kerchunk_parse_duration_ms("0.5s", 0) == 500, "0.5s != 500ms");
+    test_end();
+
+    test_begin("duration_ms: decimal 0.2m");
+    test_assert(kerchunk_parse_duration_ms("0.2m", 0) == 12000, "0.2m != 12000ms");
+    test_end();
+
+    test_begin("duration_ms: decimal 1.5s");
+    test_assert(kerchunk_parse_duration_ms("1.5s", 0) == 1500, "1.5s != 1500ms");
+    test_end();
+
+    test_begin("duration_ms: empty/null returns default");
+    test_assert(kerchunk_parse_duration_ms(NULL, 42) == 42, "NULL != default");
+    test_assert(kerchunk_parse_duration_ms("", 42) == 42, "empty != default");
+    test_end();
+
+    test_begin("duration_ms: garbage returns default");
+    test_assert(kerchunk_parse_duration_ms("abc", 99) == 99, "garbage != default");
+    test_end();
+
+    /* ── duration_s parser (bare digits = seconds) ── */
+
+    test_begin("duration_s: bare digits = seconds");
+    test_assert(kerchunk_parse_duration_s("10", 0) == 10, "10 != 10s");
+    test_assert(kerchunk_parse_duration_s("300", 0) == 300, "300 != 300s");
+    test_end();
+
+    test_begin("duration_s: suffix s");
+    test_assert(kerchunk_parse_duration_s("30s", 0) == 30, "30s != 30");
+    test_end();
+
+    test_begin("duration_s: suffix m");
+    test_assert(kerchunk_parse_duration_s("5m", 0) == 300, "5m != 300");
+    test_end();
+
+    test_begin("duration_s: decimal 0.2m");
+    test_assert(kerchunk_parse_duration_s("0.2m", 0) == 12, "0.2m != 12s");
+    test_end();
+
+    test_begin("duration_s: decimal 0.5m");
+    test_assert(kerchunk_parse_duration_s("0.5m", 0) == 30, "0.5m != 30s");
+    test_end();
+
+    test_begin("duration_s: empty returns default");
+    test_assert(kerchunk_parse_duration_s(NULL, 10) == 10, "NULL != default");
+    test_end();
+
+    /* ── config_get_duration_s via config ── */
+
+    test_begin("config_get_duration_s with suffix");
+    kerchunk_config_set(cfg, "test", "dur", "10s");
+    test_assert(kerchunk_config_get_duration_s(cfg, "test", "dur", 0) == 10, "10s via config");
+    test_end();
+
+    test_begin("config_get_duration_s bare digits = seconds");
+    kerchunk_config_set(cfg, "test", "dur", "30");
+    test_assert(kerchunk_config_get_duration_s(cfg, "test", "dur", 0) == 30, "30 via config");
+    test_end();
+
+    test_begin("config_get_duration_s missing key = default");
+    test_assert(kerchunk_config_get_duration_s(cfg, "test", "nope", 99) == 99, "missing = default");
+    test_end();
+
     kerchunk_config_destroy(cfg);
     unlink(path);
 }

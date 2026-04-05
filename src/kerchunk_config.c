@@ -166,6 +166,31 @@ float kerchunk_config_get_float(const kerchunk_config_t *cfg,
     return (float)atof(v);
 }
 
+/* Parse number with optional decimal: "10" → 10000, "0.5" → 500 (as milli-units).
+ * Returns the integer and fractional parts scaled to ms precision.
+ * *end is set to first char after the number. */
+static int parse_number_ms(const char *p, const char **end)
+{
+    int val = 0;
+    while (*p >= '0' && *p <= '9') val = val * 10 + (*p++ - '0');
+    int frac_ms = 0;
+    if (*p == '.') {
+        p++;
+        int divisor = 1;
+        while (*p >= '0' && *p <= '9') {
+            if (divisor < 1000) {
+                frac_ms = frac_ms * 10 + (*p - '0');
+                divisor *= 10;
+            }
+            p++;
+        }
+        /* normalize to thousandths */
+        while (divisor < 1000) { frac_ms *= 10; divisor *= 10; }
+    }
+    *end = p;
+    return val * 1000 + frac_ms;  /* value in milli-units */
+}
+
 int kerchunk_parse_duration_ms(const char *str, int default_ms)
 {
     if (!str || !str[0]) return default_ms;
@@ -177,28 +202,45 @@ int kerchunk_parse_duration_ms(const char *str, int default_ms)
     }
     if (all_digits) return atoi(str);
 
-    /* Parse compound duration: 1h30m10s500ms */
+    /* Parse compound duration: 1h30m10s500ms, 0.5s, 1.5m */
     int total_ms = 0;
     const char *p = str;
     while (*p) {
         while (*p == ' ') p++;
         if (!*p) break;
         if (*p < '0' || *p > '9') return default_ms;
-        int val = 0;
-        while (*p >= '0' && *p <= '9') val = val * 10 + (*p++ - '0');
+        const char *next;
+        int milli_units = parse_number_ms(p, &next);
+        p = next;
         if (p[0] == 'm' && p[1] == 's') {
-            total_ms += val; p += 2;
+            total_ms += milli_units / 1000; p += 2;  /* ms: drop sub-ms */
         } else if (*p == 'h') {
-            total_ms += val * 3600000; p++;
+            total_ms += (milli_units / 1000) * 3600000 + (milli_units % 1000) * 3600; p++;
         } else if (*p == 'm') {
-            total_ms += val * 60000; p++;
+            total_ms += (milli_units / 1000) * 60000 + (milli_units % 1000) * 60; p++;
         } else if (*p == 's') {
-            total_ms += val * 1000; p++;
+            total_ms += (milli_units / 1000) * 1000 + milli_units % 1000; p++;
         } else {
             return default_ms;
         }
     }
     return total_ms > 0 ? total_ms : default_ms;
+}
+
+int kerchunk_parse_duration_s(const char *str, int default_s)
+{
+    if (!str || !str[0]) return default_s;
+
+    /* All digits → seconds (user-facing convention) */
+    int all_digits = 1;
+    for (const char *p = str; *p; p++) {
+        if (*p < '0' || *p > '9') { all_digits = 0; break; }
+    }
+    if (all_digits) return atoi(str);
+
+    /* Delegate to ms parser, convert */
+    int ms = kerchunk_parse_duration_ms(str, default_s * 1000);
+    return ms / 1000;
 }
 
 int kerchunk_config_get_duration_ms(const kerchunk_config_t *cfg,
@@ -208,6 +250,15 @@ int kerchunk_config_get_duration_ms(const kerchunk_config_t *cfg,
     const char *v = kerchunk_config_get(cfg, section, key);
     if (!v) return default_ms;
     return kerchunk_parse_duration_ms(v, default_ms);
+}
+
+int kerchunk_config_get_duration_s(const kerchunk_config_t *cfg,
+                                   const char *section, const char *key,
+                                   int default_s)
+{
+    const char *v = kerchunk_config_get(cfg, section, key);
+    if (!v) return default_s;
+    return kerchunk_parse_duration_s(v, default_s);
 }
 
 int kerchunk_config_set(kerchunk_config_t *cfg,

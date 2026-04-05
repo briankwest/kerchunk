@@ -1781,7 +1781,7 @@ static int web_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "web", "ptt_enabled");
     g_ptt_enabled = (v && strcmp(v, "on") == 0);
 
-    g_ptt_max_duration_s = kerchunk_config_get_duration_ms(cfg, "web", "ptt_max_duration", 30000) / 1000;
+    g_ptt_max_duration_s = kerchunk_config_get_duration_s(cfg, "web", "ptt_max_duration", 30);
     g_ptt_priority = kerchunk_config_get_int(cfg, "web", "ptt_priority", KERCHUNK_PRI_NORMAL);
 
     /* Redirect mongoose logs through our logger */

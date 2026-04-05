@@ -1098,7 +1098,7 @@ static int freeswitch_configure(const kerchunk_config_t *cfg)
     if (v) snprintf(g_sip_gateway, sizeof(g_sip_gateway), "%s", v);
 
     g_udp_base_port  = kerchunk_config_get_int(cfg, "freeswitch", "udp_base_port", 16000);
-    g_max_call_secs  = kerchunk_config_get_duration_ms(cfg, "freeswitch", "max_call_duration", 180000) / 1000;
+    g_max_call_secs  = kerchunk_config_get_duration_s(cfg, "freeswitch", "max_call_duration", 180);
     g_dial_timeout_ms = kerchunk_config_get_duration_ms(cfg, "freeswitch", "dial_timeout", 30000);
     g_inactivity_ms  = kerchunk_config_get_duration_ms(cfg, "freeswitch", "inactivity_timeout", 60000);
     g_vad_threshold  = kerchunk_config_get_int(cfg, "freeswitch", "vad_threshold", VAD_THRESHOLD_DEF);

@@ -207,7 +207,7 @@ static int parrot_configure(const kerchunk_config_t *cfg)
     const char *v = kerchunk_config_get(cfg, "parrot", "enabled");
     g_enabled = (!v || strcmp(v, "off") != 0);  /* default on */
 
-    g_max_duration_s = kerchunk_config_get_duration_ms(cfg, "parrot", "max_duration", 10000) / 1000;
+    g_max_duration_s = kerchunk_config_get_duration_s(cfg, "parrot", "max_duration", 10);
     if (g_max_duration_s > 30) g_max_duration_s = 30;
     if (g_max_duration_s < 1) g_max_duration_s = 1;
 

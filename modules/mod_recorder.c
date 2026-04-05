@@ -303,9 +303,7 @@ static int recorder_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "recording", "directory");
     if (v) snprintf(g_dir, sizeof(g_dir), "%s", v);
 
-    /* max_duration: uses standard duration parser (bare digits = ms,
-     * or use suffixes: 300s, 5m, 1h30m, etc).  Default 5m. */
-    g_max_duration_s = kerchunk_config_get_duration_ms(cfg, "recording", "max_duration", MAX_DURATION_S * 1000) / 1000;
+    g_max_duration_s = kerchunk_config_get_duration_s(cfg, "recording", "max_duration", MAX_DURATION_S);
     if (g_max_duration_s > MAX_DURATION_S) g_max_duration_s = MAX_DURATION_S;
     if (g_max_duration_s < 1) g_max_duration_s = 1;
 

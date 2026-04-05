@@ -401,7 +401,7 @@ static int voicemail_configure(const kerchunk_config_t *cfg)
         snprintf(g_vm_dir, sizeof(g_vm_dir), "%s", dir);
 
     g_max_messages  = kerchunk_config_get_int(cfg, "voicemail", "max_messages", 20);
-    g_max_duration_s = kerchunk_config_get_duration_ms(cfg, "voicemail", "max_duration", 60000) / 1000;
+    g_max_duration_s = kerchunk_config_get_duration_s(cfg, "voicemail", "max_duration", 60);
     if (g_max_duration_s > 300) g_max_duration_s = 300;  /* 5 min cap */
     if (g_max_duration_s < 1)   g_max_duration_s = 1;
 
