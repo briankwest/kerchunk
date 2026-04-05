@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="icon" href="favicon.ico" type="image/x-icon">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
 <title>Kerchunk Configuration</title>
 <style>
 :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
@@ -74,12 +74,12 @@ header .sub { color: var(--dim); font-size: 14px; }
   <h1>Configuration</h1>
   <span class="sub">Kerchunk Management</span>
   <nav style="margin-left:auto;display:flex;gap:8px">
-    <a href="index.html" class="btn">Public</a>
-    <a href="admin.html" class="btn">Admin</a>
-    <a href="users.html" class="btn">Users</a>
-    <a href="config.html" class="btn" style="border-color:var(--accent);color:var(--accent)">Config</a>
-    <a href="coverage.html" class="btn">Coverage</a>
-    <a href="ptt.html" class="btn">PTT</a>
+    <a href="/" class="btn">Public</a>
+    <a href="/admin/" class="btn">Admin</a>
+    <a href="/admin/users.html" class="btn">Users</a>
+    <a href="/admin/config.html" class="btn" style="border-color:var(--accent);color:var(--accent)">Config</a>
+    <a href="/admin/coverage.html" class="btn">Coverage</a>
+    <a href="/admin/ptt.html" class="btn">PTT</a>
   </nav>
 </header>
 
@@ -123,7 +123,7 @@ const NUMBER_KEYS = new Set([
   'cor_bit','ptt_bit','max_size_mb','poll_interval','reannounce_interval'
 ]);
 
-const PASSWORD_KEYS = new Set(['api_key','auth_token','google_maps_api_key']);
+const PASSWORD_KEYS = new Set(['api_key','auth_token','auth_password','google_maps_api_key']);
 
 const SELECT_KEYS = {
   log_level: ['error','warn','info','debug'],
@@ -149,16 +149,11 @@ const UNIT_MAP = {
 };
 
 // ============================================================
-// Auth
+// Auth — browser handles Basic Auth natively
 // ============================================================
-function getToken() { return localStorage.getItem('kerchunk_token') || ''; }
-function setToken(t) { localStorage.setItem('kerchunk_token', t); }
-
 async function apiFetch(url, opts) {
   opts = opts || {};
-  const token = getToken();
   if (!opts.headers) opts.headers = {};
-  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
   if (opts.body && typeof opts.body === 'object') {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
@@ -167,14 +162,8 @@ async function apiFetch(url, opts) {
   if (res.status === 403) {
     document.getElementById('config-grid').style.display = 'none';
     document.getElementById('auth-error').style.display = 'block';
-    document.getElementById('auth-error').textContent = 'auth_token must be set in kerchunk.conf';
+    document.getElementById('auth-error').textContent = 'auth_password must be set in kerchunk.conf';
     throw new Error('Forbidden');
-  }
-  if (res.status === 401) {
-    localStorage.removeItem('kerchunk_token');
-    const t = prompt('Authentication required. Enter bearer token:');
-    if (t) { setToken(t); location.reload(); }
-    throw new Error('Unauthorized');
   }
   return res;
 }
@@ -408,7 +397,7 @@ async function saveSection(section) {
   });
 
   try {
-    var res = await apiFetch('/api/config', {
+    var res = await apiFetch('/admin/api/config', {
       method: 'PUT',
       body: { section: section, values: values }
     });
@@ -429,7 +418,7 @@ async function saveSection(section) {
 // ============================================================
 async function loadConfig() {
   try {
-    var res = await apiFetch('/api/config');
+    var res = await apiFetch('/admin/api/config');
     var data = await res.json();
     renderConfig(data.sections || data);
   } catch (e) {
@@ -440,18 +429,9 @@ async function loadConfig() {
 }
 
 // ============================================================
-// Init
+// Init ��� browser handles Basic Auth natively
 // ============================================================
 (async function init() {
-  var token = getToken();
-  if (!token) {
-    var t = prompt('Enter auth token for kerchunkd:');
-    if (t) {
-      setToken(t);
-      location.reload();
-      return;
-    }
-  }
   await loadConfig();
 })();
 </script>

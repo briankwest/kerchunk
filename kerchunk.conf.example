@@ -5,9 +5,10 @@
 ; Lines starting with ; are comments. All values shown are defaults
 ; unless noted otherwise.
 ;
-; Duration values accept: 10s, 5m, 1h, 1h30m, 500ms, or compound forms.
-; Bare numbers (no suffix) are treated as raw milliseconds for backwards
-; compatibility — use a suffix for clarity (e.g. 300s not 300).
+; Duration values accept: 10s, 5m, 1h, 1h30m, 500ms, 0.5s, or compound forms.
+; User-facing settings (max_duration, timeout, etc) treat bare numbers as
+; seconds. Internal timing settings (tx_delay, cor_debounce, etc) treat
+; bare numbers as milliseconds. Use a suffix for clarity.
 ; ============================================================================
 
 ; ----------------------------------------------------------------------------
@@ -144,21 +145,33 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; ----------------------------------------------------------------------------
 ; Web dashboard (embedded HTTP server)
 ;
-; Public routes (no auth): /api/status, /api/weather, /api/nws, /api/audio,
-; /api/commands, POST /api/register. All other API routes require auth_token.
+; The web UI is split into public and admin areas:
 ;
-; Pages: index.html (public dashboard), register.html, ptt.html,
-;        admin.html (requires auth), users.html, config.html, coverage.html
+;   /              Public pages (index.html, register.html)
+;   /api/          Public APIs: status, weather, nws, audio WebSocket (listen-only)
+;   /admin/        Admin pages (dashboard, users, config, coverage, PTT)
+;   /admin/api/    Admin APIs: stats, cmd, config, users, groups, events SSE,
+;                  audio WebSocket (full PTT support)
+;
+; Admin paths (/admin/*) require HTTP Basic Auth (auth_user + auth_password).
+; Public paths have zero auth and do not expose sensitive data (API keys, etc).
+; Set public_only = on to block all /admin/ access (e.g. internet-facing sites
+; where admin is accessed via VPN).
+;
+; Migration: auth_token is still accepted for backward compatibility —
+; if auth_password is empty, auth_token is used as the password.
 ; ----------------------------------------------------------------------------
 [web]
 ; enabled = off
 ; port = 8080
 ; bind = 127.0.0.1              ; Use 0.0.0.0 for external access
-; auth_token =                  ; Bearer token for admin API auth (empty = no auth)
+; auth_user = admin              ; HTTP Basic Auth username for /admin/
+; auth_password =                ; HTTP Basic Auth password for /admin/
+; public_only = off              ; Block all /admin/ access (public site only)
 ; static_dir = /usr/share/kerchunk/web  ; Path to HTML/JS/CSS files
 ; tls_cert =                    ; Path to TLS certificate (PEM). Enables HTTPS.
 ; tls_key =                     ; Path to TLS private key (PEM). Required with tls_cert.
-; ptt_enabled = off              ; Enable WebSocket push-to-talk
+; ptt_enabled = off              ; Enable WebSocket push-to-talk (admin only)
 ; ptt_max_duration = 30s         ; Max PTT duration
 ; ptt_priority = 2               ; Queue priority for PTT audio
 ; registration_enabled = off     ; Enable public user self-registration

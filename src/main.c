@@ -140,8 +140,8 @@ static int cmd_status(int argc, const char **argv, kerchunk_resp_t *r)
     if (v) resp_str(r, "longitude", v);
     v = kerchunk_config_get(cfg, "general", "elevation");
     if (v) resp_str(r, "elevation", v);
-    v = kerchunk_config_get(cfg, "general", "google_maps_api_key");
-    if (v) resp_str(r, "google_maps_api_key", v);
+    /* google_maps_api_key intentionally excluded from public status —
+     * admin pages fetch it via /admin/api/status which appends it. */
     return 0;
 }
 

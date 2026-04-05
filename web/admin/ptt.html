@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="icon" href="favicon.ico" type="image/x-icon">
-<link rel="manifest" href="manifest.json">
-<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
+<link rel="manifest" href="/manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0d1117">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -84,10 +84,10 @@ header .sub { color: var(--dim); font-size: 14px; }
   <h1>Kerchunk PTT</h1>
   <span class="sub" id="conn-status">Disconnected</span>
   <nav style="margin-left:auto;display:flex;gap:8px">
-    <a href="index.html" class="btn">Public</a>
-    <a href="register.html" class="btn">Register</a>
-    <a href="coverage.html" class="btn">Coverage</a>
-    <a href="admin.html" class="btn">Admin</a>
+    <a href="/" class="btn">Public</a>
+    <a href="/admin/" class="btn">Admin</a>
+    <a href="/admin/coverage.html" class="btn">Coverage</a>
+    <a href="/admin/ptt.html" class="btn" style="border-color:var(--accent);color:var(--accent)">PTT</a>
   </nav>
 </header>
 
@@ -149,10 +149,8 @@ header .sub { color: var(--dim); font-size: 14px; }
 <script>
 (function(){
 'use strict';
-const TOKEN = localStorage.getItem('kerchunk_token') || '';
 const WS_PROTO = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const WS_URL = WS_PROTO + '//' + location.host + '/api/audio' +
-               (TOKEN ? '?token=' + encodeURIComponent(TOKEN) : '');
+const WS_URL = WS_PROTO + '//' + location.host + '/admin/api/audio';
 
 let ws = null, audioCtx = null, workletNode = null, captureNode = null;
 let serverRate = 48000, serverFrame = 960;
@@ -295,14 +293,14 @@ async function initAudio() {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
     /* RX playback worklet */
-    await audioCtx.audioWorklet.addModule('stream-processor.js');
+    await audioCtx.audioWorklet.addModule('/stream-processor.js');
     workletNode = new AudioWorkletNode(audioCtx, 'stream-processor', {
       processorOptions: { sampleRate: serverRate }
     });
     workletNode.connect(audioCtx.destination);
 
     /* Mic capture worklet */
-    await audioCtx.audioWorklet.addModule('capture-processor.js');
+    await audioCtx.audioWorklet.addModule('/capture-processor.js');
 
     /* Request mic access */
     micStream = await navigator.mediaDevices.getUserMedia({
@@ -437,7 +435,7 @@ if (document.readyState === 'complete') {
 }
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 })();
 </script>

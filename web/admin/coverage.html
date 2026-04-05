@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="icon" href="favicon.ico" type="image/x-icon">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
 <title>Kerchunk Coverage Planner</title>
 <style>
 :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
@@ -422,15 +422,22 @@ button {
   <h1>Kerchunk Coverage Planner</h1>
 
   <div class="nav-bar">
-    <a href="index.html">Public</a>
-    <a href="admin.html">Admin</a>
-    <a href="users.html">Users</a>
-    <a href="config.html">Config</a>
-    <a href="coverage.html" class="active">Coverage</a>
-    <a href="ptt.html">PTT</a>
+    <a href="/">Public</a>
+    <a href="/admin/">Admin</a>
+    <a href="/admin/users.html">Users</a>
+    <a href="/admin/config.html">Config</a>
+    <a href="/admin/coverage.html" class="active">Coverage</a>
+    <a href="/admin/ptt.html">PTT</a>
   </div>
 
-  <input type="hidden" id="apiKey">
+  <div class="section">
+    <h2>Google Maps API Key</h2>
+    <div class="field">
+      <label for="apiKey">API Key</label>
+      <input type="text" id="apiKey" placeholder="Enter Google Maps API key">
+    </div>
+    <div class="help-text">Required for map and geocoding. Saved in your browser.</div>
+  </div>
 
   <div class="section">
     <h2>Transmitter Location</h2>
@@ -1918,12 +1925,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Load site config from repeater API and auto-init map
   (async () => {
     try {
-      const TOKEN = localStorage.getItem('kerchunk_token') || '';
-      const hdrs = TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
-      const r = await fetch('/api/status', { headers: hdrs });
+      const r = await fetch('/api/status');
       if (r.ok) {
         const d = await r.json();
-        if (d.google_maps_api_key) $('apiKey').value = d.google_maps_api_key;
+        /* google_maps_api_key is no longer in public /api/status —
+         * it comes from saved settings or must be entered manually */
         if (d.address) {
           $('address').value = d.address;
           $('dispAddr').textContent = d.address;
@@ -1936,7 +1942,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const key = $('apiKey').value.trim();
     if (!key) {
-      setStatus('No Google Maps API key configured. Add google_maps_api_key to [general] in kerchunk.conf.', true);
+      setStatus('Enter your Google Maps API key above to enable the coverage map.', true);
       return;
     }
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="icon" href="favicon.ico" type="image/x-icon">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
 <title>Kerchunk Users &amp; Groups</title>
 <style>
 :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
@@ -123,11 +123,12 @@ table tr:hover td { background: rgba(88,166,255,0.04); }
   <h1>Users &amp; Groups</h1>
   <span class="sub">Kerchunk Management</span>
   <nav style="margin-left:auto;display:flex;gap:8px">
-    <a href="index.html" class="btn">Public</a>
-    <a href="admin.html" class="btn">Admin</a>
-    <a href="config.html" class="btn">Config</a>
-    <a href="coverage.html" class="btn">Coverage</a>
-    <a href="ptt.html" class="btn">PTT</a>
+    <a href="/" class="btn">Public</a>
+    <a href="/admin/" class="btn">Admin</a>
+    <a href="/admin/users.html" class="btn" style="border-color:var(--accent);color:var(--accent)">Users</a>
+    <a href="/admin/config.html" class="btn">Config</a>
+    <a href="/admin/coverage.html" class="btn">Coverage</a>
+    <a href="/admin/ptt.html" class="btn">PTT</a>
   </nav>
 </header>
 
@@ -264,26 +265,15 @@ table tr:hover td { background: rgba(88,166,255,0.04); }
 
 <script>
 // ============================================================
-// Auth
+// Auth — browser handles Basic Auth natively
 // ============================================================
-function getToken() { return localStorage.getItem('kerchunk_token') || ''; }
-function setToken(t) { localStorage.setItem('kerchunk_token', t); }
-
 async function apiFetch(url, opts = {}) {
-  const token = getToken();
   if (!opts.headers) opts.headers = {};
-  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
   if (opts.body && typeof opts.body === 'object') {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
   }
-  const res = await fetch(url, opts);
-  if (res.status === 401) {
-    const t = prompt('Authentication required. Enter bearer token:');
-    if (t) { setToken(t); return apiFetch(url, opts); }
-    throw new Error('Unauthorized');
-  }
-  return res;
+  return await fetch(url, opts);
 }
 
 // ============================================================
@@ -307,7 +297,7 @@ let totpTargetUser = null;
 
 async function loadGroups() {
   try {
-    const res = await apiFetch('/api/groups');
+    const res = await apiFetch('/admin/api/groups');
     const data = await res.json();
     groups = data.groups || data || [];
     renderGroups();
@@ -320,7 +310,7 @@ async function loadGroups() {
 
 async function loadUsers() {
   try {
-    const res = await apiFetch('/api/users');
+    const res = await apiFetch('/admin/api/users');
     const data = await res.json();
     users = data.users || data || [];
     renderUsers();
@@ -430,10 +420,10 @@ async function saveGroup() {
 
   try {
     if (editId) {
-      await apiFetch('/api/groups/' + editId, { method: 'PUT', body });
+      await apiFetch('/admin/api/groups/' + editId, { method: 'PUT', body });
       showToast('Group updated', 'success');
     } else {
-      await apiFetch('/api/groups', { method: 'POST', body });
+      await apiFetch('/admin/api/groups', { method: 'POST', body });
       showToast('Group created', 'success');
     }
     closeGroupModal();
@@ -448,7 +438,7 @@ async function saveGroup() {
 async function deleteGroup(id) {
   if (!confirm('Delete this group?')) return;
   try {
-    await apiFetch('/api/groups/' + id, { method: 'DELETE' });
+    await apiFetch('/admin/api/groups/' + id, { method: 'DELETE' });
     showToast('Group deleted', 'success');
     await new Promise(r => setTimeout(r, 300));
     await loadGroups();
@@ -525,11 +515,11 @@ async function saveUser() {
     let savedId = editId;
     const savedSecret = body.totp_secret;
     if (editId) {
-      const res = await apiFetch('/api/users/' + editId, { method: 'PUT', body });
+      const res = await apiFetch('/admin/api/users/' + editId, { method: 'PUT', body });
       await res.text();  /* consume response */
       showToast('User updated', 'success');
     } else {
-      const res = await apiFetch('/api/users', { method: 'POST', body });
+      const res = await apiFetch('/admin/api/users', { method: 'POST', body });
       const data = await res.json();
       savedId = data.id;
       showToast('User created', 'success');
@@ -585,7 +575,7 @@ function updateTotpPreview() {
 async function deleteUser(id) {
   if (!confirm('Delete this user?')) return;
   try {
-    await apiFetch('/api/users/' + id, { method: 'DELETE' });
+    await apiFetch('/admin/api/users/' + id, { method: 'DELETE' });
     showToast('User deleted', 'success');
     await new Promise(r => setTimeout(r, 300));
     await loadGroups();
@@ -628,7 +618,7 @@ function generateNewSecret() {
     // Update the user's totp_secret via API
     const uid = totpTargetUser.id || totpTargetUser.ID;
     totpTargetUser.totp_secret = secret;
-    apiFetch('/api/users/' + uid, {
+    apiFetch('/admin/api/users/' + uid, {
       method: 'PUT',
       body: { totp_secret: secret }
     }).then(() => {

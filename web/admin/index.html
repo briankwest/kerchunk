@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="icon" href="favicon.ico" type="image/x-icon">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
 <title>Kerchunk Dashboard</title>
 <style>
 :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
@@ -121,11 +121,12 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
   <span id="state-badge" class="badge badge-idle">IDLE</span>
   <span id="ptt-badge" class="badge badge-off">PTT off</span>
   <nav style="margin-left:auto;display:flex;gap:8px">
-    <a href="index.html" class="btn">Public</a>
-    <a href="users.html" class="btn">Users</a>
-    <a href="config.html" class="btn">Config</a>
-    <a href="coverage.html" class="btn">Coverage</a>
-    <a href="ptt.html" class="btn">PTT</a>
+    <a href="/" class="btn">Public</a>
+    <a href="/admin/" class="btn" style="border-color:var(--accent);color:var(--accent)">Admin</a>
+    <a href="/admin/users.html" class="btn">Users</a>
+    <a href="/admin/config.html" class="btn">Config</a>
+    <a href="/admin/coverage.html" class="btn">Coverage</a>
+    <a href="/admin/ptt.html" class="btn">PTT</a>
   </nav>
 </header>
 
@@ -236,22 +237,15 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
-const API = '';
-const TOKEN = localStorage.getItem('kerchunk_token') || '';
+const API = '/admin';
 let dtmfBuf = '';
 let dtmfTimer = null;
 let relaying = false;  // COR active — TX is in relay mode
 
-function authHeaders(extra) {
-  const h = Object.assign({}, extra || {});
-  if (TOKEN) h['Authorization'] = 'Bearer ' + TOKEN;
-  return h;
-}
-
-async function fetchJSON(p) { return (await fetch(API+p, {headers:authHeaders()})).json(); }
+async function fetchJSON(p) { return (await fetch(API+p)).json(); }
 
 async function cmd(c) {
-  await fetch(API+'/api/cmd',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({cmd:c})});
+  await fetch(API+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
 }
 
 function ttsSpeak() {
@@ -762,7 +756,7 @@ async function refreshUsers() {
 }
 
 async function reloadConfig() {
-  await fetch(API+'/api/config/reload',{method:'POST',headers:authHeaders()});
+  await fetch(API+'/api/config/reload',{method:'POST'});
   addLog('Config reload requested','log-warn');
   setTimeout(()=>{refreshUsers();refreshStatus();refreshStation();},1000);
 }
@@ -779,7 +773,7 @@ function addLog(text,cls) {
 }
 
 function connectSSE() {
-  const url = API+'/api/events' + (TOKEN ? '?token='+encodeURIComponent(TOKEN) : '');
+  const url = API+'/api/events';
   const es=new EventSource(url);
   es.onmessage=(e)=>{
     try {
@@ -927,7 +921,7 @@ async function startAudio() {
     audioGain.gain.value = document.getElementById('audio-vol').value / 100;
     audioGain.connect(audioCtx.destination);
 
-    await audioCtx.audioWorklet.addModule('stream-processor.js');
+    await audioCtx.audioWorklet.addModule('/stream-processor.js');
 
     audioNode = new AudioWorkletNode(audioCtx, 'stream-processor', {
       processorOptions: { sampleRate: serverRate }
@@ -948,8 +942,7 @@ async function startAudio() {
 
     audioLastDir = -1;
     const proto = location.protocol==='https:' ? 'wss:' : 'ws:';
-    const url = proto+'//'+location.host+'/api/audio'
-              + (TOKEN ? '?token='+encodeURIComponent(TOKEN) : '');
+    const url = proto+'//'+location.host+'/admin/api/audio';
     audioWs = new WebSocket(url);
     audioWs.binaryType = 'arraybuffer';
     audioWs.onopen = () => {
@@ -996,20 +989,8 @@ function setAudioVolume(v) {
   if (audioGain) audioGain.gain.value = v/100;
 }
 
-// Check auth — prompt for token if needed
+// Init — browser handles Basic Auth natively
 (async function init() {
-  try {
-    const r = await fetch(API+'/api/stats', {headers:authHeaders()});
-    if (r.status === 401 && !TOKEN) {
-      const t = prompt('Enter auth token for kerchunkd:');
-      if (t) {
-        localStorage.setItem('kerchunk_token', t);
-        location.reload();
-        return;
-      }
-    }
-  } catch(_) {}
-
   initCharts();
   refreshStation();
   refreshStatus();

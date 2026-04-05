@@ -14,7 +14,7 @@ A custom repeater controller for the Retevis RT97L repeater, built in C11 for Ra
 
 **Native JSON API** — every CLI command returns structured JSON via `kerchunk -j`. Event streaming via `kerchunk -e -j` (NDJSON). Response system (`kerchunk_resp_t`) provides both formats from a single handler.
 
-**Web Dashboard** — embedded HTTP/HTTPS server with real-time SSE event stream and live audio monitoring via WebSocket. TLS/HTTPS support with Let's Encrypt certificates. Seven pages: Public dashboard (status, live audio, weather, coverage map), Registration, PTT (WebSocket push-to-talk), Admin dashboard (real-time SSE, controls), Users, Config, Coverage Planner. Dynamic UI: modules register controls via CLI metadata (`/api/commands`).
+**Web Dashboard** — embedded HTTP/HTTPS server with split public/admin architecture. Public site (`/`) provides live audio monitoring, weather, NWS alerts, and repeater status with zero authentication. Admin site (`/admin/`) provides the full dashboard, user management, config editor, coverage planner, and PTT — protected by HTTP Basic Auth. TLS/HTTPS with Let's Encrypt. Set `public_only = on` to block admin access entirely for internet-facing deployments. Dynamic UI: modules register controls via CLI metadata (`/admin/api/commands`).
 
 **Burst tones** — DTMF sequences, two-tone paging, Selcall, MDC-1200, CW ID, and tone burst generation via the `tones` CLI command.
 
@@ -500,7 +500,7 @@ Without the audio group membership, PortAudio will report 0 devices and the daem
 ./kerchunkd -c kerchunk.conf -f    # Start in foreground
 ```
 
-Public dashboard: `http://localhost:8080` (when `[web] enabled = on`). Admin: `http://localhost:8080/admin.html`
+Public dashboard: `https://localhost:8080/` (when `[web] enabled = on`). Admin: `https://localhost:8080/admin/` (HTTP Basic Auth required).
 
 ## CLI
 
@@ -821,35 +821,46 @@ Config section: `[stats]`. CLI: `stats`, `stats user <name>`, `stats reset`, `st
 
 ### mod_web — Web Dashboard
 
-Embedded HTTP/HTTPS server with JSON API, SSE event stream, WebSocket audio streaming and PTT, and static file serving. Seven pages:
+Embedded HTTP/HTTPS server with split public/admin architecture, JSON API, SSE event stream, WebSocket audio streaming and PTT, and static file serving.
 
-- **Public dashboard** (`index.html`) — repeater status, live audio, weather, NWS alerts, coverage map (no auth required)
-- **Registration** (`register.html`) — self-registration with auto-generated DTMF login and ANI
-- **PTT** (`ptt.html`) — WebSocket push-to-talk with mic capture and RX audio playback
-- **Admin dashboard** (`admin.html`) — real-time SSE event stream, controls, TTS, statistics (requires auth)
-- **Users** (`users.html`) — user/group CRUD with TOTP QR codes (requires auth)
-- **Config** (`config.html`) — live config editor with reload (requires auth)
-- **Coverage** (`coverage.html`) — GMRS RF coverage planner with terrain analysis
+**Public** (`/`) — no authentication required:
 
-Public routes (`/api/status`, `/api/weather`, `/api/nws`, `/api/audio` WebSocket, `POST /api/register`) work without authentication. All other API routes require a Bearer token.
+- **Dashboard** (`index.html`) — repeater status, live audio (listen-only), weather, NWS alerts
+- **Registration** (`register.html`) — self-registration (when `registration_enabled = on`)
+
+**Admin** (`/admin/`) — HTTP Basic Auth required:
+
+- **Dashboard** (`admin/index.html`) — real-time SSE event stream, controls, TTS, statistics
+- **Users** (`admin/users.html`) — user/group CRUD with TOTP QR codes
+- **Config** (`admin/config.html`) — live config editor with reload
+- **Coverage** (`admin/coverage.html`) — GMRS RF coverage planner with terrain analysis
+- **PTT** (`admin/ptt.html`) — WebSocket push-to-talk with mic capture and RX audio playback
+
+Public API routes (`/api/status`, `/api/weather`, `/api/nws`, `/api/audio` WebSocket listen-only, `POST /api/register`) require no authentication and do not expose sensitive data (API keys, etc). Admin API routes (`/admin/api/*`) require HTTP Basic Auth. The public `/api/audio` WebSocket is listen-only; PTT commands are only accepted on `/admin/api/audio`.
+
+Set `public_only = on` to block all `/admin/` access — for internet-facing deployments where admin is accessed via VPN.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | on/off | `off` | Enable web server |
 | `port` | int | `8080` | Listen port |
 | `bind` | string | `127.0.0.1` | Bind address (0.0.0.0 for external) |
-| `auth_token` | string | | Bearer token for admin API auth |
+| `auth_user` | string | `admin` | HTTP Basic Auth username for /admin/ |
+| `auth_password` | string | | HTTP Basic Auth password for /admin/ |
+| `public_only` | on/off | `off` | Block all /admin/ access |
 | `static_dir` | string | | Path to HTML/JS/CSS files |
 | `tls_cert` | string | | Path to TLS certificate (PEM). Enables HTTPS |
 | `tls_key` | string | | Path to TLS private key (PEM). Required with tls_cert |
-| `ptt_enabled` | on/off | `off` | Enable WebSocket PTT |
-| `ptt_max_duration` | int | `30` | Max PTT duration in seconds |
+| `ptt_enabled` | on/off | `off` | Enable WebSocket PTT (admin only) |
+| `ptt_max_duration` | duration | `30s` | Max PTT duration |
 | `ptt_priority` | int | `2` | Queue priority for PTT audio |
 | `registration_enabled` | on/off | `off` | Enable public user self-registration |
 
 Config section: `[web]`
 
-API: `GET /api/status` (public), `GET /api/weather` (public), `GET /api/nws` (public), `/api/audio` WebSocket (public), `POST /api/register` (public), `GET /api/stats`, `GET /api/users`, `GET /api/groups`, `GET /api/config`, `GET /api/commands`, `GET /api/events` (SSE), `POST /api/cmd`, `POST /api/config/reload`, CRUD `POST/PUT/DELETE /api/users/{id}`, `POST/PUT/DELETE /api/groups/{id}`
+Public API: `GET /api/status`, `GET /api/weather`, `GET /api/nws`, `/api/audio` WebSocket (listen-only), `POST /api/register`
+
+Admin API: `GET /admin/api/status` (includes sensitive fields), `GET /admin/api/stats`, `GET /admin/api/users`, `GET /admin/api/groups`, `GET /admin/api/config`, `GET /admin/api/commands`, `GET /admin/api/events` (SSE), `/admin/api/audio` WebSocket (PTT), `POST /admin/api/cmd`, `POST /admin/api/config/reload`, CRUD `POST/PUT/DELETE /admin/api/users/{id}`, `POST/PUT/DELETE /admin/api/groups/{id}`
 
 ### mod_webhook — Webhook Notifications
 

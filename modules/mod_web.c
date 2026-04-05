@@ -59,8 +59,9 @@ static void build_cors_headers(void)
 #define CORS_HEADERS g_cors_headers
 
 static int is_sensitive(const char *key) {
-    static const char *sens[] = {"api_key","auth_token","totp_secret",
-                                  "tls_key","google_maps_api_key",NULL};
+    static const char *sens[] = {"api_key","auth_token","auth_password",
+                                  "totp_secret","tls_key","google_maps_api_key",
+                                  NULL};
     for (int i = 0; sens[i]; i++)
         if (strcmp(key, sens[i]) == 0) return 1;
     return 0;
@@ -72,7 +73,10 @@ static kerchunk_core_t *g_core;
 static int  g_enabled      = 0;
 static int  g_port         = 8080;
 static char g_bind[64]     = "127.0.0.1";
-static char g_auth_token[128] = "";
+static char g_auth_token[128] = "";   /* backward compat */
+static char g_auth_user[64]   = "admin";
+static char g_auth_password[128] = "";
+static int  g_public_only    = 0;
 static char g_static_dir[256] = "";
 static char g_tls_cert[256] = "";
 static char g_tls_key[256]  = "";
@@ -120,6 +124,7 @@ static atomic_uint     g_ws_ring_r;   /* read index (web thread only) */
 typedef struct {
     uint32_t magic;
     int  authenticated;
+    int  admin;          /* 1 if connected via /admin/api/audio */
     int  user_id;
     char user_name[32];
     int  ptt_held;
@@ -464,38 +469,54 @@ static int ct_compare(const char *a, const char *b, size_t len)
     return result == 0;
 }
 
-static int check_auth(struct mg_http_message *hm)
+/* HTTP Basic Auth check for admin routes.
+ * Uses Mongoose's mg_http_creds() to extract user/pass from Authorization header.
+ * Returns 1 if authenticated, 0 if not. */
+static int check_basic_auth(struct mg_http_message *hm)
 {
-    if (g_auth_token[0] == '\0') {
-        /* No token configured — only allow when binding to localhost */
+    if (g_auth_password[0] == '\0') {
+        /* No password configured — only allow when binding to localhost */
         if (strcmp(g_bind, "127.0.0.1") == 0 || strcmp(g_bind, "localhost") == 0)
             return 1;  /* localhost only */
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                    "auth rejected: no token configured on non-localhost bind (%s)", g_bind);
-        return 0;  /* no token + public bind = deny */
+                    "auth rejected: no password configured on non-localhost bind (%s)", g_bind);
+        return 0;  /* no password + public bind = deny */
     }
 
-    /* Check Authorization header first */
-    struct mg_str *auth = mg_http_get_header(hm, "Authorization");
-    if (auth) {
-        char expected[160];
-        int elen = snprintf(expected, sizeof(expected), "Bearer %s", g_auth_token);
-        if ((int)auth->len == elen &&
-            ct_compare(auth->buf, expected, (size_t)elen))
-            return 1;
-    }
+    char user[64] = "", pass[128] = "";
+    mg_http_creds(hm, user, sizeof(user), pass, sizeof(pass));
 
-    /* Fall back to ?token= query parameter (for EventSource/SSE) */
-    char token[128] = "";
-    if (mg_http_get_var(&hm->query, "token", token, sizeof(token)) > 0) {
-        size_t tlen = strlen(token);
-        size_t alen = strlen(g_auth_token);
-        if (tlen == alen && ct_compare(token, g_auth_token, tlen))
-            return 1;
-    }
+    if (user[0] == '\0' && pass[0] == '\0')
+        return 0;  /* no credentials provided */
 
-    return 0;
+    size_t ulen = strlen(user);
+    size_t alen = strlen(g_auth_user);
+    size_t plen = strlen(pass);
+    size_t elen = strlen(g_auth_password);
+
+    int user_ok = (ulen == alen) && ct_compare(user, g_auth_user, ulen);
+    int pass_ok = (plen == elen) && ct_compare(pass, g_auth_password, plen);
+
+    return user_ok && pass_ok;
 }
+
+/* Send 401 with WWW-Authenticate header for Basic Auth */
+static void send_basic_auth_required(struct mg_connection *c, int is_api)
+{
+    if (is_api) {
+        mg_http_reply(c, 401,
+            "WWW-Authenticate: Basic realm=\"kerchunk\"\r\n"
+            "Content-Type: application/json\r\n"
+            "Access-Control-Allow-Origin: *\r\n",
+            "{\"error\":\"Authentication required\"}");
+    } else {
+        mg_http_reply(c, 401,
+            "WWW-Authenticate: Basic realm=\"kerchunk\"\r\n"
+            "Content-Type: text/plain\r\n",
+            "Authentication required\n");
+    }
+}
+
 
 /* ── API dispatch ── */
 
@@ -1102,9 +1123,9 @@ static void handle_api_config_get(struct mg_connection *c,
                                     struct mg_http_message *hm)
 {
     (void)hm;
-    if (g_auth_token[0] == '\0') {
+    if (g_auth_password[0] == '\0' && g_auth_token[0] == '\0') {
         mg_http_reply(c, 403, API_HEADERS,
-                      "{\"error\":\"auth_token not configured\"}");
+                      "{\"error\":\"auth_password not configured\"}");
         return;
     }
 
@@ -1162,9 +1183,9 @@ static void handle_api_config_get(struct mg_connection *c,
 static void handle_api_config_put(struct mg_connection *c,
                                     struct mg_http_message *hm)
 {
-    if (g_auth_token[0] == '\0') {
+    if (g_auth_password[0] == '\0' && g_auth_token[0] == '\0') {
         mg_http_reply(c, 403, API_HEADERS,
-                      "{\"error\":\"auth_token not configured\"}");
+                      "{\"error\":\"auth_password not configured\"}");
         return;
     }
 
@@ -1415,6 +1436,157 @@ static void handle_api_register(struct mg_connection *c,
     free(username); free(name_str); free(email_str); free(callsign_str);
 }
 
+/* ── Admin status handler — appends sensitive fields to standard status ── */
+
+static void handle_admin_api_status(struct mg_connection *c,
+                                     struct mg_http_message *hm)
+{
+    /* Dispatch standard status first */
+    kerchunk_resp_t resp;
+    resp_init(&resp);
+    const char *argv[2] = { "status", NULL };
+    kerchunk_dispatch_command(1, argv, &resp);
+
+    /* Append google_maps_api_key before closing brace */
+    const kerchunk_config_t *cfg = kerchunk_core_get_config();
+    const char *key = kerchunk_config_get(cfg, "general", "google_maps_api_key");
+    if (key) {
+        resp_str(&resp, "google_maps_api_key", key);
+    }
+    resp_finish(&resp);
+    mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
+    (void)hm;
+}
+
+/* ── Admin API dispatch — rewrites /admin/api/X to /api/X for handlers ── */
+
+static void handle_admin_api(struct mg_connection *c,
+                              struct mg_http_message *hm)
+{
+    /* /admin/api/status — special: includes sensitive fields */
+    if (mg_match(hm->uri, mg_str("/admin/api/status"), NULL) &&
+        mg_match(hm->method, mg_str("GET"), NULL)) {
+        handle_admin_api_status(c, hm);
+        return;
+    }
+
+    /* /admin/api/events — SSE */
+    if (mg_match(hm->uri, mg_str("/admin/api/events"), NULL)) {
+        mg_printf(c,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/event-stream\r\n"
+            "Cache-Control: no-cache\r\n"
+            "Connection: keep-alive\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "\r\n");
+        c->data[0] = 'E';  /* Mark as SSE client */
+        atomic_fetch_add(&g_sse_count, 1);
+        return;
+    }
+
+    /* /admin/api/config/reload */
+    if (mg_match(hm->method, mg_str("POST"), NULL) &&
+        mg_match(hm->uri, mg_str("/admin/api/config/reload"), NULL)) {
+        kill(getpid(), SIGHUP);
+        mg_http_reply(c, 200, API_HEADERS,
+                      "{\"ok\":true,\"action\":\"config_reload\"}");
+        return;
+    }
+
+    /* /admin/api/config */
+    if (mg_match(hm->uri, mg_str("/admin/api/config"), NULL)) {
+        if (mg_match(hm->method, mg_str("GET"), NULL))
+            handle_api_config_get(c, hm);
+        else if (mg_match(hm->method, mg_str("PUT"), NULL))
+            handle_api_config_put(c, hm);
+        else
+            mg_http_reply(c, 405, API_HEADERS,
+                          "{\"error\":\"Method not allowed\"}");
+        return;
+    }
+
+    /* /admin/api/cmd */
+    if (mg_match(hm->method, mg_str("POST"), NULL) &&
+        mg_match(hm->uri, mg_str("/admin/api/cmd"), NULL)) {
+        handle_api_post_cmd(c, hm);
+        return;
+    }
+
+    /* /admin/api/users CRUD */
+    if (mg_match(hm->method, mg_str("POST"), NULL) &&
+        mg_match(hm->uri, mg_str("/admin/api/users"), NULL)) {
+        handle_api_user_create(c, hm);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/admin/api/users/#"), NULL)) {
+        /* Rewrite URI for uri_id() which expects /api/users/ prefix */
+        struct mg_http_message rewritten = *hm;
+        rewritten.uri.buf = hm->uri.buf + 6;   /* skip "/admin" */
+        rewritten.uri.len = hm->uri.len - 6;
+        if (mg_match(hm->method, mg_str("PUT"), NULL))
+            handle_api_user_update(c, &rewritten);
+        else if (mg_match(hm->method, mg_str("DELETE"), NULL))
+            handle_api_user_delete(c, &rewritten);
+        else
+            mg_http_reply(c, 405, API_HEADERS, "{\"error\":\"Method not allowed\"}");
+        return;
+    }
+
+    /* /admin/api/groups CRUD */
+    if (mg_match(hm->method, mg_str("POST"), NULL) &&
+        mg_match(hm->uri, mg_str("/admin/api/groups"), NULL)) {
+        handle_api_group_create(c, hm);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/admin/api/groups/#"), NULL)) {
+        struct mg_http_message rewritten = *hm;
+        rewritten.uri.buf = hm->uri.buf + 6;
+        rewritten.uri.len = hm->uri.len - 6;
+        if (mg_match(hm->method, mg_str("PUT"), NULL))
+            handle_api_group_update(c, &rewritten);
+        else if (mg_match(hm->method, mg_str("DELETE"), NULL))
+            handle_api_group_delete(c, &rewritten);
+        else
+            mg_http_reply(c, 405, API_HEADERS, "{\"error\":\"Method not allowed\"}");
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/admin/api/groups"), NULL)) {
+        handle_api_groups(c);
+        return;
+    }
+
+    /* /admin/api/users */
+    if (mg_match(hm->uri, mg_str("/admin/api/users"), NULL)) {
+        handle_api_users(c);
+        return;
+    }
+
+    /* /admin/api/commands */
+    if (mg_match(hm->uri, mg_str("/admin/api/commands"), NULL)) {
+        handle_api_commands(c);
+        return;
+    }
+
+    /* /admin/api/audio — WebSocket with full PTT support */
+    if (mg_match(hm->uri, mg_str("/admin/api/audio"), NULL)) {
+        c->data[1] = 'A';  /* Mark as admin WebSocket */
+        mg_ws_upgrade(c, hm, NULL);
+        return;
+    }
+
+    /* /admin/api/... -- dynamic dispatch (strip /admin prefix) */
+    if (hm->uri.len > 11 && memcmp(hm->uri.buf, "/admin/api/", 11) == 0) {
+        /* Create a rewritten message for the generic handler */
+        struct mg_http_message rewritten = *hm;
+        rewritten.uri.buf = hm->uri.buf + 6;   /* skip "/admin" */
+        rewritten.uri.len = hm->uri.len - 6;
+        handle_api_get(c, &rewritten);
+        return;
+    }
+
+    mg_http_reply(c, 404, API_HEADERS, "{\"error\":\"Unknown admin API endpoint\"}");
+}
+
 /* ── Mongoose event handler ── */
 
 static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
@@ -1453,11 +1625,61 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             return;
         }
 
-        /* API routes */
+        /* ════════════════════════════════════════════════════════
+         *  /admin/... routes -- require Basic Auth
+         * ════════════════════════════════════════════════════════ */
+        if (mg_match(hm->uri, mg_str("/admin/#"), NULL) ||
+            mg_match(hm->uri, mg_str("/admin"), NULL)) {
+
+            /* public_only mode: all admin access blocked */
+            if (g_public_only) {
+                mg_http_reply(c, 403, API_HEADERS,
+                              "{\"error\":\"Admin access disabled (public_only mode)\"}");
+                return;
+            }
+
+            /* Check Basic Auth */
+            if (!check_basic_auth(hm)) {
+                send_basic_auth_required(c,
+                    mg_match(hm->uri, mg_str("/admin/api/#"), NULL) ? 1 : 0);
+                return;
+            }
+
+            /* /admin/api/... -- admin API endpoints */
+            if (mg_match(hm->uri, mg_str("/admin/api/#"), NULL)) {
+                handle_admin_api(c, hm);
+                return;
+            }
+
+            /* /admin/... -- serve from static_dir/admin/ naturally.
+             * /admin/ serves admin/index.html via mg_http_serve_dir. */
+            if (g_static_dir[0]) {
+                struct mg_http_serve_opts opts = { .root_dir = g_static_dir };
+                mg_http_serve_dir(c, hm, &opts);
+            } else {
+                mg_http_reply(c, 404, "", "Not found\n");
+            }
+            return;
+        }
+
+        /* ════════════════════════════════════════════════════════
+         *  /api/... routes -- public endpoints (no auth)
+         * ════════════════════════════════════════════════════════ */
         if (mg_match(hm->uri, mg_str("/api/#"), NULL)) {
 
-            /* ── Public routes (no auth required) ── */
+            /* Public GET routes (status, weather, nws) */
             if (mg_match(hm->method, mg_str("GET"), NULL)) {
+                /* /api/status — inject web module flags */
+                if (mg_match(hm->uri, mg_str("/api/status"), NULL)) {
+                    kerchunk_resp_t resp;
+                    resp_init(&resp);
+                    const char *argv[2] = { "status", NULL };
+                    kerchunk_dispatch_command(1, argv, &resp);
+                    resp_bool(&resp, "registration_enabled", g_registration_enabled);
+                    resp_finish(&resp);
+                    mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
+                    return;
+                }
                 for (int i = 0; g_public_apis[i]; i++) {
                     if (mg_match(hm->uri, mg_str(g_public_apis[i]), NULL)) {
                         handle_api_get(c, hm);
@@ -1473,109 +1695,22 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                 return;
             }
 
-            /* WebSocket audio stream — public (listen-only) */
+            /* WebSocket audio stream — public (listen-only, no PTT commands) */
             if (mg_match(hm->uri, mg_str("/api/audio"), NULL)) {
                 mg_ws_upgrade(c, hm, NULL);
                 return;
             }
 
-            /* ── Everything else requires auth ── */
-            if (!check_auth(hm)) {
-                mg_http_reply(c, 401, API_HEADERS,
-                              "{\"error\":\"Invalid or missing token\"}");
-                return;
-            }
-
-            /* SSE */
-            if (mg_match(hm->uri, mg_str("/api/events"), NULL)) {
-                mg_printf(c,
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: text/event-stream\r\n"
-                    "Cache-Control: no-cache\r\n"
-                    "Connection: keep-alive\r\n"
-                    "Access-Control-Allow-Origin: *\r\n"
-                    "\r\n");
-                c->data[0] = 'E';  /* Mark as SSE client */
-                atomic_fetch_add(&g_sse_count, 1);
-                return;
-            }
-
-            /* POST /api/config/reload */
-            if (mg_match(hm->method, mg_str("POST"), NULL) &&
-                mg_match(hm->uri, mg_str("/api/config/reload"), NULL)) {
-                kill(getpid(), SIGHUP);
-                mg_http_reply(c, 200, API_HEADERS,
-                              "{\"ok\":true,\"action\":\"config_reload\"}");
-                return;
-            }
-
-            /* Config CRUD (GET/PUT /api/config) */
-            if (mg_match(hm->uri, mg_str("/api/config"), NULL)) {
-                if (mg_match(hm->method, mg_str("GET"), NULL))
-                    handle_api_config_get(c, hm);
-                else if (mg_match(hm->method, mg_str("PUT"), NULL))
-                    handle_api_config_put(c, hm);
-                else
-                    mg_http_reply(c, 405, API_HEADERS,
-                                  "{\"error\":\"Method not allowed\"}");
-                return;
-            }
-
-            /* POST /api/cmd */
-            if (mg_match(hm->method, mg_str("POST"), NULL) &&
-                mg_match(hm->uri, mg_str("/api/cmd"), NULL)) {
-                handle_api_post_cmd(c, hm);
-                return;
-            }
-
-            /* Users CRUD */
-            if (mg_match(hm->method, mg_str("POST"), NULL) &&
-                mg_match(hm->uri, mg_str("/api/users"), NULL)) {
-                handle_api_user_create(c, hm);
-                return;
-            }
-            if (mg_match(hm->uri, mg_str("/api/users/#"), NULL)) {
-                if (mg_match(hm->method, mg_str("PUT"), NULL))
-                    handle_api_user_update(c, hm);
-                else if (mg_match(hm->method, mg_str("DELETE"), NULL))
-                    handle_api_user_delete(c, hm);
-                else
-                    mg_http_reply(c, 405, API_HEADERS, "{\"error\":\"Method not allowed\"}");
-                return;
-            }
-
-            /* Groups CRUD */
-            if (mg_match(hm->method, mg_str("POST"), NULL) &&
-                mg_match(hm->uri, mg_str("/api/groups"), NULL)) {
-                handle_api_group_create(c, hm);
-                return;
-            }
-            if (mg_match(hm->uri, mg_str("/api/groups/#"), NULL)) {
-                if (mg_match(hm->method, mg_str("PUT"), NULL))
-                    handle_api_group_update(c, hm);
-                else if (mg_match(hm->method, mg_str("DELETE"), NULL))
-                    handle_api_group_delete(c, hm);
-                else
-                    mg_http_reply(c, 405, API_HEADERS, "{\"error\":\"Method not allowed\"}");
-                return;
-            }
-            if (mg_match(hm->uri, mg_str("/api/groups"), NULL)) {
-                handle_api_groups(c);
-                return;
-            }
-
-            /* GET /api/users */
-            if (mg_match(hm->uri, mg_str("/api/users"), NULL)) {
-                handle_api_users(c);
-                return;
-            }
-
-            /* GET /api route table */
-            handle_api_get(c, hm);
+            /* All other /api/... routes are not publicly accessible --
+             * they must go through /admin/api/... */
+            mg_http_reply(c, 404, API_HEADERS,
+                          "{\"error\":\"Unknown API endpoint\"}");
             return;
         }
 
-        /* Static files */
+        /* ════════════════════════════════════════════════════════
+         *  / — Public static files (no auth)
+         * ════════════════════════════════════════════════════════ */
         if (g_static_dir[0]) {
             struct mg_http_serve_opts opts = { .root_dir = g_static_dir };
             mg_http_serve_dir(c, hm, &opts);
@@ -1589,6 +1724,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
         ws_conn_state_t *st = calloc(1, sizeof(ws_conn_state_t));
         if (st) {
             st->magic = WS_PTT_MAGIC;
+            st->admin = (c->data[1] == 'A') ? 1 : 0;
             ws_set_state(c, st);
         }
         int prev = atomic_fetch_add(&g_ws_audio_count, 1);
@@ -1608,19 +1744,26 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
         uint8_t opcode = wm->flags & 0x0F;
 
         if (opcode == WEBSOCKET_OP_TEXT) {
-            char *cmd = mg_json_get_str(wm->data, "$.cmd");
-            if (cmd) {
-                if (strcmp(cmd, "auth") == 0)
-                    ws_handle_auth(c, st, wm);
-                else if (strcmp(cmd, "ptt_on") == 0)
-                    ws_handle_ptt_on(c, st);
-                else if (strcmp(cmd, "ptt_off") == 0)
-                    ws_handle_ptt_off(c, st);
-                else
-                    ws_send_json(c, "{\"ok\":false,\"error\":\"unknown cmd\"}");
-                free(cmd);
+            /* Public WebSocket is listen-only — reject all commands */
+            if (!st->admin) {
+                ws_send_json(c, "{\"ok\":false,\"error\":\"listen only\"}");
+            } else {
+                char *cmd = mg_json_get_str(wm->data, "$.cmd");
+                if (cmd) {
+                    if (strcmp(cmd, "auth") == 0)
+                        ws_handle_auth(c, st, wm);
+                    else if (strcmp(cmd, "ptt_on") == 0)
+                        ws_handle_ptt_on(c, st);
+                    else if (strcmp(cmd, "ptt_off") == 0)
+                        ws_handle_ptt_off(c, st);
+                    else
+                        ws_send_json(c, "{\"ok\":false,\"error\":\"unknown cmd\"}");
+                    free(cmd);
+                }
             }
         } else if (opcode == WEBSOCKET_OP_BINARY) {
+            /* Public WebSocket cannot send audio */
+            if (!st->admin) return;
             ws_handle_audio_frame(st, (const uint8_t *)wm->data.buf,
                                   wm->data.len);
         }
@@ -1759,8 +1902,21 @@ static int web_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "web", "bind");
     if (v) snprintf(g_bind, sizeof(g_bind), "%s", v);
 
+    v = kerchunk_config_get(cfg, "web", "auth_user");
+    if (v) snprintf(g_auth_user, sizeof(g_auth_user), "%s", v);
+
+    v = kerchunk_config_get(cfg, "web", "auth_password");
+    if (v) snprintf(g_auth_password, sizeof(g_auth_password), "%s", v);
+
+    /* Backward compat: auth_token -> auth_password if auth_password not set */
     v = kerchunk_config_get(cfg, "web", "auth_token");
     if (v) snprintf(g_auth_token, sizeof(g_auth_token), "%s", v);
+    if (g_auth_password[0] == '\0' && g_auth_token[0] != '\0') {
+        snprintf(g_auth_password, sizeof(g_auth_password), "%s", g_auth_token);
+    }
+
+    v = kerchunk_config_get(cfg, "web", "public_only");
+    g_public_only = (v && strcmp(v, "on") == 0);
 
     v = kerchunk_config_get(cfg, "web", "static_dir");
     if (v) snprintf(g_static_dir, sizeof(g_static_dir), "%s", v);
@@ -1793,8 +1949,9 @@ static int web_configure(const kerchunk_config_t *cfg)
      * API handler on the mongoose thread via SIGHUP. */
     if (g_web_tid >= 0) {
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                    "config reloaded (port=%d auth=%s)",
-                    g_port, g_auth_token[0] ? "yes" : "no");
+                    "config reloaded (port=%d auth=%s public_only=%s)",
+                    g_port, g_auth_password[0] ? "yes" : "no",
+                    g_public_only ? "yes" : "no");
         return 0;
     }
 
@@ -1895,10 +2052,11 @@ static int web_configure(const kerchunk_config_t *cfg)
     }
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "listening on %s://%s:%d%s",
+                "listening on %s://%s:%d%s%s",
                 g_tls_active ? "https" : "http",
                 g_bind, g_port,
-                g_auth_token[0] ? " (auth required)" : "");
+                g_auth_password[0] ? " (auth required)" : "",
+                g_public_only ? " (public only)" : "");
     return 0;
 }
 
@@ -1981,7 +2139,9 @@ static int cli_web(int argc, const char **argv, kerchunk_resp_t *r)
     resp_bool(r, "enabled", g_enabled);
     resp_int(r, "port", g_port);
     resp_str(r, "bind", g_bind);
-    resp_bool(r, "auth", g_auth_token[0] != '\0');
+    resp_bool(r, "auth", g_auth_password[0] != '\0');
+    resp_str(r, "auth_user", g_auth_user);
+    resp_bool(r, "public_only", g_public_only);
     resp_bool(r, "tls", g_tls_active);
     if (g_tls_active)
         resp_str(r, "tls_cert", g_tls_cert);

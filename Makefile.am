@@ -343,22 +343,26 @@ test: check
 # Sounds — installed via install-data-local
 soundsbasedir = $(datadir)/kerchunk/sounds
 
-# Web dashboard
+# Web dashboard — public files
 kerchunkwebdir = $(datadir)/kerchunk/web
 kerchunkweb_DATA = \
 	web/index.html \
-	web/admin.html \
-	web/config.html \
-	web/coverage.html \
-	web/ptt.html \
 	web/register.html \
-	web/users.html \
 	web/stream-processor.js \
 	web/capture-processor.js \
 	web/sw.js \
 	web/manifest.json \
 	web/favicon.ico \
 	web/logo.png
+
+# Web dashboard — admin files
+kerchunkwebadmindir = $(datadir)/kerchunk/web/admin
+kerchunkwebadmin_DATA = \
+	web/admin/index.html \
+	web/admin/users.html \
+	web/admin/config.html \
+	web/admin/coverage.html \
+	web/admin/ptt.html
 
 # Config examples
 kerchunkconfdir = $(sysconfdir)/kerchunk

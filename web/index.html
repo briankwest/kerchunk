@@ -68,10 +68,8 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
   <h1 id="callsign">Repeater</h1>
   <span id="state-badge" class="badge badge-idle">IDLE</span>
   <nav style="margin-left:auto;display:flex;gap:8px">
-    <a href="register.html" class="btn">Register</a>
-    <a href="ptt.html" class="btn">PTT</a>
-    <a href="coverage.html" class="btn">Coverage</a>
-    <a href="admin.html" class="btn">Admin</a>
+    <a href="index.html" class="btn" style="border-color:var(--accent);color:var(--accent)">Public</a>
+    <a href="register.html" class="btn" id="register-link" style="display:none">Register</a>
   </nav>
 </header>
 
@@ -159,6 +157,8 @@ async function refreshStation() {
     if (d.latitude && d.longitude) h += tr('Coordinates', d.latitude + ', ' + d.longitude);
     if (d.elevation) h += tr('Elevation', d.elevation + ' ft ASL');
     document.getElementById('station-table').innerHTML = h || '<tr><td>No data</td></tr>';
+    if (d.registration_enabled)
+      document.getElementById('register-link').style.display = '';
   } catch(e) {}
 }
 
