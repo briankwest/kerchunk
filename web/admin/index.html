@@ -242,10 +242,11 @@ let dtmfBuf = '';
 let dtmfTimer = null;
 let relaying = false;  // COR active — TX is in relay mode
 
-async function fetchJSON(p) { return (await fetch(API+p)).json(); }
+const CRED = {credentials:'same-origin'};
+async function fetchJSON(p) { return (await fetch(API+p, CRED)).json(); }
 
 async function cmd(c) {
-  await fetch(API+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
+  await fetch(API+'/api/cmd',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
 }
 
 function ttsSpeak() {
@@ -756,7 +757,7 @@ async function refreshUsers() {
 }
 
 async function reloadConfig() {
-  await fetch(API+'/api/config/reload',{method:'POST'});
+  await fetch(API+'/api/config/reload',{method:'POST',credentials:'same-origin'});
   addLog('Config reload requested','log-warn');
   setTimeout(()=>{refreshUsers();refreshStatus();refreshStation();},1000);
 }
@@ -774,7 +775,7 @@ function addLog(text,cls) {
 
 function connectSSE() {
   const url = API+'/api/events';
-  const es=new EventSource(url);
+  const es=new EventSource(url, {withCredentials:true});
   es.onmessage=(e)=>{
     try {
       const evt=JSON.parse(e.data);

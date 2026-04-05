@@ -158,6 +158,7 @@ async function apiFetch(url, opts) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
   }
+  opts.credentials = 'same-origin';
   const res = await fetch(url, opts);
   if (res.status === 403) {
     document.getElementById('config-grid').style.display = 'none';

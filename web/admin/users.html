@@ -273,6 +273,7 @@ async function apiFetch(url, opts = {}) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
   }
+  opts.credentials = 'same-origin';
   return await fetch(url, opts);
 }
 
