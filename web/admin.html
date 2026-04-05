@@ -651,7 +651,8 @@ function renderStats() {
     h+=tr('Avg RX',fmtMs(liveStats.avg_rx_ms));
     h+=tr('Shortest RX',fmtMs(liveStats.shortest_rx_ms));
     h+=tr('Longest RX',fmtMs(liveStats.longest_rx_ms));
-    h+=tr('Peak hour',String(liveStats.peak_hour).padStart(2,'0')+':00');
+    var ph = ((liveStats.peak_hour + 24 - Math.round(new Date().getTimezoneOffset()/60)) % 24);
+    h+=tr('Peak hour',String(ph).padStart(2,'0')+':00');
   }
   if(liveStats.kerchunk_count) h+=tr('Kerchunks',liveStats.kerchunk_count);
   if(liveStats.dtmf_commands) h+=tr('DTMF cmds',liveStats.dtmf_commands);
