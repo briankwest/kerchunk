@@ -51,13 +51,16 @@ kerchunk_rrd_t *kerchunk_rrd_open(const char *path)
     rrd->fd   = fd;
 
     if (created || rrd->data->magic != RRD_MAGIC) {
-        /* Initialize fresh */
+        /* Initialize fresh — align timestamps to clock boundaries so
+         * hour/minute buckets rotate on the actual :00 boundary */
         memset(rrd->data, 0, file_size);
         rrd->data->magic = RRD_MAGIC;
         time_t now = time(NULL);
-        rrd->data->last_minute_ts = now;
-        rrd->data->last_hour_ts   = now;
-        rrd->data->last_day_ts    = now;
+        struct tm tm_now;
+        gmtime_r(&now, &tm_now);
+        rrd->data->last_minute_ts = now - tm_now.tm_sec;
+        rrd->data->last_hour_ts   = now - tm_now.tm_sec - tm_now.tm_min * 60;
+        rrd->data->last_day_ts    = now - tm_now.tm_sec - tm_now.tm_min * 60 - tm_now.tm_hour * 3600;
         rrd->data->counters.start_time = now;
         msync(map, file_size, MS_SYNC);
     } else {
@@ -72,6 +75,13 @@ kerchunk_rrd_t *kerchunk_rrd_open(const char *path)
                     (uint64_t)prev_session * 1000;
         }
         rrd->data->counters.start_time = now;
+        /* Re-align tick timestamps to clock boundaries so buckets
+         * rotate on the actual :00 regardless of when daemon started */
+        struct tm tm_now;
+        gmtime_r(&now, &tm_now);
+        rrd->data->last_minute_ts = now - tm_now.tm_sec;
+        rrd->data->last_hour_ts   = now - tm_now.tm_sec - tm_now.tm_min * 60;
+        rrd->data->last_day_ts    = now - tm_now.tm_sec - tm_now.tm_min * 60 - tm_now.tm_hour * 3600;
     }
 
     return rrd;
@@ -270,9 +280,11 @@ void kerchunk_rrd_reset(kerchunk_rrd_t *rrd)
     memset(rrd->data, 0, sizeof(rrd_file_t));
     rrd->data->magic = RRD_MAGIC;
     time_t now = time(NULL);
-    rrd->data->last_minute_ts = now;
-    rrd->data->last_hour_ts   = now;
-    rrd->data->last_day_ts    = now;
+    struct tm tm_now;
+    gmtime_r(&now, &tm_now);
+    rrd->data->last_minute_ts = now - tm_now.tm_sec;
+    rrd->data->last_hour_ts   = now - tm_now.tm_sec - tm_now.tm_min * 60;
+    rrd->data->last_day_ts    = now - tm_now.tm_sec - tm_now.tm_min * 60 - tm_now.tm_hour * 3600;
     rrd->data->counters.start_time = now;
     rrd->data->counters.restarts = restarts;
     msync(rrd->data, rrd->size, MS_SYNC);
