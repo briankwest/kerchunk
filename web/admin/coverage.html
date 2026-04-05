@@ -434,7 +434,7 @@ button {
     <h2>Google Maps API Key</h2>
     <div class="field">
       <label for="apiKey">API Key</label>
-      <input type="text" id="apiKey" placeholder="Enter Google Maps API key">
+      <input type="password" id="apiKey" placeholder="Enter Google Maps API key">
     </div>
     <div class="help-text">Required for map and geocoding. Saved in your browser.</div>
   </div>
@@ -1925,11 +1925,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Load site config from repeater API and auto-init map
   (async () => {
     try {
-      const r = await fetch('/api/status');
+      const r = await fetch('/admin/api/status');
       if (r.ok) {
         const d = await r.json();
-        /* google_maps_api_key is no longer in public /api/status —
-         * it comes from saved settings or must be entered manually */
+        if (d.google_maps_api_key && !$('apiKey').value)
+          $('apiKey').value = d.google_maps_api_key;
         if (d.address) {
           $('address').value = d.address;
           $('dispAddr').textContent = d.address;
