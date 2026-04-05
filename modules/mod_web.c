@@ -1473,16 +1473,16 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                 return;
             }
 
+            /* WebSocket audio stream — public (listen-only) */
+            if (mg_match(hm->uri, mg_str("/api/audio"), NULL)) {
+                mg_ws_upgrade(c, hm, NULL);
+                return;
+            }
+
             /* ── Everything else requires auth ── */
             if (!check_auth(hm)) {
                 mg_http_reply(c, 401, API_HEADERS,
                               "{\"error\":\"Invalid or missing token\"}");
-                return;
-            }
-
-            /* WebSocket audio stream — requires auth */
-            if (mg_match(hm->uri, mg_str("/api/audio"), NULL)) {
-                mg_ws_upgrade(c, hm, NULL);
                 return;
             }
 
