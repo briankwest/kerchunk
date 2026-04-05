@@ -420,11 +420,12 @@ static void *poll_worker(void *arg)
     while (!g_core->thread_should_stop(g_poll_tid)) {
         pthread_mutex_lock(&g_poll_mutex);
         /* Wait for poll request or stop signal */
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 1;  /* wake every 1s to check stop flag */
-        while (!g_poll_requested && !g_core->thread_should_stop(g_poll_tid))
+        while (!g_poll_requested && !g_core->thread_should_stop(g_poll_tid)) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += 1;  /* wake every 1s to check stop flag */
             pthread_cond_timedwait(&g_poll_cond, &g_poll_mutex, &ts);
+        }
         g_poll_requested = 0;
         pthread_mutex_unlock(&g_poll_mutex);
 

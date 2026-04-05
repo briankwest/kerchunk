@@ -843,7 +843,7 @@ static void *audio_thread_fn(void *arg)
 {
     audio_thread_ctx_t *ctx = (audio_thread_ctx_t *)arg;
 
-    int prev_ctcss = 0, prev_dcs = 0, prev_dtmf = 0;
+    int prev_dtmf = 0;
 
     KERCHUNK_LOG_I(LOG_MOD, "audio thread started (tick=%dus)", AUDIO_TICK_US);
 
@@ -869,46 +869,6 @@ static void *audio_thread_fn(void *arg)
         }
 
         int relay_active = kerchunk_core_get()->is_receiving();
-
-        /* ── Run CTCSS/DCS decoders on original frame (sub-audible tones
-         * are unaffected by voice scrambling) ── */
-        plcode_ctcss_result_t ctcss_res;
-        plcode_ctcss_dec_process(ctx->ctcss_dec, frame, (size_t)nread, &ctcss_res);
-        if (ctcss_res.detected != prev_ctcss) {
-            if (ctcss_res.detected && ctcss_res.tone_freq_x10 > 0)
-                KERCHUNK_LOG_I(LOG_MOD, "CTCSS: %.1f Hz",
-                               ctcss_res.tone_freq_x10 / 10.0f);
-            else if (!ctcss_res.detected && prev_ctcss)
-                KERCHUNK_LOG_I(LOG_MOD, "CTCSS: off");
-            kerchevt_t evt = {
-                .type = KERCHEVT_CTCSS_DETECT,
-                .timestamp_us = t0,
-                .ctcss = { .freq_x10 = ctcss_res.tone_freq_x10,
-                           .active = ctcss_res.detected },
-            };
-            kerchevt_fire(&evt);
-            prev_ctcss = ctcss_res.detected;
-        }
-
-        plcode_dcs_result_t dcs_res;
-        plcode_dcs_dec_process(ctx->dcs_dec, frame, (size_t)nread, &dcs_res);
-        if (dcs_res.detected != prev_dcs) {
-            if (dcs_res.detected)
-                KERCHUNK_LOG_I(LOG_MOD, "DCS: %03d%s",
-                               dcs_res.code_number,
-                               dcs_res.inverted ? " (inv)" : "");
-            else if (!dcs_res.detected && prev_dcs)
-                KERCHUNK_LOG_I(LOG_MOD, "DCS: off");
-            kerchevt_t evt = {
-                .type = KERCHEVT_DCS_DETECT,
-                .timestamp_us = t0,
-                .dcs = { .code = dcs_res.code_number,
-                         .normal = !dcs_res.inverted,
-                         .active = dcs_res.detected },
-            };
-            kerchevt_fire(&evt);
-            prev_dcs = dcs_res.detected;
-        }
 
         /* ── RX descrambler: process frame in-place before DTMF decode
          * and before events/taps. DTMF tones are in the voice band and
@@ -1407,8 +1367,6 @@ int main(int argc, char **argv)
 
     /* Create decoders */
     audio_thread_ctx_t audio_ctx = { NULL, NULL, NULL };
-    plcode_ctcss_dec_create(&audio_ctx.ctcss_dec, g_sample_rate);
-    plcode_dcs_dec_create(&audio_ctx.dcs_dec, g_sample_rate);
     /* DTMF decoder: tuned for hardware repeaters where the radio briefly
      * drops COS during DTMF (CTCSS interrupted by tone).  Higher
      * misses_to_end rides through the dropout without false digit-end.
@@ -1567,8 +1525,7 @@ int main(int argc, char **argv)
     /* Wait for audio thread */
     pthread_join(audio_tid, NULL);
 
-    plcode_ctcss_dec_destroy(audio_ctx.ctcss_dec);
-    plcode_dcs_dec_destroy(audio_ctx.dcs_dec);
+    /* CTCSS/DCS decoders removed — not used for control logic */
     plcode_dtmf_dec_destroy(audio_ctx.dtmf_dec);
 
     kerchunk_threads_shutdown();
