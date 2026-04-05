@@ -347,11 +347,22 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
     float duty = duty_pct();
     uint32_t avg_rx = c->rx_count > 0 ? (uint32_t)(c->rx_time_ms / c->rx_count) : 0;
 
-    /* Peak hour */
+    /* Current time for ring→clock mapping */
+    time_t now_t = time(NULL);
+    struct tm tm_now;
+    gmtime_r(&now_t, &tm_now);
+    int cur_min = tm_now.tm_min;
+    int cur_hour = tm_now.tm_hour;
+
+    /* Peak hour (converted from ring index to UTC hour) */
     uint32_t peak_val = 0; int peak_hour = 0;
     for (int i = 0; i < RRD_HOURS; i++) {
-        uint32_t v = d->hours[i].rx_count + d->hours[i].tx_count;
-        if (v > peak_val) { peak_val = v; peak_hour = i; }
+        int idx = (d->hour_idx + 1 + i) % RRD_HOURS;
+        uint32_t v = d->hours[idx].rx_count + d->hours[idx].tx_count;
+        if (v > peak_val) {
+            peak_val = v;
+            peak_hour = (cur_hour + 1 + i) % RRD_HOURS;
+        }
     }
 
     /* JSON: top-level */
@@ -381,13 +392,7 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
       resp_json_raw(r, f); }
 
     /* JSON: minutely (oldest first, labels = real minute of hour) */
-    { time_t now = time(NULL);
-      struct tm tm_now;
-      gmtime_r(&now, &tm_now);
-      int cur_min = tm_now.tm_min;
-      int cur_hour = tm_now.tm_hour;
-
-      resp_json_raw(r, ",\"minutely\":[");
+    { resp_json_raw(r, ",\"minutely\":[");
       for (int i = 0; i < RRD_MINUTES; i++) {
           int idx = (d->minute_idx + 1 + i) % RRD_MINUTES;
           int real_min = (cur_min + 1 + i) % RRD_MINUTES;
