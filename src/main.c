@@ -867,6 +867,8 @@ static void *audio_thread_fn(void *arg)
             nread = g_frame_samples;
         }
 
+        int relay_active = kerchunk_core_get()->is_receiving();
+
         /* ── Run CTCSS/DCS decoders on original frame (sub-audible tones
          * are unaffected by voice scrambling) ── */
         plcode_ctcss_result_t ctcss_res;
@@ -926,27 +928,41 @@ static void *audio_thread_fn(void *arg)
         kerchevt_fire(&audio_evt);
         kerchunk_core_dispatch_taps(&audio_evt);
 
-        /* ── DTMF decoder runs on descrambled frame ── */
-        plcode_dtmf_result_t dtmf_res;
-        plcode_dtmf_dec_process(ctx->dtmf_dec, frame, (size_t)nread, &dtmf_res);
+        /* ── DTMF decoder: only process when COR active or draining ──
+         * Saves CPU and prevents false detections from noise/silence.
+         * The relay drain window catches late digits in the squelch tail. */
+        if (relay_active || g_relay_drain > 0) {
+            plcode_dtmf_result_t dtmf_res;
+            plcode_dtmf_dec_process(ctx->dtmf_dec, frame, (size_t)nread, &dtmf_res);
 
-        if (dtmf_res.detected && !prev_dtmf) {
-            KERCHUNK_LOG_I(LOG_MOD, "DTMF: %c", dtmf_res.digit);
-            kerchevt_t evt = {
-                .type = KERCHEVT_DTMF_DIGIT,
-                .timestamp_us = t0,
-                .dtmf = { .digit = dtmf_res.digit, .duration_ms = 0 },
-            };
-            kerchevt_fire(&evt);
-        } else if (!dtmf_res.detected && prev_dtmf) {
+            if (dtmf_res.detected && !prev_dtmf) {
+                KERCHUNK_LOG_I(LOG_MOD, "DTMF: %c", dtmf_res.digit);
+                kerchevt_t evt = {
+                    .type = KERCHEVT_DTMF_DIGIT,
+                    .timestamp_us = t0,
+                    .dtmf = { .digit = dtmf_res.digit, .duration_ms = 0 },
+                };
+                kerchevt_fire(&evt);
+            } else if (!dtmf_res.detected && prev_dtmf) {
+                kerchevt_t evt = {
+                    .type = KERCHEVT_DTMF_END,
+                    .timestamp_us = t0,
+                    .dtmf = { .digit = '\0', .duration_ms = 0 },
+                };
+                kerchevt_fire(&evt);
+            }
+            prev_dtmf = dtmf_res.detected;
+        } else if (prev_dtmf) {
+            /* COR gone and drain expired — emit final DTMF_END if
+             * a tone was still held when signal dropped */
             kerchevt_t evt = {
                 .type = KERCHEVT_DTMF_END,
                 .timestamp_us = t0,
                 .dtmf = { .digit = '\0', .duration_ms = 0 },
             };
             kerchevt_fire(&evt);
+            prev_dtmf = 0;
         }
-        prev_dtmf = dtmf_res.detected;
 
         /* ── Software relay: retransmit RX audio with TX encoder ──
          *
@@ -959,8 +975,6 @@ static void *audio_thread_fn(void *arg)
          * captured audio (relay_drain countdown) so the last few frames
          * of speech aren't cut off mid-word.
          */
-        int relay_active = kerchunk_core_get()->is_receiving();
-
         /* Detect COR drop → start drain countdown */
         if (g_software_relay && g_relay_was_active && !relay_active) {
             g_relay_drain = (g_sample_rate * g_relay_drain_ms) / 1000;
