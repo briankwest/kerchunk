@@ -353,7 +353,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "caller", "caller", "Show current caller and login session", cli_caller },
+    { .name = "caller", .usage = "caller", .description = "Show current caller and login session", .handler = cli_caller, .category = "Identification" },
 };
 
 static kerchunk_module_def_t mod_caller = {

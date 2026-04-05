@@ -340,7 +340,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "dtmfcmd", "dtmfcmd", "Show DTMF command table", cli_dtmfcmd },
+    { .name = "dtmfcmd", .usage = "dtmfcmd", .description = "Show DTMF command table", .handler = cli_dtmfcmd, .category = "Control" },
 };
 
 static kerchunk_module_def_t mod_dtmfcmd = {

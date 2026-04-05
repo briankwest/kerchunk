@@ -470,7 +470,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "otp", "otp", "OTP authentication status", cli_otp },
+    { .name = "otp", .usage = "otp", .description = "OTP authentication status", .handler = cli_otp, .category = "Control" },
 };
 
 static kerchunk_module_def_t mod_otp = {

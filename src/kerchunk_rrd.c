@@ -5,7 +5,6 @@
  * save/load. msync on close for crash safety.
  */
 
-#define _GNU_SOURCE
 #include "kerchunk_rrd.h"
 #include <stdio.h>
 #include <stdlib.h>

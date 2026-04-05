@@ -372,7 +372,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "repeater", "repeater", "Show repeater state", cli_repeater },
+    { .name = "repeater", .usage = "repeater", .description = "Show repeater state", .handler = cli_repeater, .category = "Control" },
 };
 
 static kerchunk_module_def_t mod_repeater = {

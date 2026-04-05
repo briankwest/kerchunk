@@ -2021,7 +2021,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "web", "web", "Web server status", cli_web },
+    { .name = "web", .usage = "web", .description = "Web server status", .handler = cli_web, .category = "Control" },
 };
 
 static kerchunk_module_def_t mod_web = {

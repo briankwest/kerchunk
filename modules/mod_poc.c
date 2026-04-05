@@ -191,17 +191,19 @@ static void poc_on_message(poc_server_t *srv, uint32_t from,
 {
     (void)srv; (void)target; (void)ud;
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "message from user %u: %s", from, text);
-
-    /* Announce via TTS if available */
-    if (g_core->tts_speak)
-        g_core->tts_speak(text, KERCHUNK_PRI_NORMAL);
+                "message from user %u to %u: %s", from, target, text);
 }
 
 static void poc_on_sos(poc_server_t *srv, uint32_t uid,
                        int alert_type, void *ud)
 {
     (void)srv; (void)ud;
+    if (alert_type < 0) {
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "SOS CANCELLED by user %u", uid);
+        kerchunk_core_set_emergency(0);
+        return;
+    }
     const char *names[] = {"SOS", "ManDown", "Fall", "CallAlarm"};
     g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
                 "*** %s from user %u ***",
@@ -310,9 +312,9 @@ static void sync_users(void)
         if (!poc_pw || !poc_pw[0]) continue;
 
         const char *username = kerchunk_config_get(ucfg, section, "username");
+        const char *fullname = kerchunk_config_get(ucfg, section, "name");
         if (!username) {
-            /* Derive from name field */
-            username = kerchunk_config_get(ucfg, section, "name");
+            username = fullname;
             if (!username) continue;
         }
 
@@ -321,13 +323,15 @@ static void sync_users(void)
 
         poc_server_add_user(g_srv, &(poc_server_user_t){
             .account  = username,
+            .name     = fullname ? fullname : username,
             .password = poc_pw,
             .user_id  = (uint32_t)(user_id + 1000),
         });
         added++;
 
         g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
-                    "added PoC user: %s (id %d)", username, user_id + 1000);
+                    "added PoC user: %s '%s' (id %d)", username,
+                    fullname ? fullname : username, user_id + 1000);
     }
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "%d PoC users configured", added);
 }

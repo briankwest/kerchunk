@@ -152,7 +152,7 @@ static void synthesize_and_queue(const char *text, int priority)
 
     /* Check cache first */
     if (g_cache_dir[0]) {
-        char path[544];
+        char path[576];
         cache_path_for_text(text, path, sizeof(path));
         if (access(path, R_OK) == 0) {
             g_core->queue_audio_file(path, priority);
@@ -251,9 +251,9 @@ static void synthesize_and_queue(const char *text, int priority)
     if (out_len > 0) {
         /* Write cache file (atomic: temp + rename) */
         if (g_cache_dir[0]) {
-            char path[544];
+            char path[576];
             cache_path_for_text(text, path, sizeof(path));
-            char tmp[548];
+            char tmp[580];
             snprintf(tmp, sizeof(tmp), "%s.tmp", path);
             if (kerchunk_wav_write(tmp, resampled, out_len, g_core->sample_rate) == 0) {
                 rename(tmp, path);  /* atomic */

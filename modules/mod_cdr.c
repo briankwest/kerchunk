@@ -355,7 +355,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "cdr", "cdr", "CDR status and daily stats", cli_cdr },
+    { .name = "cdr", .usage = "cdr", .description = "CDR status and daily stats", .handler = cli_cdr, .category = "Audio" },
 };
 
 static kerchunk_module_def_t mod_cdr = {

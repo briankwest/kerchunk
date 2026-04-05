@@ -268,7 +268,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "parrot", "parrot", "Parrot/echo status", cli_parrot },
+    { .name = "parrot", .usage = "parrot", .description = "Parrot/echo status", .handler = cli_parrot, .category = "Audio" },
 };
 
 static kerchunk_module_def_t mod_parrot = {

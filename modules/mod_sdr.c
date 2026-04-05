@@ -416,7 +416,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "sdr", "sdr", "SDR monitor status", cli_sdr },
+    { .name = "sdr", .usage = "sdr", .description = "SDR monitor status", .handler = cli_sdr, .category = "Control" },
 };
 
 static kerchunk_module_def_t mod_sdr = {

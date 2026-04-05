@@ -485,7 +485,8 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
     { uint32_t mx = 0; int has = 0;
       for (int i = 0; i < RRD_HOURS; i++) {
           uint32_t t = d->hours[i].rx_count + d->hours[i].tx_count;
-          if (t > mx) mx = t; if (t) has = 1;
+          if (t > mx) mx = t;
+          if (t) has = 1;
       }
       if (has) {
           resp_text_raw(r, "\n24h Activity:\n");
@@ -497,7 +498,8 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
               if (!t) bars = 0;
               char bar[11]; int b;
               for (b = 0; b < bars && b < 10; b++) bar[b] = '#';
-              for (; b < 10; b++) bar[b] = '.'; bar[10] = '\0';
+              for (; b < 10; b++) bar[b] = '.';
+              bar[10] = '\0';
               char l[80]; snprintf(l, sizeof(l), "  %02d %s %3u rx %3u tx%s\n",
                   i, bar, rx, tx, i == RRD_HOURS - 1 ? "  <-- now" : "");
               resp_text_raw(r, l);
@@ -526,7 +528,7 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
         }
     }
 
-    { char l[288]; snprintf(l, sizeof(l),
+    { char l[512]; snprintf(l, sizeof(l),
         "\nSystem:\n  Queue played:   %u\n  CDR records:    %u\n  Storage:        %s (mmap'd RRD)\n",
         c->queue_items, c->cdr_records, g_rrd_path);
       resp_text_raw(r, l); }
@@ -551,8 +553,8 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "stats", "stats [user <name>|reset|save]",
-      "Repeater statistics", cli_stats },
+    { .name = "stats", .usage = "stats [user <name>|reset|save]",
+      .description = "Repeater statistics", .handler = cli_stats, .category = "Control" },
 };
 
 static kerchunk_module_def_t mod_stats = {

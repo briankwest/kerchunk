@@ -364,7 +364,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "recorder", "recorder", "Recording status", cli_recorder },
+    { .name = "recorder", .usage = "recorder", .description = "Recording status", .handler = cli_recorder, .category = "Audio" },
 };
 
 static kerchunk_module_def_t mod_recorder = {

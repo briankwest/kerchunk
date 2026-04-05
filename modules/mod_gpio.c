@@ -209,7 +209,7 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "gpio", "gpio", "Show GPIO pin states", cli_gpio },
+    { .name = "gpio", .usage = "gpio", .description = "Show GPIO pin states", .handler = cli_gpio, .category = "Control" },
 };
 
 static kerchunk_module_def_t mod_gpio = {
