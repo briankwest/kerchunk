@@ -387,7 +387,7 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
         int idx = (d->minute_idx + 1 + i) % RRD_MINUTES;
         if (i > 0) resp_json_raw(r, ",");
         char f[64]; snprintf(f, sizeof(f), "{\"min\":%d,\"rx\":%u,\"tx\":%u}",
-            i, d->minutes[idx].rx_count, d->minutes[idx].tx_count);
+            idx, d->minutes[idx].rx_count, d->minutes[idx].tx_count);
         resp_json_raw(r, f);
     }
     resp_json_raw(r, "]");
@@ -398,7 +398,7 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
         int idx = (d->hour_idx + 1 + i) % RRD_HOURS;
         if (i > 0) resp_json_raw(r, ",");
         char f[64]; snprintf(f, sizeof(f), "{\"hour\":%d,\"rx\":%u,\"tx\":%u}",
-            i, d->hours[idx].rx_count, d->hours[idx].tx_count);
+            idx, d->hours[idx].rx_count, d->hours[idx].tx_count);
         resp_json_raw(r, f);
     }
     resp_json_raw(r, "]");
