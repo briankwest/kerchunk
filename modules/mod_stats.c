@@ -381,27 +381,36 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
         c->weather_count, c->nws_alerts, c->phone_calls);
       resp_json_raw(r, f); }
 
-    /* JSON: minutely (oldest first) */
-    resp_json_raw(r, ",\"minutely\":[");
-    for (int i = 0; i < RRD_MINUTES; i++) {
-        int idx = (d->minute_idx + 1 + i) % RRD_MINUTES;
-        if (i > 0) resp_json_raw(r, ",");
-        char f[64]; snprintf(f, sizeof(f), "{\"min\":%d,\"rx\":%u,\"tx\":%u}",
-            idx, d->minutes[idx].rx_count, d->minutes[idx].tx_count);
-        resp_json_raw(r, f);
-    }
-    resp_json_raw(r, "]");
+    /* JSON: minutely (oldest first, labels = real minute of hour) */
+    { time_t now = time(NULL);
+      struct tm tm_now;
+      gmtime_r(&now, &tm_now);
+      int cur_min = tm_now.tm_min;
+      int cur_hour = tm_now.tm_hour;
 
-    /* JSON: hourly (oldest first) */
-    resp_json_raw(r, ",\"hourly\":[");
-    for (int i = 0; i < RRD_HOURS; i++) {
-        int idx = (d->hour_idx + 1 + i) % RRD_HOURS;
-        if (i > 0) resp_json_raw(r, ",");
-        char f[64]; snprintf(f, sizeof(f), "{\"hour\":%d,\"rx\":%u,\"tx\":%u}",
-            idx, d->hours[idx].rx_count, d->hours[idx].tx_count);
-        resp_json_raw(r, f);
+      resp_json_raw(r, ",\"minutely\":[");
+      for (int i = 0; i < RRD_MINUTES; i++) {
+          int idx = (d->minute_idx + 1 + i) % RRD_MINUTES;
+          int real_min = (cur_min + 1 + i) % RRD_MINUTES;
+          if (i > 0) resp_json_raw(r, ",");
+          char f[64]; snprintf(f, sizeof(f), "{\"min\":%d,\"rx\":%u,\"tx\":%u}",
+              real_min, d->minutes[idx].rx_count, d->minutes[idx].tx_count);
+          resp_json_raw(r, f);
+      }
+      resp_json_raw(r, "]");
+
+      /* JSON: hourly (oldest first, labels = real hour of day) */
+      resp_json_raw(r, ",\"hourly\":[");
+      for (int i = 0; i < RRD_HOURS; i++) {
+          int idx = (d->hour_idx + 1 + i) % RRD_HOURS;
+          int real_hour = (cur_hour + 1 + i) % RRD_HOURS;
+          if (i > 0) resp_json_raw(r, ",");
+          char f[64]; snprintf(f, sizeof(f), "{\"hour\":%d,\"rx\":%u,\"tx\":%u}",
+              real_hour, d->hours[idx].rx_count, d->hours[idx].tx_count);
+          resp_json_raw(r, f);
+      }
+      resp_json_raw(r, "]");
     }
-    resp_json_raw(r, "]");
 
     /* JSON: daily (oldest first) */
     resp_json_raw(r, ",\"daily\":[");
