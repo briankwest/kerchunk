@@ -195,8 +195,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
   <div class="card">
     <h2>Simulation</h2>
     <div class="controls">
-      <button class="btn" onclick="cmd('sim cor on')">COR On</button>
-      <button class="btn" onclick="cmd('sim cor off')">COR Off</button>
+      <button class="btn" data-label="COR" data-ui-cmd="cor" onclick="toggleCOR(this)">COR OFF</button>
     </div>
     <div id="dynamic-controls"></div>
     <h2 style="margin-top:12px">NWS Alerts</h2>
@@ -423,6 +422,16 @@ function updatePTT(on) {
   syncToggle('ptt', on);
 }
 
+function updateCOR(on) {
+  relaying = !!on;
+  syncToggle('cor', on);
+}
+
+function toggleCOR(btn) {
+  var on = !btn.classList.contains('toggle-on');
+  cmd(on ? 'sim cor on' : 'sim cor off');
+}
+
 function updateTxState(txstate) {
   document.querySelectorAll('[data-tx]').forEach(el=>
     el.classList.toggle('active',el.dataset.tx===txstate));
@@ -442,7 +451,7 @@ async function refreshStatus() {
     if(d.rx_state) updateState(d.rx_state);
     if(d.tx_state) updateTxState(d.tx_state);
     updatePTT(d.ptt);
-    relaying = !!d.cor;
+    updateCOR(d.cor);
     if(d.cor) {
       liveStats.corActive=true; liveStats.corStart=Date.now();
       updateTxState('TX_RELAY');
@@ -782,7 +791,7 @@ function connectSSE() {
           addLog('RX: '+evt.old_state+' \u2192 '+evt.new_state,'log-state');
           break;
         case 'cor_assert':
-          relaying = true;
+          updateCOR(true);
           liveStats.corActive=true; liveStats.corStart=Date.now();
           updateTxState('TX_RELAY');
           addLog('COR assert \u2192 relay active','log-state');
@@ -793,7 +802,7 @@ function connectSSE() {
             liveStats.rx_count++;
             liveStats.corActive=false;
           }
-          relaying = false;
+          updateCOR(false);
           updateTxState('TX_TAIL');
           addLog('COR drop \u2192 relay draining','log-state');
           renderStats();
