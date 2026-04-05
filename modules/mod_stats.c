@@ -177,9 +177,8 @@ static void on_timeout(const kerchevt_t *evt, void *ud)
 
 static void on_queue_complete(const kerchevt_t *evt, void *ud)
 {
-    (void)evt; (void)ud;
-    /* Record TX into current minute slot */
-    kerchunk_rrd_record_tx(g_rrd, 0);
+    (void)ud;
+    kerchunk_rrd_record_tx(g_rrd, evt->queue.duration_ms);
 }
 
 static void on_recording_saved(const kerchevt_t *evt, void *ud)

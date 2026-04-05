@@ -114,7 +114,8 @@ int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max)
 
     case KERCHEVT_QUEUE_COMPLETE:
         return snprintf(buf, max,
-            "{\"type\":\"queue_complete\",\"ts\":%llu}", ts);
+            "{\"type\":\"queue_complete\",\"duration_ms\":%u,\"ts\":%llu}",
+            evt->queue.duration_ms, ts);
 
     case KERCHEVT_RECORDING_SAVED:
         return snprintf(buf, max,

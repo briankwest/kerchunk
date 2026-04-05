@@ -62,7 +62,7 @@ typedef struct {
         struct { int active; }                             cor;
         struct { int old_state; int new_state; }           state;
         struct { int user_id; int method; }                caller;
-        struct { int item_id; }                            queue;
+        struct { int item_id; uint32_t duration_ms; }        queue;
         struct { const char *path; const char *direction;
                  int user_id; float duration; }            recording;
         struct { const char *source; const char *description; } announcement;

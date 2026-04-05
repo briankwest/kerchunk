@@ -815,6 +815,7 @@ static int g_relay_drain_ms = 500; /* Configurable relay drain time */
 static int g_relay_was_active; /* Track COR transition for drain trigger */
 static int g_queue_ptt;      /* 1 while the queue holds a PTT ref */
 static int g_queue_fired_drain; /* 1 after QUEUE_DRAIN event fired */
+static uint64_t g_queue_drain_start_us; /* timestamp when drain began */
 static int g_tx_delay_ms;   /* silence after PTT assert before audio */
 static int g_tx_tail_ms;    /* silence after last audio before PTT release */
 static int g_tx_delay_rem;  /* remaining TX delay samples */
@@ -1102,6 +1103,7 @@ static void *audio_thread_fn(void *arg)
                 /* Fire QUEUE_DRAIN on first audio frame */
                 if (!g_queue_fired_drain) {
                     g_queue_fired_drain = 1;
+                    g_queue_drain_start_us = t0;
                     kerchevt_t qd = { .type = KERCHEVT_QUEUE_DRAIN,
                                     .timestamp_us = t0 };
                     kerchevt_fire(&qd);
@@ -1136,8 +1138,11 @@ static void *audio_thread_fn(void *arg)
                 /* Fire QUEUE_COMPLETE at tail start — gives the dashboard
                  * time to show TAIL state before PTT drops */
                 if (g_queue_fired_drain) {
+                    uint64_t end_us = now_us();
+                    uint32_t dur_ms = (uint32_t)((end_us - g_queue_drain_start_us) / 1000);
                     kerchevt_t qc = { .type = KERCHEVT_QUEUE_COMPLETE,
-                                    .timestamp_us = now_us() };
+                                    .timestamp_us = end_us,
+                                    .queue = { .duration_ms = dur_ms } };
                     kerchevt_fire(&qc);
                     g_queue_fired_drain = 0;
                 }
