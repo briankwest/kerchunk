@@ -442,7 +442,13 @@ async function refreshStatus() {
     if(d.rx_state) updateState(d.rx_state);
     if(d.tx_state) updateTxState(d.tx_state);
     updatePTT(d.ptt);
-    if(d.cor) relaying = true;
+    relaying = !!d.cor;
+    if(d.cor) {
+      liveStats.corActive=true; liveStats.corStart=Date.now();
+      updateTxState('TX_RELAY');
+    } else {
+      liveStats.corActive=false;
+    }
   } catch(e) {}
 }
 
@@ -580,10 +586,13 @@ function updateCharts(d) {
   }
 
   if (d.hourly) {
-    const hr = [...d.hourly].reverse();
-    chartHourly.data.labels = hr.map(h => String(h.hour).padStart(2,'0'));
-    chartHourly.data.datasets[0].data = hr.map(h => h.rx);
-    chartHourly.data.datasets[1].data = hr.map(h => h.tx);
+    var tzHours = -Math.round(new Date().getTimezoneOffset() / 60);
+    chartHourly.data.labels = d.hourly.map(h => {
+      var local = ((h.hour + tzHours) % 24 + 24) % 24;
+      return String(local).padStart(2,'0');
+    });
+    chartHourly.data.datasets[0].data = d.hourly.map(h => h.rx);
+    chartHourly.data.datasets[1].data = d.hourly.map(h => h.tx);
     chartHourly.update('none');
   }
 
