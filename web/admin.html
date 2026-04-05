@@ -580,9 +580,10 @@ function updateCharts(d) {
   }
 
   if (d.hourly) {
-    chartHourly.data.labels = d.hourly.map(h => String(h.hour).padStart(2,'0'));
-    chartHourly.data.datasets[0].data = d.hourly.map(h => h.rx);
-    chartHourly.data.datasets[1].data = d.hourly.map(h => h.tx);
+    const hr = [...d.hourly].reverse();
+    chartHourly.data.labels = hr.map(h => String(h.hour).padStart(2,'0'));
+    chartHourly.data.datasets[0].data = hr.map(h => h.rx);
+    chartHourly.data.datasets[1].data = hr.map(h => h.tx);
     chartHourly.update('none');
   }
 
