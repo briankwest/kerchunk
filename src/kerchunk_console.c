@@ -13,6 +13,7 @@
 #include "kerchunk_console.h"
 #include "linenoise.h"
 #include <stdio.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -238,8 +239,11 @@ static void *console_thread_fn(void *arg)
             line = linenoiseEditFeed(&g_ls);
             if (line != linenoiseEditMore)
                 break;
-            /* No complete line yet — sleep briefly to avoid busy-wait */
-            usleep(5000);  /* 5ms */
+            /* No complete line yet — wait for stdin activity via poll */
+            {
+                struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
+                poll(&pfd, 1, 50);  /* 50ms timeout */
+            }
         }
 
         g_in_edit = 0;
