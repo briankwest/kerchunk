@@ -477,10 +477,10 @@ static int cwid_configure(const kerchunk_config_t *cfg)
         int tx_ctcss = kerchunk_config_get_int(cfg, "repeater", "tx_ctcss", 0);
         int tx_dcs   = kerchunk_config_get_int(cfg, "repeater", "tx_dcs", 0);
         if (tx_ctcss > 0)
-            snprintf(g_pl_tone, sizeof(g_pl_tone), "P L %d point %d",
+            snprintf(g_pl_tone, sizeof(g_pl_tone), "P L %d point %d hertz",
                      tx_ctcss / 10, tx_ctcss % 10);
         else if (tx_dcs > 0)
-            snprintf(g_pl_tone, sizeof(g_pl_tone), "D C S %03d", tx_dcs);
+            snprintf(g_pl_tone, sizeof(g_pl_tone), "D C S code %03d", tx_dcs);
     }
 
     const char *vi = kerchunk_config_get(cfg, "repeater", "voice_id");
