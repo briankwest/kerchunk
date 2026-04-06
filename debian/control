@@ -28,6 +28,7 @@ Depends: ${shlibs:Depends},
 Recommends: libnemo-normalize (>= 1.0.1),
             libnemo-normalize-data (>= 1.0.1),
             librtlsdr0 | librtlsdr2
+Suggests: piper-tts
 Description: GMRS/Amateur/Part 90 repeater controller daemon
  kerchunkd is a lightweight C11 repeater controller for Retevis RT97L and
  similar GMRS, Amateur (Part 97), and Business/Industrial (Part 90) repeaters.

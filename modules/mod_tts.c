@@ -1,17 +1,21 @@
 /*
- * mod_tts.c — Text-to-speech service via ElevenLabs API
+ * mod_tts.c — Text-to-speech service (ElevenLabs cloud / Piper local)
  *
  * Provides g_core->tts_speak(text, priority) for other modules.
  * Synthesis runs on a background thread to avoid blocking the main loop.
- * POSTs text to ElevenLabs, receives PCM at 16kHz, decimates to 8kHz,
- * and queues for playback.
+ *
+ * Engines:
+ *   elevenlabs — POSTs text to ElevenLabs API, receives PCM at 16kHz.
+ *   piper      — Pipes text to local Piper binary, receives raw PCM.
+ *
+ * Both engines resample to g_core->sample_rate before playback.
  *
  * Responses are cached as WAV files keyed by text hash. Identical text
  * is synthesized once and replayed from disk on subsequent requests.
  * Cache dir: <sounds_dir>/cache/tts/
  *
  * Config: [tts] section in kerchunk.conf
- * Requires: libcurl, pthreads
+ * Requires: libcurl (ElevenLabs), pthreads
  */
 
 #include "kerchunk.h"
@@ -27,6 +31,7 @@
 #include <errno.h>
 #include <time.h>
 #include <dirent.h>
+#include <sys/wait.h>
 #include <curl/curl.h>
 
 #ifdef HAVE_NEMO_NORMALIZE
@@ -51,6 +56,14 @@ static char g_voice_id[64]  = "21m00Tcm4TlvDq8ikWAM";
 static char g_model[64]     = "eleven_turbo_v2_5";
 static char g_cache_dir[512] = "";
 static volatile int g_initialized = 0;
+
+/* Engine selection */
+typedef enum { TTS_ELEVENLABS, TTS_PIPER } tts_engine_t;
+static tts_engine_t g_engine      = TTS_ELEVENLABS;
+static char g_piper_binary[512]   = "/usr/bin/piper";
+static char g_piper_model[512]    = "";
+static int  g_piper_speaker       = 0;
+static int  g_piper_sample_rate   = 22050;
 
 /* ── Background worker thread ── */
 
@@ -81,7 +94,13 @@ static uint32_t fnv1a(const char *s)
 
 static void cache_path_for_text(const char *text, char *out, size_t outsz)
 {
-    uint32_t h = fnv1a(text);
+    /* Include engine + voice info so different engines get separate cache entries */
+    char key[3072];
+    if (g_engine == TTS_PIPER)
+        snprintf(key, sizeof(key), "piper:%s:%d:%s", g_piper_model, g_piper_speaker, text);
+    else
+        snprintf(key, sizeof(key), "el:%s:%s:%s", g_voice_id, g_model, text);
+    uint32_t h = fnv1a(key);
     snprintf(out, outsz, "%s/%08x_%zu.wav", g_cache_dir, h, strlen(text));
 }
 
@@ -134,7 +153,170 @@ static size_t json_escape(const char *text, char *out, size_t max)
     return j;
 }
 
-/* ── ElevenLabs synthesis (runs on worker thread) ── */
+/* ── Shell-safe escaping (single-quote wrapping) ── */
+
+static size_t shell_escape(const char *text, char *out, size_t max)
+{
+    size_t j = 0;
+    if (j < max - 1) out[j++] = '\'';
+    for (size_t i = 0; text[i] && j < max - 5; i++) {
+        if (text[i] == '\'') {
+            /* end quote, escaped quote, restart quote: '\'' */
+            out[j++] = '\'';
+            out[j++] = '\\';
+            out[j++] = '\'';
+            out[j++] = '\'';
+        } else {
+            out[j++] = text[i];
+        }
+    }
+    if (j < max - 1) out[j++] = '\'';
+    out[j] = '\0';
+    return j;
+}
+
+/* ── ElevenLabs synthesis ── */
+
+static int elevenlabs_synthesize(const char *text, int16_t **out, size_t *out_len)
+{
+    char url[256];
+    snprintf(url, sizeof(url),
+             "https://api.elevenlabs.io/v1/text-to-speech/%s"
+             "?output_format=pcm_16000",
+             g_voice_id);
+
+    char escaped[1024];
+    json_escape(text, escaped, sizeof(escaped));
+
+    char body[2048];
+    snprintf(body, sizeof(body),
+             "{\"text\":\"%s\",\"model_id\":\"%s\"}",
+             escaped, g_model);
+
+    struct curl_slist *headers = NULL;
+    char auth[256];
+    snprintf(auth, sizeof(auth), "xi-api-key: %s", g_api_key);
+    headers = curl_slist_append(headers, auth);
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, "Accept: application/octet-stream");
+
+    curl_buf_t buf = { .data = malloc(65536), .len = 0, .cap = 65536 };
+    if (!buf.data) { curl_slist_free_all(headers); return -1; }
+
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        free(buf.data);
+        curl_slist_free_all(headers);
+        return -1;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE, 50L * 1024 * 1024);  /* 50MB for audio */
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    curl_easy_cleanup(curl);
+    curl_slist_free_all(headers);
+
+    if (res != CURLE_OK) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "curl failed: %s",
+                    curl_easy_strerror(res));
+        free(buf.data);
+        return -1;
+    }
+
+    if (http_code != 200) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "ElevenLabs API error %ld: %.100s",
+                    http_code, buf.data);
+        free(buf.data);
+        return -1;
+    }
+
+    size_t samples = buf.len / sizeof(int16_t);
+    if (samples == 0) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "empty audio response");
+        free(buf.data);
+        return -1;
+    }
+
+    *out     = (int16_t *)buf.data;
+    *out_len = samples;
+    return 0;
+}
+
+/* ── Piper local synthesis ── */
+
+static int piper_synthesize(const char *text, int16_t **out, size_t *out_len)
+{
+    char escaped[4096];
+    shell_escape(text, escaped, sizeof(escaped));
+
+    char cmd[6144];
+    if (g_piper_speaker > 0)
+        snprintf(cmd, sizeof(cmd),
+                 "printf '%%s' %s | %s --model %s --speaker %d --output_raw 2>/dev/null",
+                 escaped, g_piper_binary, g_piper_model, g_piper_speaker);
+    else
+        snprintf(cmd, sizeof(cmd),
+                 "printf '%%s' %s | %s --model %s --output_raw 2>/dev/null",
+                 escaped, g_piper_binary, g_piper_model);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "popen failed: %s",
+                    strerror(errno));
+        return -1;
+    }
+
+    size_t cap = 65536;
+    size_t len = 0;
+    char *buf = malloc(cap);
+    if (!buf) { pclose(fp); return -1; }
+
+    for (;;) {
+        size_t n = fread(buf + len, 1, cap - len, fp);
+        if (n == 0) break;
+        len += n;
+        if (len == cap) {
+            cap *= 2;
+            char *p = realloc(buf, cap);
+            if (!p) { free(buf); pclose(fp); return -1; }
+            buf = p;
+        }
+    }
+
+    int status = pclose(fp);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "piper exited with status %d", WEXITSTATUS(status));
+        free(buf);
+        return -1;
+    }
+
+    size_t samples = len / sizeof(int16_t);
+    if (samples == 0) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "piper produced no audio");
+        free(buf);
+        return -1;
+    }
+
+    *out     = (int16_t *)buf;
+    *out_len = samples;
+    return 0;
+}
+
+/* ── Synthesis dispatcher (runs on worker thread) ── */
 
 static void synthesize_and_queue(const char *text, int priority)
 {
@@ -165,87 +347,32 @@ static void synthesize_and_queue(const char *text, int priority)
         }
     }
 
-    char url[256];
-    snprintf(url, sizeof(url),
-             "https://api.elevenlabs.io/v1/text-to-speech/%s"
-             "?output_format=pcm_16000",
-             g_voice_id);
+    /* Synthesize via selected engine */
+    int16_t *raw_pcm = NULL;
+    size_t   raw_samples = 0;
+    int      src_rate = 0;
 
-    char escaped[1024];
-    json_escape(text, escaped, sizeof(escaped));
-
-    char body[2048];
-    snprintf(body, sizeof(body),
-             "{\"text\":\"%s\",\"model_id\":\"%s\"}",
-             escaped, g_model);
-
-    struct curl_slist *headers = NULL;
-    char auth[256];
-    snprintf(auth, sizeof(auth), "xi-api-key: %s", g_api_key);
-    headers = curl_slist_append(headers, auth);
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, "Accept: application/octet-stream");
-
-    curl_buf_t buf = { .data = malloc(65536), .len = 0, .cap = 65536 };
-    if (!buf.data) { curl_slist_free_all(headers); return; }
-
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        free(buf.data);
-        curl_slist_free_all(headers);
-        return;
+    if (g_engine == TTS_PIPER) {
+        if (piper_synthesize(text, &raw_pcm, &raw_samples) != 0)
+            return;
+        src_rate = g_piper_sample_rate;
+    } else {
+        if (elevenlabs_synthesize(text, &raw_pcm, &raw_samples) != 0)
+            return;
+        src_rate = ELEVENLABS_PCM_RATE;
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE, 50L * 1024 * 1024);  /* 50MB for audio */
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
-
-    CURLcode res = curl_easy_perform(curl);
-
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-
-    curl_easy_cleanup(curl);
-    curl_slist_free_all(headers);
-
-    if (res != CURLE_OK) {
-        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "curl failed: %s",
-                    curl_easy_strerror(res));
-        free(buf.data);
-        return;
-    }
-
-    if (http_code != 200) {
-        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
-                    "ElevenLabs API error %ld: %.100s",
-                    http_code, buf.data);
-        free(buf.data);
-        return;
-    }
-
-    size_t src_samples = buf.len / sizeof(int16_t);
-    if (src_samples == 0) {
-        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "empty audio response");
-        free(buf.data);
-        return;
-    }
-
+    /* Resample to system rate */
     int16_t *resampled = NULL;
     size_t out_len = 0;
-    if (kerchunk_resample((const int16_t *)buf.data, src_samples,
-                          ELEVENLABS_PCM_RATE, g_core->sample_rate,
+    if (kerchunk_resample(raw_pcm, raw_samples,
+                          src_rate, g_core->sample_rate,
                           &resampled, &out_len) != 0) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "resample failed");
-        free(buf.data);
+        free(raw_pcm);
         return;
     }
-    free(buf.data);
+    free(raw_pcm);
     if (out_len > (size_t)MAX_TTS_SAMPLES) out_len = (size_t)MAX_TTS_SAMPLES;
 
     if (out_len > 0) {
@@ -352,6 +479,16 @@ static int tts_configure(const kerchunk_config_t *cfg)
 {
     const char *v;
 
+    /* Engine selection */
+    v = kerchunk_config_get(cfg, "tts", "engine");
+    if (v) {
+        if (strcmp(v, "piper") == 0)
+            g_engine = TTS_PIPER;
+        else
+            g_engine = TTS_ELEVENLABS;
+    }
+
+    /* ElevenLabs settings */
     v = kerchunk_config_get(cfg, "tts", "api_key");
     if (v) snprintf(g_api_key, sizeof(g_api_key), "%s", v);
 
@@ -360,6 +497,44 @@ static int tts_configure(const kerchunk_config_t *cfg)
 
     v = kerchunk_config_get(cfg, "tts", "model");
     if (v) snprintf(g_model, sizeof(g_model), "%s", v);
+
+    /* Piper settings */
+    v = kerchunk_config_get(cfg, "tts", "piper_binary");
+    if (v) snprintf(g_piper_binary, sizeof(g_piper_binary), "%s", v);
+
+    v = kerchunk_config_get(cfg, "tts", "piper_model");
+    if (v) snprintf(g_piper_model, sizeof(g_piper_model), "%s", v);
+
+    v = kerchunk_config_get(cfg, "tts", "piper_speaker");
+    if (v) g_piper_speaker = atoi(v);
+
+    /* Auto-detect sample rate from Piper .onnx.json sidecar */
+    if (g_piper_model[0]) {
+        char json_path[520];
+        snprintf(json_path, sizeof(json_path), "%s.json", g_piper_model);
+        FILE *jf = fopen(json_path, "r");
+        if (jf) {
+            char jbuf[4096];
+            size_t jlen = fread(jbuf, 1, sizeof(jbuf) - 1, jf);
+            fclose(jf);
+            jbuf[jlen] = '\0';
+            const char *sr = strstr(jbuf, "\"sample_rate\"");
+            if (sr) {
+                /* Skip past key and colon to find the integer value */
+                sr += strlen("\"sample_rate\"");
+                while (*sr && (*sr == ' ' || *sr == ':' || *sr == '\t')) sr++;
+                int rate = atoi(sr);
+                if (rate >= 8000 && rate <= 48000)
+                    g_piper_sample_rate = rate;
+                else
+                    g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                                "ignoring out-of-range sample_rate %d from %s",
+                                rate, json_path);
+            }
+            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                        "piper model sidecar: %s (rate=%d)", json_path, g_piper_sample_rate);
+        }
+    }
 
     /* Set up cache directory */
     const char *sdir = kerchunk_config_get(cfg, "general", "sounds_dir");
@@ -398,10 +573,29 @@ static int tts_configure(const kerchunk_config_t *cfg)
     }
 #endif
 
-    if (g_api_key[0] == '\0') {
-        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                    "no api_key configured — TTS disabled");
-        return 0;
+    /* Validate engine-specific requirements */
+    if (g_engine == TTS_PIPER) {
+        if (g_piper_model[0] == '\0') {
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "piper engine selected but no piper_model configured — TTS disabled");
+            return 0;
+        }
+        if (access(g_piper_binary, X_OK) != 0) {
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "piper binary not executable: %s — TTS disabled", g_piper_binary);
+            return 0;
+        }
+        if (access(g_piper_model, R_OK) != 0) {
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "piper model not readable: %s — TTS disabled", g_piper_model);
+            return 0;
+        }
+    } else {
+        if (g_api_key[0] == '\0') {
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "no api_key configured — TTS disabled");
+            return 0;
+        }
     }
 
     /* Stop existing worker thread on reload */
@@ -424,9 +618,14 @@ static int tts_configure(const kerchunk_config_t *cfg)
     g_initialized = 1;
     g_core->tts_speak = tts_speak_impl;
 
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "ElevenLabs TTS ready: voice=%s model=%s cache=%s",
-                g_voice_id, g_model, g_cache_dir);
+    if (g_engine == TTS_PIPER)
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "Piper TTS ready: model=%s speaker=%d rate=%d cache=%s",
+                    g_piper_model, g_piper_speaker, g_piper_sample_rate, g_cache_dir);
+    else
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "ElevenLabs TTS ready: voice=%s model=%s cache=%s",
+                    g_voice_id, g_model, g_cache_dir);
     return 0;
 }
 
@@ -471,10 +670,18 @@ static int cli_tts(int argc, const char **argv, kerchunk_resp_t *r)
         pthread_mutex_lock(&g_tts_mutex);
         int pending = g_tts_count;
         pthread_mutex_unlock(&g_tts_mutex);
-        resp_str(r, "status", g_initialized ? "ready" : "no api_key");
-        resp_str(r, "engine", "ElevenLabs (async)");
-        resp_str(r, "voice_id", g_voice_id);
-        resp_str(r, "model", g_model);
+        resp_str(r, "status", g_initialized ? "ready" : "disabled");
+        if (g_engine == TTS_PIPER) {
+            resp_str(r, "engine", "Piper (local)");
+            resp_str(r, "piper_binary", g_piper_binary);
+            resp_str(r, "piper_model", g_piper_model);
+            resp_int(r, "piper_speaker", g_piper_speaker);
+            resp_int(r, "piper_sample_rate", g_piper_sample_rate);
+        } else {
+            resp_str(r, "engine", "ElevenLabs (cloud)");
+            resp_str(r, "voice_id", g_voice_id);
+            resp_str(r, "model", g_model);
+        }
         resp_int(r, "pending", pending);
         if (g_cache_dir[0])
             resp_str(r, "cache_dir", g_cache_dir);
@@ -513,21 +720,23 @@ static int cli_tts(int argc, const char **argv, kerchunk_resp_t *r)
     return 0;
 
 usage:
-    resp_text_raw(r, "Text-to-speech via ElevenLabs API (cached)\n\n"
+    resp_text_raw(r, "Text-to-speech (ElevenLabs cloud / Piper local)\n\n"
         "  tts say <text>\n"
         "    Synthesize and play the given text on-air.\n"
         "    text: one or more words to speak\n\n"
         "  tts status\n"
-        "    Show TTS engine status: voice, model, cache directory,\n"
-        "    pending queue depth, normalization state.\n\n"
+        "    Show TTS engine status, pending queue depth,\n"
+        "    and normalization state.\n\n"
         "  tts cache-clear\n"
         "    Remove all cached WAV files from the TTS cache directory.\n"
         "    Forces re-synthesis on next request for each phrase.\n\n"
         "    Synthesis runs on a background thread. Responses are cached\n"
         "    as WAV files keyed by FNV-1a text hash. Identical text is\n"
         "    synthesized once and replayed from disk on subsequent calls.\n\n"
-        "Config: [tts] api_key, voice_id, model\n"
-        "        [general] sounds_dir (cache stored in <sounds_dir>/cache/tts/)\n");
+        "Config: [tts] engine (elevenlabs|piper)\n"
+        "  ElevenLabs: api_key, voice_id, model\n"
+        "  Piper:      piper_binary, piper_model, piper_speaker\n"
+        "  [general]   sounds_dir (cache stored in <sounds_dir>/cache/tts/)\n");
     resp_str(r, "error", "usage: tts <say <text>|status|cache-clear>");
     resp_finish(r);
     return -1;
@@ -539,15 +748,15 @@ static const kerchunk_ui_field_t tts_fields[] = {
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
     { .name = "tts", .usage = "tts say <text> | status | cache-clear",
-      .description = "Text-to-speech (ElevenLabs)", .handler = cli_tts,
+      .description = "Text-to-speech (ElevenLabs cloud / Piper local)", .handler = cli_tts,
       .category = "Announcements", .ui_label = "TTS Speak", .ui_type = CLI_UI_FORM,
       .ui_command = "tts say", .ui_fields = tts_fields, .num_ui_fields = 1 },
 };
 
 static kerchunk_module_def_t mod_tts = {
     .name             = "mod_tts",
-    .version          = "1.0.0",
-    .description      = "Text-to-speech via ElevenLabs API (cached)",
+    .version          = "1.1.0",
+    .description      = "Text-to-speech (ElevenLabs cloud / Piper local)",
     .load             = tts_load,
     .configure        = tts_configure,
     .unload           = tts_unload,

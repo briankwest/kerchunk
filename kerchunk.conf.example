@@ -343,20 +343,28 @@ max_duration = 10s               ; Max recording length (capped at 30s)
 directory = /var/lib/kerchunk/cdr  ; Output directory
 
 ; ----------------------------------------------------------------------------
-; Text-to-Speech (ElevenLabs API)
+; Text-to-Speech (ElevenLabs cloud / Piper local)
 ;
 ; Provides g_core->tts_speak() for other modules (mod_nws, etc.)
-; Get an API key at https://elevenlabs.io
-; Voice IDs: https://api.elevenlabs.io/v1/voices
+;
+; Engines:
+;   elevenlabs — Cloud API. Get an API key at https://elevenlabs.io
+;                Voice IDs: https://api.elevenlabs.io/v1/voices
+;   piper      — Local inference via Piper TTS (https://github.com/rhasspy/piper)
+;                Download .onnx voice models from the Piper releases page.
 ;
 ; Responses are cached as WAV files keyed by text hash in
 ; <sounds_dir>/cache/tts/. Identical text is synthesized once.
 ; Use "tts cache-clear" CLI command to flush the cache.
 ; ----------------------------------------------------------------------------
 [tts]
+; engine = elevenlabs              ; elevenlabs (default) | piper
 api_key = YOUR_ELEVENLABS_API_KEY
 voice_id = 21m00Tcm4TlvDq8ikWAM ; Rachel (default ElevenLabs voice)
 model = eleven_turbo_v2_5        ; eleven_turbo_v2_5 | eleven_monolingual_v1
+; piper_binary = /usr/bin/piper
+; piper_model =                    ; Path to .onnx voice model (required for piper)
+; piper_speaker = 0                ; Speaker index for multi-speaker models
 ; normalize_far_dir =            ; Path to NeMo FAR grammar files for text normalization
 ;                                ; Normalizes numbers, times, abbreviations before TTS.
 ;                                ; Install: make -C libnemo_normalize && make install
