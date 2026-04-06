@@ -1,7 +1,7 @@
 Source: kerchunk
 Section: hamradio
 Priority: optional
-Maintainer: Brian West <brian@mcalester.net>
+Maintainer: Brian West <brian@kerchunk.net>
 Build-Depends: debhelper-compat (= 13),
                build-essential,
                autoconf,

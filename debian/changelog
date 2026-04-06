@@ -18,7 +18,7 @@ kerchunk (1.0.2-1) stable; urgency=medium
   * Remove GMRS-specific branding from service/docs
   * Requires libpocsag >= 1.0.2, libflex >= 1.0.2, libaprs >= 1.0.2
 
- -- Brian West <brian@mcalester.net>  Wed, 02 Apr 2026 00:00:00 +0000
+ -- Brian West <brian@kerchunk.net>  Wed, 02 Apr 2026 00:00:00 +0000
 
 kerchunk (1.0.1-1) stable; urgency=medium
 
@@ -34,7 +34,7 @@ kerchunk (1.0.1-1) stable; urgency=medium
   * Use /dev/rimlite udev symlink as default HID device
   * Update README with RIM-Lite GPIO mapping and polarity notes
 
- -- Brian West <brian@mcalester.net>  Sun, 29 Mar 2026 20:00:00 -0500
+ -- Brian West <brian@kerchunk.net>  Sun, 29 Mar 2026 20:00:00 -0500
 
 kerchunk (1.0.0-1) stable; urgency=medium
 
@@ -47,4 +47,4 @@ kerchunk (1.0.0-1) stable; urgency=medium
   * NWS alert monitoring with TTS announcements
   * Systemd service with security hardening
 
- -- Brian West <brian@mcalester.net>  Fri, 27 Mar 2026 12:00:00 -0500
+ -- Brian West <brian@kerchunk.net>  Fri, 27 Mar 2026 12:00:00 -0500
