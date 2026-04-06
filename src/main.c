@@ -1449,6 +1449,28 @@ int main(int argc, char **argv)
             KERCHUNK_LOG_I(LOG_MOD, "COR: assert (cor=%d prev=%d hold=%d)",
                           cor, prev_cor, cor_drop_hold);
             cor_drop_hold = 0;
+
+            /* Preempt queue if it was actively playing — incoming
+             * transmission takes priority over announcements.
+             * Fire QUEUE_PREEMPTED so modules (CWID, etc.) can re-queue. */
+            if (kerchunk_queue_is_draining() || kerchunk_queue_depth() > 0) {
+                char preempt_source[QUEUE_SOURCE_MAX] = "";
+                int flushed = kerchunk_queue_preempt(preempt_source,
+                                                      sizeof(preempt_source));
+                if (flushed > 0) {
+                    KERCHUNK_LOG_I(LOG_MOD,
+                        "COR preempted queue: %d items flushed (source=%s)",
+                        flushed, preempt_source[0] ? preempt_source : "?");
+                    kerchevt_t pe = {
+                        .type = KERCHEVT_QUEUE_PREEMPTED,
+                        .timestamp_us = tick_start,
+                        .preempt = { .source = preempt_source,
+                                     .items_flushed = flushed },
+                    };
+                    kerchevt_fire(&pe);
+                }
+            }
+
             kerchunk_core_set_cor(1);
             kerchevt_t cor_evt = {
                 .type = KERCHEVT_COR_ASSERT,

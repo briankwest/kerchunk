@@ -36,6 +36,7 @@ typedef enum {
     /* Module/system events */
     KERCHEVT_QUEUE_DRAIN,
     KERCHEVT_QUEUE_COMPLETE,
+    KERCHEVT_QUEUE_PREEMPTED,
     KERCHEVT_RECORDING_SAVED,
     KERCHEVT_ANNOUNCEMENT,
     KERCHEVT_CONFIG_RELOAD,
@@ -66,6 +67,7 @@ typedef struct {
         struct { const char *path; const char *direction;
                  int user_id; float duration; }            recording;
         struct { const char *source; const char *description; } announcement;
+        struct { const char *source; int items_flushed; }     preempt;
         struct { void *data; size_t len; }                 custom;
     };
 } kerchevt_t;

@@ -11,6 +11,9 @@
 /* Queue item flags */
 #define QUEUE_FLAG_NO_TAIL  0x01  /* suppress courtesy/tail tone after this item */
 
+/* Max length of source tag for queue items */
+#define QUEUE_SOURCE_MAX  16
+
 /* Queue item types */
 typedef enum {
     QUEUE_AUDIO_FILE,
@@ -25,6 +28,7 @@ typedef struct kerchunk_queue_item {
     int priority;
     int id;
     int flags;
+    char source[QUEUE_SOURCE_MAX];  /* module tag: "cwid", "weather", "tts", etc. */
     union {
         struct { char path[256]; }                         file;
         struct { int16_t *buf; size_t n; int owns; }       buffer;
@@ -46,8 +50,28 @@ int  kerchunk_queue_add_buffer(const int16_t *buf, size_t n, int priority, int f
 int  kerchunk_queue_add_tone(int freq_hz, int duration_ms, int16_t amplitude, int priority);
 int  kerchunk_queue_add_silence(int duration_ms, int priority);
 
+/* Source-tagged versions — same as above but set the source tag on the item */
+int  kerchunk_queue_add_buffer_src(const int16_t *buf, size_t n, int priority,
+                                    int flags, const char *source);
+int  kerchunk_queue_add_tone_src(int freq_hz, int duration_ms, int16_t amplitude,
+                                  int priority, const char *source);
+int  kerchunk_queue_add_silence_src(int duration_ms, int priority, const char *source);
+
 int  kerchunk_queue_flush(void);
 int  kerchunk_queue_depth(void);
+
+/* Tag a queued item with a source identifier (e.g. "cwid", "weather").
+ * Must be called before the item starts draining. */
+void kerchunk_queue_tag_item(int id, const char *source);
+
+/* Get the source tag of the item currently being drained (or last drained).
+ * Returns "" if no source was set. */
+const char *kerchunk_queue_drain_source(void);
+
+/* Flush the queue and return info about what was preempted.
+ * Sets *out_source to the source tag of the item that was being drained
+ * (or the first item flushed). Returns number of items flushed. */
+int  kerchunk_queue_preempt(char *out_source, size_t source_sz);
 
 /*
  * Drain the next chunk of audio from the queue.

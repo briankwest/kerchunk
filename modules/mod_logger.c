@@ -64,6 +64,7 @@ static const char *event_name(kerchevt_type_t type)
     case KERCHEVT_CALLER_CLEARED:    return "CALLER_CLEARED";
     case KERCHEVT_QUEUE_DRAIN:       return "QUEUE_DRAIN";
     case KERCHEVT_QUEUE_COMPLETE:    return "QUEUE_COMPLETE";
+    case KERCHEVT_QUEUE_PREEMPTED:  return "QUEUE_PREEMPTED";
     case KERCHEVT_ANNOUNCEMENT:      return "ANNOUNCEMENT";
     case KERCHEVT_CONFIG_RELOAD:     return "CONFIG_RELOAD";
     case KERCHEVT_SHUTDOWN:          return "SHUTDOWN";
@@ -190,6 +191,12 @@ static void log_event(const kerchevt_t *evt, void *ud)
         snprintf(detail, sizeof(detail), " item=%d done", evt->queue.item_id);
         break;
 
+    case KERCHEVT_QUEUE_PREEMPTED:
+        snprintf(detail, sizeof(detail), " source=%s flushed=%d",
+                 evt->preempt.source ? evt->preempt.source : "?",
+                 evt->preempt.items_flushed);
+        break;
+
     case KERCHEVT_TIMEOUT:
         snprintf(detail, sizeof(detail), " TOT fired — user timed out");
         break;
@@ -269,7 +276,8 @@ static int logger_load(kerchunk_core_t *core)
         KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
         KERCHEVT_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_TIMEOUT,
         KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
-        KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_ANNOUNCEMENT,
+        KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_QUEUE_PREEMPTED,
+        KERCHEVT_ANNOUNCEMENT,
         KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN,
     };
     for (int i = 0; i < (int)(sizeof(types) / sizeof(types[0])); i++)
@@ -310,7 +318,7 @@ static const kerchevt_type_t g_sub_types[] = {
     KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
     KERCHEVT_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_TIMEOUT,
     KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
-    KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE,
+    KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_QUEUE_PREEMPTED,
     KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN,
 };
 #define NUM_SUB_TYPES (int)(sizeof(g_sub_types) / sizeof(g_sub_types[0]))

@@ -38,6 +38,7 @@ static int      g_drain_item_id;
 static kerchunk_queue_item_type_t g_drain_type;
 static int      g_drain_flags;
 static int      g_last_drain_flags;
+static char     g_drain_source[QUEUE_SOURCE_MAX];
 
 /* 1 while queue is actively playing a batch — prevents preemption */
 static int      g_batch_active;
@@ -348,6 +349,7 @@ static int load_next_item(void)
         g_drain_type    = item->type;
         g_drain_flags   = item->flags;
         g_last_drain_flags = item->flags;
+        snprintf(g_drain_source, sizeof(g_drain_source), "%s", item->source);
         g_draining = 1;
         g_batch_active = 1;
         free_item(item);
@@ -426,4 +428,117 @@ int kerchunk_queue_is_draining(void)
 int kerchunk_queue_drain_flags(void)
 {
     return g_last_drain_flags;
+}
+
+void kerchunk_queue_tag_item(int id, const char *source)
+{
+    if (!source) return;
+    pthread_mutex_lock(&g_mutex);
+    for (kerchunk_queue_item_t *it = g_head; it; it = it->next) {
+        if (it->id == id) {
+            snprintf(it->source, sizeof(it->source), "%s", source);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_mutex);
+}
+
+const char *kerchunk_queue_drain_source(void)
+{
+    return g_drain_source;
+}
+
+/* Source-tagged variants */
+
+int kerchunk_queue_add_buffer_src(const int16_t *buf, size_t n, int priority,
+                                   int flags, const char *source)
+{
+    int id = kerchunk_queue_add_buffer(buf, n, priority, flags);
+    if (id > 0 && source) {
+        /* Walk queue to find the item we just inserted and tag it.
+         * Safe: we hold no lock between add_buffer returning and here,
+         * but the item can't be drained yet because drain runs on a
+         * separate thread at 50 Hz and we're in the same tick. */
+        pthread_mutex_lock(&g_mutex);
+        for (kerchunk_queue_item_t *it = g_head; it; it = it->next) {
+            if (it->id == id) {
+                snprintf(it->source, sizeof(it->source), "%s", source);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_mutex);
+    }
+    return id;
+}
+
+int kerchunk_queue_add_tone_src(int freq_hz, int duration_ms, int16_t amplitude,
+                                 int priority, const char *source)
+{
+    int id = kerchunk_queue_add_tone(freq_hz, duration_ms, amplitude, priority);
+    if (id > 0 && source) {
+        pthread_mutex_lock(&g_mutex);
+        for (kerchunk_queue_item_t *it = g_head; it; it = it->next) {
+            if (it->id == id) {
+                snprintf(it->source, sizeof(it->source), "%s", source);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_mutex);
+    }
+    return id;
+}
+
+int kerchunk_queue_add_silence_src(int duration_ms, int priority, const char *source)
+{
+    int id = kerchunk_queue_add_silence(duration_ms, priority);
+    if (id > 0 && source) {
+        pthread_mutex_lock(&g_mutex);
+        for (kerchunk_queue_item_t *it = g_head; it; it = it->next) {
+            if (it->id == id) {
+                snprintf(it->source, sizeof(it->source), "%s", source);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_mutex);
+    }
+    return id;
+}
+
+int kerchunk_queue_preempt(char *out_source, size_t source_sz)
+{
+    pthread_mutex_lock(&g_mutex);
+
+    /* Capture source of what was playing */
+    if (out_source && source_sz > 0) {
+        if (g_draining && g_drain_source[0])
+            snprintf(out_source, source_sz, "%s", g_drain_source);
+        else if (g_head && g_head->source[0])
+            snprintf(out_source, source_sz, "%s", g_head->source);
+        else
+            out_source[0] = '\0';
+    }
+
+    /* Flush everything */
+    int flushed = 0;
+    while (g_head) {
+        kerchunk_queue_item_t *next = g_head->next;
+        free_item(g_head);
+        g_head = next;
+        flushed++;
+    }
+    g_count = 0;
+
+    if (g_draining) {
+        flushed++;
+        free(g_drain_buf);
+        g_drain_buf = NULL;
+        g_drain_len = 0;
+        g_drain_pos = 0;
+        g_draining  = 0;
+    }
+    g_batch_active = 0;
+    g_gap_remaining = 0;
+
+    pthread_mutex_unlock(&g_mutex);
+    return flushed;
 }

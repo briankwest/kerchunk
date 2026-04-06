@@ -117,6 +117,13 @@ int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max)
             "{\"type\":\"queue_complete\",\"duration_ms\":%u,\"ts\":%llu}",
             evt->queue.duration_ms, ts);
 
+    case KERCHEVT_QUEUE_PREEMPTED:
+        return snprintf(buf, max,
+            "{\"type\":\"queue_preempted\",\"source\":\"%s\","
+            "\"items_flushed\":%d,\"ts\":%llu}",
+            evt->preempt.source ? evt->preempt.source : "",
+            evt->preempt.items_flushed, ts);
+
     case KERCHEVT_RECORDING_SAVED:
         return snprintf(buf, max,
             "{\"type\":\"recording_saved\",\"direction\":\"%s\","

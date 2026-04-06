@@ -16,6 +16,7 @@
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
+#include "kerchunk_queue.h"
 #include "plcode.h"
 #include <stdio.h>
 #include <string.h>
@@ -247,8 +248,13 @@ static void send_cwid(void)
 
     if (pos > 0) {
         g_core->queue_silence(200, KERCHUNK_PRI_LOW);
-        g_core->queue_audio_buffer(buf, pos, KERCHUNK_PRI_LOW, 0);
+        int id = g_core->queue_audio_buffer(buf, pos, KERCHUNK_PRI_LOW, 0);
         g_core->queue_silence(100, KERCHUNK_PRI_LOW);
+
+        /* Tag the CW audio item so preemption can identify it */
+        if (id > 0)
+            kerchunk_queue_tag_item(id, "cwid");
+
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "CW ID queued: %s (%zu samples)",
                     g_callsign, pos);
     }
@@ -387,6 +393,20 @@ static void oc_enter_tail(void)
 
 /* ── event handlers (shared by both modes) ── */
 
+static void on_queue_preempted(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    if (!evt->preempt.source || strcmp(evt->preempt.source, "cwid") != 0)
+        return;
+
+    /* Our CW ID was preempted by an incoming transmission.
+     * Mark pending so it re-sends after the channel clears.
+     * FCC requires the ID to complete. */
+    g_pending = 1;
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "CW ID preempted by COR — will re-send after channel clears");
+}
+
 static void on_tail_start(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
@@ -441,6 +461,7 @@ static int cwid_load(kerchunk_core_t *core)
     g_core = core;
     core->subscribe(KERCHEVT_TAIL_START, on_tail_start, NULL);
     core->subscribe(KERCHEVT_STATE_CHANGE, on_state_change, NULL);
+    core->subscribe(KERCHEVT_QUEUE_PREEMPTED, on_queue_preempted, NULL);
     return 0;
 }
 
@@ -547,6 +568,7 @@ static void cwid_unload(void)
 {
     g_core->unsubscribe(KERCHEVT_TAIL_START, on_tail_start);
     g_core->unsubscribe(KERCHEVT_STATE_CHANGE, on_state_change);
+    g_core->unsubscribe(KERCHEVT_QUEUE_PREEMPTED, on_queue_preempted);
     if (g_sched_id >= 0) {
         g_core->schedule_cancel(g_sched_id);
         g_sched_id = -1;
