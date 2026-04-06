@@ -1213,6 +1213,7 @@ int main(int argc, char **argv)
     int pid_fd = open(pid_path, O_CREAT | O_RDWR, 0644);
     if (pid_fd < 0) {
         KERCHUNK_LOG_E(LOG_MOD, "cannot open pid file: %s", pid_path);
+        kerchunk_config_destroy(cfg);
         return 1;
     }
     {
@@ -1227,6 +1228,7 @@ int main(int argc, char **argv)
                          "another instance is running (pid file locked: %s)",
                          pid_path);
             close(pid_fd);
+            kerchunk_config_destroy(cfg);
             return 1;
         }
     }
