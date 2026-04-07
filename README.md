@@ -6,15 +6,15 @@
 
 A custom repeater controller for the Retevis RT97L repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 or AIOC (All-In-One-Cable) USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode). Supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) operation.
 
-**27 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs), parrot/echo, CDR, statistics, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging (experimental), FLEX paging (experimental), APRS position/telemetry.
+**29 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs / Wyoming), ASR (Wyoming speech recognition), parrot/echo, CDR, statistics, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry, PoC radio bridge.
 
-**239 tests** — unit + integration test coverage with mock core vtable.
+**288 tests** — unit + integration test coverage with mock core vtable.
 
 **Embedded CLI** — interactive console with tab completion and history when running in foreground mode (`kerchunkd -f`). Log output streams above the prompt.
 
 **Native JSON API** — every CLI command returns structured JSON via `kerchunk -j`. Event streaming via `kerchunk -e -j` (NDJSON). Response system (`kerchunk_resp_t`) provides both formats from a single handler.
 
-**Web Dashboard** — embedded HTTP/HTTPS server with split public/admin architecture. Public site (`/`) provides live audio monitoring, weather, NWS alerts, and repeater status with zero authentication. Admin site (`/admin/`) provides the full dashboard, user management, config editor, coverage planner, and PTT — protected by HTTP Basic Auth. TLS/HTTPS with Let's Encrypt. Set `public_only = on` to block admin access entirely for internet-facing deployments. Dynamic UI: modules register controls via CLI metadata (`/admin/api/commands`).
+**Web Dashboard** — embedded HTTP/HTTPS server with split public/admin architecture. Public site (`/`) provides live audio monitoring, weather, NWS alerts, and repeater status with zero authentication. Admin site (`/admin/`) provides the full dashboard, user management, config editor, coverage planner, and PTT — protected by HTTP Basic Auth + optional IP-based ACL (`admin_acl`). TLS/HTTPS with Let's Encrypt. Set `public_only = on` to block admin access entirely for internet-facing deployments. Admin ACL returns 404 for non-matching IPs — no auth challenge, no hint the admin exists. Dynamic UI: modules register controls via CLI metadata (`/admin/api/commands`).
 
 **Burst tones** — DTMF sequences, two-tone paging, Selcall, MDC-1200, CW ID, and tone burst generation via the `tones` CLI command.
 
@@ -112,8 +112,8 @@ kerchunkd supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (
 | **Web PTT (transmit)** | **N** | Y | Y | GMRS: no remote/internet TX |
 | **Voice scrambler** | **N** | **N** | **Y** | Part 90 only — prohibited on GMRS (FCC 95.333) and Amateur (FCC 97.113(a)(4)) |
 | **AutoPatch (FreeSWITCH)** | **N** | Y | Y | GMRS: interconnection ambiguous |
-| POCSAG paging (experimental) | Y | Y | Y | Brief data transmission |
-| FLEX paging (experimental) | Y | Y | Y | Brief data transmission |
+| POCSAG paging | Y | Y | Y | Brief data transmission |
+| FLEX paging | Y | Y | Y | Brief data transmission |
 | APRS position/telemetry | Y | Y | Y | Brief data transmission, COR gated |
 
 ### Regulatory Notes
@@ -220,7 +220,9 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_otp        TOTP authentication (*68<code>#)         │ │
 │  │  mod_parrot     Echo/parrot for audio quality check      │ │
 │  │  mod_cdr        Call detail records (daily CSV)          │ │
-│  │  mod_tts        Text-to-speech (ElevenLabs API)          │ │
+│  │  mod_tts        Text-to-speech (ElevenLabs / Wyoming)    │ │
+│  │  mod_asr        Speech recognition (Wyoming ASR)         │ │
+│  │  mod_poc        PoC radio server bridge (libpoc)         │ │
 │  │  mod_nws        NWS weather alert monitor                │ │
 │  │  mod_stats      Statistics, metrics, persistence         │ │
 │  │  mod_web        HTTP server + SSE + web dashboard        │ │
@@ -228,8 +230,8 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_scrambler  Frequency inversion voice scrambler      │ │
 │  │  mod_sdr        RTL-SDR single-channel monitor           │ │
 │  │  mod_freeswitch FreeSWITCH AutoPatch (Ham only)          │ │
-│  │  mod_pocsag     POCSAG paging encoder (experimental)     │ │
-│  │  mod_flex       FLEX paging encoder (experimental)       │ │
+│  │  mod_pocsag     POCSAG paging encoder     │ │
+│  │  mod_flex       FLEX paging encoder       │ │
 │  │  mod_aprs       APRS position reporting/telemetry        │ │
 │  └──────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────┘
@@ -240,7 +242,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 - **Audio thread** (20ms) — captures audio, runs libplcode decoders (CTCSS/DCS/DTMF), software relay with drain, drains outbound queue, manages queue-driven PTT
 - **Main thread** (20ms) — processes timers, polls control socket, handles COR/PTT, config reloads
 - **Web thread** — accepts HTTP connections, serves API/SSE/static files
-- **TTS thread** — async ElevenLabs API calls (non-blocking)
+- **TTS thread** — async synthesis via ElevenLabs cloud or Wyoming local server (non-blocking)
 - **NWS thread** — async weather alert polling (non-blocking)
 
 #### Thread Safety
@@ -414,6 +416,8 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="013a", \
 | [libpocsag](https://github.com/briankwest/libpocsag) | Optional: POCSAG paging | `make install` or .deb | `sudo dpkg -i libpocsag-dev_*.deb` |
 | [libflex](https://github.com/briankwest/libflex) | Optional: FLEX paging | `make install` or .deb | `sudo dpkg -i libflex-dev_*.deb` |
 | [libaprs](https://github.com/briankwest/libaprs) | Optional: APRS position/telemetry | `make install` or .deb | `sudo dpkg -i libaprs-dev_*.deb` |
+| [libpoc](https://github.com/briankwest/libpoc) | Optional: PoC radio bridge | `make install` or .deb | `sudo dpkg -i libpoc-dev_*.deb` |
+| [libwyoming](https://github.com/briankwest/libwyoming) | Optional: Wyoming TTS/ASR | `make install` or .deb | `sudo dpkg -i libwyoming-dev_*.deb` |
 | pkg-config | Build system | (included with Xcode) | `apt install pkg-config` |
 
 ## Building
@@ -431,10 +435,12 @@ sudo apt install librtlsdr-dev
 # Optional: TTS text normalization (libnemo-normalize)
 sudo apt install libnemo-normalize-dev libfst-dev
 
-# Optional: Paging and APRS (detected by pkg-config)
+# Optional: Paging, APRS, PoC, Wyoming (detected by pkg-config)
 sudo dpkg -i libpocsag-dev_*.deb   # POCSAG paging (mod_pocsag)
 sudo dpkg -i libflex-dev_*.deb     # FLEX paging (mod_flex)
 sudo dpkg -i libaprs-dev_*.deb     # APRS position/telemetry (mod_aprs)
+sudo dpkg -i libpoc-dev_*.deb      # PoC radio bridge (mod_poc)
+sudo dpkg -i libwyoming-dev_*.deb  # Wyoming TTS/ASR (mod_tts, mod_asr)
 ```
 
 Build with autotools:
@@ -453,7 +459,7 @@ sudo make install
 Build outputs:
 - `kerchunkd` — the daemon
 - `kerchunk` — interactive CLI
-- `modules/*.so` — 27 loadable modules
+- `modules/*.so` — 29 loadable modules
 - `test_kerchunk` — test suite
 
 ### Linux Setup
@@ -559,7 +565,7 @@ kerchunk> aprs beacon                # Force APRS beacon
 
 ```bash
 ./kerchunk -j status
-{"rx_state":"IDLE","tx_state":"TX_IDLE","ptt":false,"cor":false,"queue":0,"modules":27,"users":2,"emergency":false}
+{"rx_state":"IDLE","tx_state":"TX_IDLE","ptt":false,"cor":false,"queue":0,"modules":29,"users":2,"emergency":false}
 
 ./kerchunk -j stats | jq .channel.duty_pct
 
@@ -775,20 +781,54 @@ Daily CSV files with caller, method, duration, emergency flag, recording path.
 
 Config section: `[cdr]`
 
-### mod_tts — Text-to-Speech (ElevenLabs)
+### mod_tts — Text-to-Speech (ElevenLabs / Wyoming)
 
-Async worker thread. Posts to ElevenLabs, receives PCM and resamples to the configured sample rate. Responses cached as WAV files keyed by text hash in `<sounds_dir>/cache/tts/`. Use `tts cache-clear` to flush.
+Async worker thread. Two engines: ElevenLabs (cloud API) or Wyoming (local/network via [libwyoming](https://github.com/briankwest/libwyoming)). Wyoming connects to a wyoming-server running Piper TTS — no subprocess, no Python. Responses cached as WAV files keyed by text hash in `<sounds_dir>/cache/tts/`. Use `tts cache-clear` to flush.
 
 Optional text normalization via [libnemo_normalize](https://github.com/briankwest/libnemo_normalize) (requires OpenFst). Normalizes numbers, times, dates, and abbreviations before synthesis so TTS speaks them correctly (e.g., "3:45 PM" → "three forty five PM"). Configure `normalize_far_dir` in `[tts]` to enable.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `api_key` | string | | ElevenLabs API key |
-| `voice_id` | string | `21m00Tcm4TlvDq8ikWAM` | Voice ID |
-| `model` | string | `eleven_turbo_v2_5` | Model ID |
+| `engine` | string | `elevenlabs` | `elevenlabs` or `wyoming` |
+| `api_key` | string | | ElevenLabs API key (elevenlabs engine) |
+| `voice_id` | string | `21m00Tcm4TlvDq8ikWAM` | ElevenLabs voice ID |
+| `model` | string | `eleven_turbo_v2_5` | ElevenLabs model ID |
+| `wyoming_host` | string | `127.0.0.1` | Wyoming server host (wyoming engine) |
+| `wyoming_port` | int | `10200` | Wyoming server port |
+| `wyoming_voice` | string | | Voice name (empty = server default) |
 | `normalize_far_dir` | string | | Path to NeMo FAR grammars (optional) |
 
 Config section: `[tts]`
+
+### mod_asr — Automatic Speech Recognition
+
+Transcribes all inbound RF transmissions via a Wyoming ASR server ([libwyoming](https://github.com/briankwest/libwyoming)). Supports batch mode (Whisper — best accuracy, ~1s delay after COR drop) and streaming mode (Zipformer — instant transcript on COR drop). Transcripts are logged, stored in a rolling history, and available via `asr history`.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | on/off | `off` | Enable ASR |
+| `mode` | string | `batch` | `batch` (Whisper) or `streaming` (Zipformer) |
+| `wyoming_host` | string | `127.0.0.1` | Wyoming ASR server host |
+| `wyoming_port` | int | `10200` | Wyoming ASR server port |
+| `language` | string | `en` | Language code |
+| `max_capture` | int | `30` | Max seconds to capture per transmission |
+| `min_duration` | duration | `500` | Min duration to transcribe (skip kerchunks) |
+
+Config section: `[asr]`
+
+### mod_poc — PoC Radio Bridge
+
+Bridges Push-to-Talk over Cellular radios (Retevis L71, TYT, etc.) to the RF repeater via [libpoc](https://github.com/briankwest/libpoc). Bidirectional audio bridging, user/group sync from kerchunk DB, TLS support, SOS alerts, and text messaging.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | int | `1` | Enable PoC server |
+| `port` | int | `29999` | Listen port |
+| `rf_bridge_group` | int | `0` | Kerchunk group ID bridged to RF (0=none) |
+| `rf_to_poc` | int | `1` | Forward RF audio to PoC clients |
+| `poc_to_rf` | int | `1` | Forward PoC audio to RF TX |
+
+Config section: `[poc]`. Per-user access: add `poc_password` to `[user.N]` sections.
 
 ### mod_nws — NWS Weather Alert Monitor
 

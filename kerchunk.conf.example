@@ -48,9 +48,14 @@ pid_file = /run/kerchunk/kerchunkd.pid     ; PID file path
 module_path = /usr/lib/kerchunk   ; Directory containing .so module files
 
 ; Comma-separated list of modules to load (order matters — dependencies first)
-; mod_tts should load before mod_nws so TTS is available for announcements
-; mod_pocsag/mod_flex/mod_aprs require libpocsag/libflex/libaprs (optional)
-load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,mod_webhook,mod_scrambler,mod_sdr,mod_web,mod_pocsag,mod_flex,mod_aprs
+; mod_tts should load before mod_nws and mod_asr so TTS/ASR are available
+; Optional modules (require external libraries, detected at build time):
+;   mod_pocsag — requires libpocsag
+;   mod_flex   — requires libflex
+;   mod_aprs   — requires libaprs
+;   mod_poc    — requires libpoc (PoC radio bridge)
+;   mod_asr    — requires libwyoming (speech recognition)
+load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_asr,mod_nws,mod_stats,mod_webhook,mod_scrambler,mod_sdr,mod_web,mod_pocsag,mod_flex,mod_aprs,mod_poc
 
 ; ----------------------------------------------------------------------------
 ; Audio device (PortAudio)
