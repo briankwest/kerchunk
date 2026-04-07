@@ -480,7 +480,10 @@ static int cwid_configure(const kerchunk_config_t *cfg)
     if (g_cwid_wpm < 5) g_cwid_wpm = 20;
     g_cwid_freq = kerchunk_config_get_int(cfg, "repeater", "cwid_freq", 800);
 
-    const char *cs = kerchunk_config_get(cfg, "general", "callsign");
+    /* CW ID callsign: use cwid_callsign if set, otherwise fall back to callsign */
+    const char *cs = kerchunk_config_get(cfg, "general", "cwid_callsign");
+    if (!cs || !cs[0])
+        cs = kerchunk_config_get(cfg, "general", "callsign");
     if (cs)
         snprintf(g_callsign, sizeof(g_callsign), "%s", cs);
 

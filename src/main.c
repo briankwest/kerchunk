@@ -128,10 +128,41 @@ static int cmd_status(int argc, const char **argv, kerchunk_resp_t *r)
     const char *v;
     v = kerchunk_config_get(cfg, "general", "callsign");
     if (v) resp_str(r, "callsign", v);
+    v = kerchunk_config_get(cfg, "general", "name");
+    if (v) resp_str(r, "name", v);
     v = kerchunk_config_get(cfg, "general", "frequency");
     if (v) resp_str(r, "frequency", v);
     v = kerchunk_config_get(cfg, "general", "offset");
     if (v) resp_str(r, "offset", v);
+
+    /* Tone display: build from [repeater] tx_ctcss/tx_dcs + [general] tone_display */
+    {
+        const char *tone_mode = kerchunk_config_get(cfg, "general", "tone_display");
+        if (tone_mode && strcmp(tone_mode, "private") == 0) {
+            resp_str(r, "tone", "Private");
+        } else if (tone_mode && strcmp(tone_mode, "dcs") == 0) {
+            int dcs = kerchunk_config_get_int(cfg, "repeater", "tx_dcs", 0);
+            if (dcs > 0) {
+                char tbuf[32];
+                snprintf(tbuf, sizeof(tbuf), "DCS %03d", dcs);
+                resp_str(r, "tone", tbuf);
+            }
+        } else {
+            /* Default: show CTCSS if configured, then DCS, then nothing */
+            int ctcss = kerchunk_config_get_int(cfg, "repeater", "tx_ctcss", 0);
+            int dcs = kerchunk_config_get_int(cfg, "repeater", "tx_dcs", 0);
+            if (ctcss > 0) {
+                char tbuf[32];
+                snprintf(tbuf, sizeof(tbuf), "%d.%d Hz CTCSS", ctcss / 10, ctcss % 10);
+                resp_str(r, "tone", tbuf);
+            } else if (dcs > 0) {
+                char tbuf[32];
+                snprintf(tbuf, sizeof(tbuf), "DCS %03d", dcs);
+                resp_str(r, "tone", tbuf);
+            }
+        }
+    }
+
     v = kerchunk_config_get(cfg, "general", "address");
     if (v) resp_str(r, "address", v);
     v = kerchunk_config_get(cfg, "general", "latitude");

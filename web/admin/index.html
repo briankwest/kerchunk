@@ -460,13 +460,15 @@ async function refreshStatus() {
 async function refreshStation() {
   try {
     const d=await fetchJSON('/api/status');
-    const cs=d.callsign||'Repeater';
-    document.getElementById('callsign').textContent=cs+' Dashboard';
-    document.title=cs+' Repeater';
+    const name=d.name||d.callsign||'Repeater';
+    document.getElementById('callsign').textContent=name+' Dashboard';
+    document.title=name+(d.callsign&&d.name?' ('+d.callsign+')':' Repeater');
     let h='';
+    if(d.name) h+=tr('Name',d.name);
     if(d.callsign) h+=tr('Callsign',d.callsign);
     if(d.frequency) h+=tr('Frequency',d.frequency+' MHz');
     if(d.offset) h+=tr('Offset',d.offset+' MHz');
+    if(d.tone) h+=tr('Tone',d.tone);
     if(d.address) h+=tr('Address',d.address);
     if(d.latitude&&d.longitude) h+=tr('Coordinates',d.latitude+', '+d.longitude);
     if(d.elevation) h+=tr('Elevation',d.elevation+' ft ASL');

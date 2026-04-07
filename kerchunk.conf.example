@@ -15,9 +15,15 @@
 ; General settings
 ; ----------------------------------------------------------------------------
 [general]
-callsign = WRDP519              ; FCC callsign (used for CW ID)
+callsign = WRDP519              ; FCC callsign (displayed on info card)
+; name = Cougar Mountain          ; Friendly repeater name (page title, header)
+; cwid_callsign =                 ; CW ID callsign (defaults to callsign if empty)
 frequency = 462.550              ; Repeater output frequency (MHz, for display)
 offset = +5.000                  ; Input offset (MHz, for display)
+; tone_display = ctcss            ; What to show on public page: ctcss | dcs | private
+;                                ; ctcss: shows TX CTCSS freq from [repeater] tx_ctcss
+;                                ; dcs: shows TX DCS code from [repeater] tx_dcs
+;                                ; private: shows "Private" (hides tone info)
 ; sample_rate moved to [audio] section
 log_level = info                 ; error | warn | info | debug
 sounds_dir = /usr/share/kerchunk/sounds  ; Base path for WAV sound files

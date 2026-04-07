@@ -228,8 +228,11 @@ static int cli_tones(int argc, const char **argv, kerchunk_resp_t *r)
 			resp_str(r, "error", "no callsign (provide one or set [general] callsign)");
 			return -1;
 		}
+		int cw_freq = g_core->config_get_int("repeater", "cwid_freq", 800);
+		int cw_wpm  = g_core->config_get_int("repeater", "cwid_wpm", 20);
+		if (cw_wpm < 5) cw_wpm = 20;
 		plcode_cwid_enc_t *enc = NULL;
-		if (plcode_cwid_enc_create(&enc, rate, call, 800, 20, AMP) != PLCODE_OK) {
+		if (plcode_cwid_enc_create(&enc, rate, call, cw_freq, cw_wpm, AMP) != PLCODE_OK) {
 			resp_str(r, "error", "CW encoder create failed");
 			return -1;
 		}
