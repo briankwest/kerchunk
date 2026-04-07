@@ -173,7 +173,7 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 [web]
 ; enabled = off
 ; port = 8080
-; bind = 127.0.0.1              ; Use 0.0.0.0 for external access
+; bind = 127.0.0.1              ; Use 0.0.0.0 for IPv4, :: for IPv6/dual-stack
 ; auth_user = admin              ; HTTP Basic Auth username for /admin/
 ; auth_password =                ; HTTP Basic Auth password for /admin/
 ; admin_acl =                    ; CIDR list for admin IP restriction (empty = allow all)

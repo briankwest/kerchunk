@@ -613,7 +613,9 @@ static int check_basic_auth(struct mg_http_message *hm)
 {
     if (g_auth_password[0] == '\0') {
         /* No password configured — only allow when binding to localhost */
-        if (strcmp(g_bind, "127.0.0.1") == 0 || strcmp(g_bind, "localhost") == 0)
+        if (strcmp(g_bind, "127.0.0.1") == 0 ||
+            strcmp(g_bind, "localhost") == 0 ||
+            strcmp(g_bind, "::1") == 0)
             return 1;  /* localhost only */
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                     "auth rejected: no password configured on non-localhost bind (%s)", g_bind);
@@ -2149,8 +2151,13 @@ static int web_configure(const kerchunk_config_t *cfg)
               fcntl((int)(size_t)g_mgr.pipe, F_GETFL) | O_NONBLOCK);
 
     char url[128];
-    snprintf(url, sizeof(url), "%s://%s:%d",
-             g_tls_active ? "https" : "http", g_bind, g_port);
+    /* IPv6 addresses need brackets in URLs: http://[::]:8080 */
+    if (strchr(g_bind, ':'))
+        snprintf(url, sizeof(url), "%s://[%s]:%d",
+                 g_tls_active ? "https" : "http", g_bind, g_port);
+    else
+        snprintf(url, sizeof(url), "%s://%s:%d",
+                 g_tls_active ? "https" : "http", g_bind, g_port);
 
     struct mg_connection *listener = mg_http_listen(&g_mgr, url,
                                                      ev_handler, NULL);
