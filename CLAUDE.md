@@ -105,7 +105,7 @@ Current DTMF commands: `*87#` VM status, `*86#` VM record (own), `*86<id>#` VM r
 
 Module CLI commands: pocsag (send/numeric/tone/status), flex (send/numeric/tone/status), aprs (beacon/send/status).
 
-The TTS module uses ElevenLabs API via libcurl. Requires `api_key` in `[tts]` config. Responses are cached as WAV files keyed by text hash in `<sounds_dir>/cache/tts/`.
+The TTS module supports two engines: ElevenLabs (cloud API via libcurl, requires `api_key`) and Wyoming (local/network via libwyoming, connects to a wyoming-piper server). Responses are cached as WAV files keyed by text hash in `<sounds_dir>/cache/tts/`.
 The NWS module needs libcurl: `make modules/mod_nws.so` uses `pkg-config --libs libcurl`.
 
 ## FCC compliance
