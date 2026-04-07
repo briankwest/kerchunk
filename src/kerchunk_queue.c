@@ -18,6 +18,7 @@
 #include <pthread.h>
 
 #define LOG_MOD  "queue"
+#define MAX_QUEUE_DEPTH 256
 
 static int g_queue_rate = 48000;
 
@@ -91,9 +92,15 @@ void kerchunk_queue_shutdown(void)
 
 /* Insert item into queue (caller must hold g_mutex).
  * While a batch is playing, new items append to tail (no preemption).
- * When idle, items are inserted in priority order. */
-static void insert_item(kerchunk_queue_item_t *item)
+ * When idle, items are inserted in priority order.
+ * Returns 0 on success, -1 if queue is full. */
+static int insert_item(kerchunk_queue_item_t *item)
 {
+    if (g_count >= MAX_QUEUE_DEPTH) {
+        KERCHUNK_LOG_W(LOG_MOD, "queue full (%d items), dropping", g_count);
+        return -1;
+    }
+
     if (g_batch_active || g_draining || g_gap_remaining > 0) {
         /* Queue is mid-playback — append to tail */
         kerchunk_queue_item_t **tail = &g_head;
@@ -112,6 +119,7 @@ static void insert_item(kerchunk_queue_item_t *item)
         cur->next = item;
     }
     g_count++;
+    return 0;
 }
 
 int kerchunk_queue_add_file(const char *path, int priority)
@@ -158,7 +166,11 @@ int kerchunk_queue_add_file(const char *path, int priority)
     pthread_mutex_lock(&g_mutex);
     item->id = g_next_id++;
     int id = item->id;
-    insert_item(item);
+    if (insert_item(item) != 0) {
+        pthread_mutex_unlock(&g_mutex);
+        free_item(item);
+        return -1;
+    }
     pthread_mutex_unlock(&g_mutex);
     /* item may be freed by drain thread after unlock — use saved id */
 
@@ -194,7 +206,11 @@ int kerchunk_queue_add_buffer(const int16_t *buf, size_t n, int priority, int fl
     pthread_mutex_lock(&g_mutex);
     item->id = g_next_id++;
     int id = item->id;
-    insert_item(item);
+    if (insert_item(item) != 0) {
+        pthread_mutex_unlock(&g_mutex);
+        free_item(item);
+        return -1;
+    }
     pthread_mutex_unlock(&g_mutex);
 
     KERCHUNK_LOG_D(LOG_MOD, "queued buffer: %zu samples (id=%d, pri=%d)", n, id, priority);
@@ -233,7 +249,11 @@ int kerchunk_queue_add_tone(int freq_hz, int duration_ms, int16_t amplitude, int
     pthread_mutex_lock(&g_mutex);
     item->id = g_next_id++;
     int id = item->id;
-    insert_item(item);
+    if (insert_item(item) != 0) {
+        pthread_mutex_unlock(&g_mutex);
+        free_item(item);
+        return -1;
+    }
     pthread_mutex_unlock(&g_mutex);
 
     KERCHUNK_LOG_D(LOG_MOD, "queued tone: %d Hz, %d ms (id=%d)", freq_hz, duration_ms, id);
@@ -265,7 +285,11 @@ int kerchunk_queue_add_silence(int duration_ms, int priority)
     pthread_mutex_lock(&g_mutex);
     item->id = g_next_id++;
     int id = item->id;
-    insert_item(item);
+    if (insert_item(item) != 0) {
+        pthread_mutex_unlock(&g_mutex);
+        free_item(item);
+        return -1;
+    }
     pthread_mutex_unlock(&g_mutex);
 
     KERCHUNK_LOG_D(LOG_MOD, "queued silence: %d ms (id=%d)", duration_ms, id);

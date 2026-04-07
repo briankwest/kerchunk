@@ -2088,6 +2088,14 @@ static int web_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "web", "registration_enabled");
     g_registration_enabled = (v && strcmp(v, "on") == 0);
 
+    if (g_registration_enabled && !g_tls_active &&
+        strcmp(g_bind, "127.0.0.1") != 0 && strcmp(g_bind, "::1") != 0 &&
+        strcmp(g_bind, "localhost") != 0) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "WARNING: registration enabled without TLS on %s — "
+                    "credentials will be sent in plaintext", g_bind);
+    }
+
     v = kerchunk_config_get(cfg, "web", "ptt_enabled");
     g_ptt_enabled = (v && strcmp(v, "on") == 0);
 
