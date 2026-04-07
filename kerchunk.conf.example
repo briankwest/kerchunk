@@ -353,7 +353,11 @@ directory = /var/lib/kerchunk/cdr  ; Output directory
 ;   wyoming    — Wyoming protocol client (requires libwyoming).
 ;                Connects to a wyoming-piper server over TCP. No subprocess,
 ;                network-capable, Home Assistant compatible.
-;                Run: wyoming-piper --voice en_US-lessac-high --uri tcp://0.0.0.0:10200
+;
+; Wyoming quick start:
+;   apt install wyoming-tools wyoming-voice-en-us-lessac-high
+;   systemctl enable --now wyoming-piper
+;   # TTS server runs on port 10200 with the packaged voice model
 ;
 ; Responses are cached as WAV files keyed by text hash in
 ; <sounds_dir>/cache/tts/. Identical text is synthesized once.
@@ -381,12 +385,18 @@ model = eleven_turbo_v2_5        ; eleven_turbo_v2_5 | eleven_monolingual_v1
 ; Automatic speech recognition for inbound transmissions
 ;
 ; Captures RX audio during COR active, sends to a Wyoming ASR server
-; (e.g. wyoming-faster-whisper) after COR drops.  Transcripts are logged
-; and available via CLI "asr history".
+; after COR drops.  Transcripts are logged and available via CLI "asr history".
 ;
 ; Requires: libwyoming, a running Wyoming ASR server
-; Run: wyoming-faster-whisper --uri tcp://0.0.0.0:10300 --model base.en \
-;      --data-dir /path/to/models --language en --device cpu --compute-type int8
+;
+; Wyoming quick start (native C — no Python needed):
+;   apt install wyoming-tools wyoming-model-whisper-base-en
+;   systemctl enable --now wyoming-asr
+;   # ASR server runs on port 10300 with Whisper base.en model
+;
+; Alternative (Python):
+;   pip install wyoming-faster-whisper
+;   wyoming-faster-whisper --uri tcp://0.0.0.0:10300 --model base.en
 ; ----------------------------------------------------------------------------
 [asr]
 ; enabled = on                   ; on | off

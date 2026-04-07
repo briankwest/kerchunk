@@ -29,7 +29,7 @@ Libraries must be installed before building kerchunk:
 - **libflex** (optional, experimental, for FLEX paging): `github.com/briankwest/libflex` — detected by pkg-config
 - **libaprs** (optional, for APRS): `github.com/briankwest/libaprs` — detected by pkg-config
 - **libpoc** (optional, for PoC radio bridge): `github.com/briankwest/libpoc` — detected by pkg-config
-- **libwyoming** (optional, for Wyoming TTS): `github.com/briankwest/libwyoming` — detected by pkg-config
+- **libwyoming** (optional, for Wyoming TTS/ASR): `github.com/briankwest/libwyoming` — detected by pkg-config. Also provides `wyoming-tools` (server binaries), `wyoming-voice-*` (Piper voices), and `wyoming-model-*` (Sherpa-ONNX ASR models) deb packages.
 
 ## Architecture
 
@@ -106,6 +106,7 @@ Current DTMF commands: `*87#` VM status, `*86#` VM record (own), `*86<id>#` VM r
 Module CLI commands: pocsag (send/numeric/tone/status), flex (send/numeric/tone/status), aprs (beacon/send/status).
 
 The TTS module supports two engines: ElevenLabs (cloud API via libcurl, requires `api_key`) and Wyoming (local/network via libwyoming, connects to a wyoming-piper server). Responses are cached as WAV files keyed by text hash in `<sounds_dir>/cache/tts/`.
+The ASR module (mod_asr) transcribes all inbound transmissions via a Wyoming ASR server (wyoming-asr-server with Sherpa-ONNX, or wyoming-faster-whisper). Transcripts are logged and available via `asr history`.
 The NWS module needs libcurl: `make modules/mod_nws.so` uses `pkg-config --libs libcurl`.
 
 ## FCC compliance
