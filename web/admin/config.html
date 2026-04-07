@@ -249,8 +249,9 @@ function getFieldType(key, section) {
   if (READONLY_KEYS.has(key)) return 'readonly';
   /* port/bind are readonly in [web] (requires restart) but editable elsewhere */
   if ((key === 'port' || key === 'bind') && section === 'web') return 'readonly';
-  /* voice_id is a toggle in repeater but a text field in tts */
-  if (key === 'voice_id' && section !== 'tts') return 'toggle';
+  /* voice_id is a toggle in [repeater] (on/off for voice ID announcement)
+   * but a text field in [tts] (ElevenLabs voice ID string) */
+  if (key === 'voice_id') return section === 'tts' ? 'text' : 'toggle';
   /* enabled is a toggle everywhere */
   if (key === 'enabled') return 'toggle';
   if (TOGGLE_KEYS.has(key)) return 'toggle';
