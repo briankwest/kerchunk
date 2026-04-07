@@ -130,6 +130,7 @@ cwid_interval = 10m              ; CW ID interval (accepts: 10m, 600000, 15m, et
 ; voice_id = on                  ; Speak frequency/PL via TTS after CW ID
 cwid_wpm = 20                    ; Morse code words per minute
 cwid_freq = 800                  ; CW tone frequency (Hz)
+; cwid_amplitude = 4000           ; CW tone amplitude (0-32767)
 
 ; TX tone for voice ID announcement (announced via TTS, not encoded on TX).
 ; Set ONE of these. pl_tone overrides tx_ctcss/tx_dcs if both are set.

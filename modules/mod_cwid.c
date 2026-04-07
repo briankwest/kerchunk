@@ -479,6 +479,7 @@ static int cwid_configure(const kerchunk_config_t *cfg)
     g_cwid_wpm  = kerchunk_config_get_int(cfg, "repeater", "cwid_wpm", 20);
     if (g_cwid_wpm < 5) g_cwid_wpm = 20;
     g_cwid_freq = kerchunk_config_get_int(cfg, "repeater", "cwid_freq", 800);
+    g_cwid_amp  = (int16_t)kerchunk_config_get_int(cfg, "repeater", "cwid_amplitude", 4000);
 
     /* CW ID callsign: use cwid_callsign if set, otherwise fall back to callsign */
     const char *cs = kerchunk_config_get(cfg, "general", "cwid_callsign");
