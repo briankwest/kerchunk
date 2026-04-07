@@ -143,6 +143,8 @@ typedef struct {
     char user_name[32];
     int  ptt_held;
     size_t audio_len;    /* total samples queued (for duration tracking) */
+    int    auth_failures;
+    time_t last_auth_failure;
 } ws_conn_state_t;
 
 /* Only one user can transmit via WebSocket PTT at a time.
@@ -276,6 +278,16 @@ static void ws_send_json(struct mg_connection *c, const char *fmt, ...)
 static void ws_handle_auth(struct mg_connection *c, ws_conn_state_t *st,
                            struct mg_ws_message *wm)
 {
+    /* Rate limit: block after 5 consecutive failures for 60 seconds */
+    if (st->auth_failures >= 5) {
+        time_t now = time(NULL);
+        if (now - st->last_auth_failure < 60) {
+            ws_send_json(c, "{\"ok\":false,\"error\":\"too many failures, wait 60s\"}");
+            return;
+        }
+        st->auth_failures = 0;  /* reset after cooldown */
+    }
+
     char *user = mg_json_get_str(wm->data, "$.user");
     char *pin  = mg_json_get_str(wm->data, "$.pin");
 
@@ -298,8 +310,11 @@ static void ws_handle_auth(struct mg_connection *c, ws_conn_state_t *st,
     }
 
     if (!found) {
+        st->auth_failures++;
+        st->last_auth_failure = time(NULL);
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                    "WS auth failed for user=%s (checked %d users)", user, count);
+                    "WS auth failed for user=%s (checked %d users, failures=%d)",
+                    user, count, st->auth_failures);
         ws_send_json(c, "{\"ok\":false,\"error\":\"invalid credentials\"}");
         free(user); free(pin);
         return;
@@ -633,8 +648,13 @@ static int check_basic_auth(struct mg_http_message *hm)
     size_t plen = strlen(pass);
     size_t elen = strlen(g_auth_password);
 
-    int user_ok = (ulen == alen) && ct_compare(user, g_auth_user, ulen);
-    int pass_ok = (plen == elen) && ct_compare(pass, g_auth_password, plen);
+    /* Use bitwise AND to prevent short-circuit: ct_compare always runs
+     * regardless of length match, preventing timing side-channel leaks.
+     * Compare up to the shorter length to avoid reading past buffer bounds. */
+    size_t ucmp = ulen < alen ? ulen : alen;
+    size_t pcmp = plen < elen ? plen : elen;
+    int user_ok = (ulen == alen) & ct_compare(user, g_auth_user, ucmp ? ucmp : 1);
+    int pass_ok = (plen == elen) & ct_compare(pass, g_auth_password, pcmp ? pcmp : 1);
 
     return user_ok && pass_ok;
 }
@@ -1291,7 +1311,9 @@ static void handle_api_config_get(struct mg_connection *c,
             buf[off++] = ',';
         first_sec = 0;
 
-        off += snprintf(buf + off, sizeof(buf) - off, "\"%s\":{", section);
+        char e_sec[128];
+        json_escape_str(section, e_sec, sizeof(e_sec));
+        off += snprintf(buf + off, sizeof(buf) - off, "\"%s\":{", e_sec);
 
         int key_iter = 0;
         const char *key, *val;
@@ -1303,8 +1325,11 @@ static void handle_api_config_get(struct mg_connection *c,
             first_key = 0;
 
             const char *show = is_sensitive(key) ? "********" : val;
+            char e_key[128], e_val[512];
+            json_escape_str(key, e_key, sizeof(e_key));
+            json_escape_str(show, e_val, sizeof(e_val));
             off += snprintf(buf + off, sizeof(buf) - off,
-                            "\"%s\":\"%s\"", key, show);
+                            "\"%s\":\"%s\"", e_key, e_val);
 
             if (off >= (int)sizeof(buf) - 64) break;
         }
@@ -2084,6 +2109,15 @@ static int web_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "web", "cors_origin");
     if (v) snprintf(g_cors_origin, sizeof(g_cors_origin) - 1, "%s", v);
     build_cors_headers();
+
+    if (strcmp(g_cors_origin, "*") == 0 &&
+        strcmp(g_bind, "127.0.0.1") != 0 &&
+        strcmp(g_bind, "::1") != 0 &&
+        strcmp(g_bind, "localhost") != 0) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "WARNING: CORS origin is wildcard (*) on non-localhost bind (%s) — "
+                    "consider setting cors_origin to a specific origin", g_bind);
+    }
 
     v = kerchunk_config_get(cfg, "web", "registration_enabled");
     g_registration_enabled = (v && strcmp(v, "on") == 0);

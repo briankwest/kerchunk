@@ -20,6 +20,7 @@
 #include <time.h>
 #include <getopt.h>
 #include <pthread.h>
+#include <sys/stat.h>
 
 #define LOG_MOD "main"
 
@@ -237,6 +238,28 @@ static int cmd_queue(int argc, const char **argv, kerchunk_resp_t *r)
     return 0;
 }
 
+/* Escape a string for safe JSON embedding */
+static void json_esc(const char *in, char *out, size_t max)
+{
+    size_t j = 0;
+    for (const char *p = in; *p && j < max - 6; p++) {
+        switch (*p) {
+        case '"':  out[j++] = '\\'; out[j++] = '"'; break;
+        case '\\': out[j++] = '\\'; out[j++] = '\\'; break;
+        case '\n': out[j++] = '\\'; out[j++] = 'n'; break;
+        case '\r': out[j++] = '\\'; out[j++] = 'r'; break;
+        case '\t': out[j++] = '\\'; out[j++] = 't'; break;
+        default:
+            if ((unsigned char)*p < 0x20)
+                j += snprintf(out + j, max - j, "\\u%04x", (unsigned char)*p);
+            else
+                out[j++] = *p;
+            break;
+        }
+    }
+    out[j] = '\0';
+}
+
 static int cmd_module(int argc, const char **argv, kerchunk_resp_t *r)
 {
     if (argc < 2 || (argc >= 2 && strcmp(argv[1], "help") == 0)) {
@@ -257,12 +280,14 @@ static int cmd_module(int argc, const char **argv, kerchunk_resp_t *r)
             const kerchunk_module_def_t *m = kerchunk_module_get(i);
             if (m) {
                 if (i > 0) resp_json_raw(r, ",");
-                char frag[256];
+                char e_name[64], e_ver[32], e_desc[128];
+                json_esc(m->name, e_name, sizeof(e_name));
+                json_esc(m->version ? m->version : "", e_ver, sizeof(e_ver));
+                json_esc(m->description ? m->description : "", e_desc, sizeof(e_desc));
+                char frag[512];
                 snprintf(frag, sizeof(frag),
                          "{\"name\":\"%s\",\"version\":\"%s\",\"description\":\"%s\"}",
-                         m->name,
-                         m->version ? m->version : "",
-                         m->description ? m->description : "");
+                         e_name, e_ver, e_desc);
                 resp_json_raw(r, frag);
             }
         }
@@ -1228,6 +1253,14 @@ int main(int argc, char **argv)
         return 1;
     }
     KERCHUNK_LOG_I(LOG_MOD, "config loaded: %s", config_path);
+
+    {
+        struct stat cfg_stat;
+        if (stat(config_path, &cfg_stat) == 0 && (cfg_stat.st_mode & 0004)) {
+            KERCHUNK_LOG_W(LOG_MOD, "WARNING: config file %s is world-readable — "
+                           "contains credentials, recommend chmod 640", config_path);
+        }
+    }
 
     const char *ll = kerchunk_config_get(cfg, "general", "log_level");
     if (ll) {

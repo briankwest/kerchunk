@@ -273,6 +273,10 @@ int kerchunk_config_set(kerchunk_config_t *cfg,
             strcmp(cfg->entries[i].key, key) == 0) {
             snprintf(cfg->entries[i].value, sizeof(cfg->entries[i].value),
                      "%s", value);
+            /* Strip newlines to prevent INI injection */
+            for (char *p = cfg->entries[i].value; *p; p++) {
+                if (*p == '\n' || *p == '\r') *p = ' ';
+            }
             return 0;
         }
     }
@@ -285,6 +289,10 @@ int kerchunk_config_set(kerchunk_config_t *cfg,
     snprintf(e->section, sizeof(e->section), "%s", section);
     snprintf(e->key, sizeof(e->key), "%s", key);
     snprintf(e->value, sizeof(e->value), "%s", value);
+    /* Strip newlines to prevent INI injection */
+    for (char *p = e->value; *p; p++) {
+        if (*p == '\n' || *p == '\r') *p = ' ';
+    }
     cfg->count++;
     return 0;
 }

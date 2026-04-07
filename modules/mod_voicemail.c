@@ -456,9 +456,22 @@ static int cli_voicemail(int argc, const char **argv, kerchunk_resp_t *r)
             if (u && u->voicemail) {
                 int n = count_messages(i);
                 if (!jfirst) resp_json_raw(r, ",");
+                /* Escape name for safe JSON embedding */
+                char e_name[64];
+                {
+                    size_t j = 0;
+                    for (const char *p = u->name; *p && j < sizeof(e_name) - 6; p++) {
+                        switch (*p) {
+                        case '"':  e_name[j++] = '\\'; e_name[j++] = '"'; break;
+                        case '\\': e_name[j++] = '\\'; e_name[j++] = '\\'; break;
+                        default:   e_name[j++] = *p; break;
+                        }
+                    }
+                    e_name[j] = '\0';
+                }
                 char frag[128];
                 snprintf(frag, sizeof(frag),
-                         "{\"name\":\"%s\",\"messages\":%d}", u->name, n);
+                         "{\"name\":\"%s\",\"messages\":%d}", e_name, n);
                 resp_json_raw(r, frag);
                 jfirst = 0;
                 /* Text */
