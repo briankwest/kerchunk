@@ -360,7 +360,7 @@ max_duration = 10s               ; Max recording length (capped at 30s)
 directory = /var/lib/kerchunk/cdr  ; Output directory
 
 ; ----------------------------------------------------------------------------
-; Text-to-Speech (ElevenLabs cloud / Piper local)
+; Text-to-Speech
 ;
 ; Provides g_core->tts_speak() for other modules (mod_nws, etc.)
 ;
@@ -368,13 +368,13 @@ directory = /var/lib/kerchunk/cdr  ; Output directory
 ;   elevenlabs — Cloud API. Get an API key at https://elevenlabs.io
 ;                Voice IDs: https://api.elevenlabs.io/v1/voices
 ;   wyoming    — Wyoming protocol client (requires libwyoming).
-;                Connects to a wyoming-piper server over TCP. No subprocess,
-;                network-capable, Home Assistant compatible.
+;                Connects to a Wyoming server (wyoming-server) over TCP.
+;                No subprocess, network-capable, Home Assistant compatible.
 ;
 ; Wyoming quick start:
 ;   apt install wyoming-tools wyoming-voice-en-us-lessac-high
-;   systemctl enable --now wyoming-piper
-;   # TTS server runs on port 10200 with the packaged voice model
+;   systemctl enable --now wyoming-server
+;   # Combined TTS+ASR server runs on port 10200
 ;
 ; Responses are cached as WAV files keyed by text hash in
 ; <sounds_dir>/cache/tts/. Identical text is synthesized once.
@@ -383,10 +383,10 @@ directory = /var/lib/kerchunk/cdr  ; Output directory
 [tts]
 ; engine = elevenlabs              ; elevenlabs (default) | wyoming
 
-; --- ElevenLabs settings ---
-api_key = YOUR_ELEVENLABS_API_KEY
-voice_id = 21m00Tcm4TlvDq8ikWAM ; Rachel (default ElevenLabs voice)
-model = eleven_turbo_v2_5        ; eleven_turbo_v2_5 | eleven_monolingual_v1
+; --- ElevenLabs settings (engine = elevenlabs) ---
+; api_key =                        ; ElevenLabs API key
+; voice_id = 21m00Tcm4TlvDq8ikWAM ; ElevenLabs voice ID (Rachel)
+; model = eleven_turbo_v2_5        ; eleven_turbo_v2_5 | eleven_monolingual_v1
 
 ; --- Wyoming settings (engine = wyoming) ---
 ; wyoming_host = 127.0.0.1        ; Wyoming server hostname or IP
