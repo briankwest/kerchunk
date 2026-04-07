@@ -38,6 +38,187 @@ mod_ai (orchestrator)
             - Queued to audio, plays over RF
 ```
 
+## State Machine
+
+Radio is turn-based — user keys up, talks, unkeys, we respond. This maps
+to a clean state machine with 7 states:
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │                                         │
+                    ▼                                         │
+              ┌──────────┐                                    │
+              │          │  COR assert                        │
+              │   IDLE   │◄────── conversation timeout ───────┤
+              │          │                                    │
+              └────┬─────┘                                    │
+                   │                                          │
+                   │ COR assert                               │
+                   ▼                                          │
+              ┌──────────┐                                    │
+              │          │                                    │
+              │ LISTENING│  (mod_asr captures audio)          │
+              │          │                                    │
+              └────┬─────┘                                    │
+                   │                                          │
+                   │ COR drop → transcript arrives            │
+                   ▼                                          │
+              ┌──────────┐                                    │
+              │  DETECT  │  Does transcript have wake phrase? │
+              │          │  Is caller in active conversation? │
+              │          │  Was DTMF *99# armed?              │
+              └────┬─────┘                                    │
+                   │                                          │
+              no ──┤──► back to IDLE (ignore, not for us)     │
+                   │                                          │
+              yes  │ strip wake phrase from text              │
+                   ▼                                          │
+              ┌──────────┐                                    │
+              │          │  POST /v1/chat/completions         │
+              │ LLM_CALL │  with tools + message history      │
+              │          │                                    │
+              └────┬─────┘                                    │
+                   │                                          │
+                   ├── finish_reason = "stop"                 │
+                   │   └──► go to SPEAKING                    │
+                   │                                          │
+                   ├── finish_reason = "tool_calls"           │
+                   │   └──► go to TOOL_EXEC                   │
+                   │                                          │
+                   ▼                                          │
+              ┌──────────┐                                    │
+              │          │  Execute each tool call            │
+              │TOOL_EXEC │  Collect results as JSON           │
+              │          │  Append to message history         │
+              └────┬─────┘                                    │
+                   │                                          │
+                   │ tool_rounds < max_tool_rounds?           │
+                   │ yes → back to LLM_CALL with results      │
+                   │ no  → force final response               │
+                   │                                          │
+                   ▼                                          │
+              ┌──────────┐                                    │
+              │          │  tts_speak(response_text)          │
+              │ SPEAKING │  Audio queued → PTT → RF           │
+              │          │                                    │
+              └────┬─────┘                                    │
+                   │                                          │
+                   │ TTS complete                             │
+                   ▼                                          │
+              ┌──────────┐                                    │
+              │          │  Waiting for follow-up             │
+              │  READY   │  Same caller can continue          │
+              │          │  conversation without wake phrase  │
+              └────┬─────┘                                    │
+                   │                                          │
+                   ├── COR assert from same caller → LISTENING│
+                   │   (no wake phrase needed, conversation   │
+                   │    context preserved)                    │
+                   │                                          │
+                   ├── COR assert from different caller       │
+                   │   → LISTENING (new conversation,         │
+                   │     wake phrase required)                │
+                   │                                          │
+                   └── timeout ───────────────────────────────┘
+                       conversation expires, back to IDLE
+```
+
+### State descriptions
+
+**IDLE** — No active AI conversation. Every transmission is checked for a
+wake phrase. Most transmissions are ignored (normal repeater traffic).
+
+**LISTENING** — COR is active, mod_asr is capturing audio. mod_ai is just
+waiting for the transcript. Nothing happens here — the audio thread and
+ASR handle this.
+
+**DETECT** — Transcript arrived. Three questions:
+1. Does it start with the wake phrase? → strip it, proceed
+2. Is this caller already in an active conversation? → proceed (no wake
+   phrase needed for follow-ups)
+3. Was `*99#` DTMF armed for this caller? → proceed, disarm
+4. None of the above → ignore, back to IDLE
+
+**LLM_CALL** — HTTP POST to llama.cpp with the full message history and
+tool definitions. This is blocking on the worker thread (not the audio
+thread). Takes 1-3 seconds on CPU.
+
+**TOOL_EXEC** — LLM said "I need to call get_weather()". We execute the
+tool, get the result JSON, append it to the message history, and go back
+to LLM_CALL. This can loop up to `max_tool_rounds` times (default 3)
+to prevent infinite loops.
+
+**SPEAKING** — LLM produced a final text response. We call `tts_speak()`
+and wait for the audio to play. The response is in the conversation
+history now.
+
+**READY** — Response has been spoken. We're waiting for a potential
+follow-up from the same caller. If they key up again within the
+conversation timeout (default 5 minutes), they don't need the wake
+phrase — the conversation continues. If a different caller keys up,
+they need their own wake phrase. If nobody talks to us for 5 minutes,
+we drop back to IDLE.
+
+### Tool call round-trip example
+
+```
+User: "kerchunk what's the weather and time?"
+
+Round 1:
+  → LLM receives: [system, user:"what's the weather and time?"]
+  ← LLM returns: tool_calls: [get_weather(), get_time()]
+  
+  Execute get_weather() → {"temp":67,"condition":"sunny","wind":"S 7mph"}
+  Execute get_time()    → {"time":"11:42 AM","date":"Monday April 7"}
+
+Round 2:
+  → LLM receives: [system, user, assistant(tool_calls), tool(weather), tool(time)]
+  ← LLM returns: "It's 11:42 AM on Monday. Currently sunny and 67 degrees
+                   with light south winds."
+
+  → tts_speak("It's 11:42 AM on Monday...")
+```
+
+### Multi-turn conversation example
+
+```
+User: "kerchunk what's the temperature?"
+  AI: "It's currently 67 degrees and sunny."     [conversation created]
+
+User: "and the wind?"                            [same caller, no wake phrase]
+  AI: "Wind is from the south at 7 miles per hour." [conversation continues]
+
+User: "send a page to brian saying test"         [still same conversation]
+  AI: [calls send_page tool]
+  AI: "Page sent to Brian."
+
+... 5 minutes of silence ...                     [conversation expires]
+
+User: "what time is it"                          [no wake phrase → ignored]
+User: "kerchunk what time is it"                 [wake phrase → new conversation]
+  AI: "The time is 12:15 PM Central."
+```
+
+### Threading model
+
+All AI work happens on a dedicated worker thread. The audio thread and
+main loop are never blocked:
+
+```
+Audio thread (20ms tick):
+  → captures frames, runs decoders, dispatches taps
+  → never touches mod_ai
+
+Main loop (20ms tick):
+  → COR polling, timers, events
+  → fires KERCHEVT_ANNOUNCEMENT when ASR transcript ready
+
+AI worker thread:
+  → receives transcript via queue (same pattern as mod_tts)
+  → runs wake detection, HTTP calls, tool execution
+  → calls tts_speak() when done (non-blocking, goes to TTS worker)
+```
+
 ## Tool Calling Protocol
 
 We use llama.cpp's OpenAI-compatible `/v1/chat/completions` endpoint with
