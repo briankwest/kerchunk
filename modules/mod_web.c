@@ -1448,6 +1448,19 @@ static int secure_random_int(int min, int max)
 static time_t g_last_register_time;
 #define REGISTER_RATE_LIMIT_S 10  /* one registration per 10 seconds */
 
+/* Per-IP registration rate limit */
+#define REG_RATE_LIMIT_SIZE 16
+#define REG_RATE_LIMIT_WINDOW 3600  /* 1 hour */
+#define REG_RATE_LIMIT_MAX 5       /* max registrations per IP per hour */
+
+static struct {
+    uint8_t ip[16];
+    int     is_ip6;
+    int     count;
+    time_t  first_attempt;
+} g_reg_rate[REG_RATE_LIMIT_SIZE];
+static int g_reg_rate_idx = 0;
+
 static void handle_api_register(struct mg_connection *c,
                                  struct mg_http_message *hm)
 {
@@ -1462,6 +1475,37 @@ static void handle_api_register(struct mg_connection *c,
         mg_http_reply(c, 429, API_HEADERS,
                       "{\"error\":\"Too many requests, try again later\"}");
         return;
+    }
+
+    /* Per-IP rate limit */
+    {
+        int found = -1;
+        for (int i = 0; i < REG_RATE_LIMIT_SIZE; i++) {
+            if (g_reg_rate[i].is_ip6 == c->rem.is_ip6 &&
+                memcmp(g_reg_rate[i].ip, c->rem.addr.ip, c->rem.is_ip6 ? 16 : 4) == 0) {
+                found = i;
+                break;
+            }
+        }
+        if (found >= 0) {
+            if (now - g_reg_rate[found].first_attempt < REG_RATE_LIMIT_WINDOW) {
+                if (g_reg_rate[found].count >= REG_RATE_LIMIT_MAX) {
+                    mg_http_reply(c, 429, API_HEADERS,
+                                  "{\"error\":\"too many registrations, try again later\"}");
+                    return;
+                }
+                g_reg_rate[found].count++;
+            } else {
+                g_reg_rate[found].first_attempt = now;
+                g_reg_rate[found].count = 1;
+            }
+        } else {
+            int idx = g_reg_rate_idx++ % REG_RATE_LIMIT_SIZE;
+            memcpy(g_reg_rate[idx].ip, c->rem.addr.ip, 16);
+            g_reg_rate[idx].is_ip6 = c->rem.is_ip6;
+            g_reg_rate[idx].first_attempt = now;
+            g_reg_rate[idx].count = 1;
+        }
     }
 
     char *username = mg_json_get_str(hm->body, "$.username");
@@ -1827,6 +1871,11 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             /* /admin/... -- serve from static_dir/admin/ naturally.
              * /admin/ serves admin/index.html via mg_http_serve_dir. */
             if (g_static_dir[0]) {
+                /* Defense-in-depth: reject path traversal before mongoose */
+                if (memmem(hm->uri.buf, hm->uri.len, "..", 2) != NULL) {
+                    mg_http_reply(c, 403, "", "Forbidden\n");
+                    return;
+                }
                 struct mg_http_serve_opts opts = { .root_dir = g_static_dir };
                 mg_http_serve_dir(c, hm, &opts);
             } else {
@@ -1885,6 +1934,11 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
          *  / — Public static files (no auth)
          * ════════════════════════════════════════════════════════ */
         if (g_static_dir[0]) {
+            /* Defense-in-depth: reject path traversal before mongoose */
+            if (memmem(hm->uri.buf, hm->uri.len, "..", 2) != NULL) {
+                mg_http_reply(c, 403, "", "Forbidden\n");
+                return;
+            }
             struct mg_http_serve_opts opts = { .root_dir = g_static_dir };
             mg_http_serve_dir(c, hm, &opts);
         } else {
@@ -2251,6 +2305,15 @@ static int web_configure(const kerchunk_config_t *cfg)
     if (g_audio_ws_tid < 0) {
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                     "audio flush thread failed — WebSocket audio may stutter");
+    }
+
+    if (!g_tls_active &&
+        strcmp(g_bind, "127.0.0.1") != 0 &&
+        strcmp(g_bind, "::1") != 0 &&
+        strcmp(g_bind, "localhost") != 0) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "WARNING: listening on %s without TLS — traffic is unencrypted",
+                    g_bind);
     }
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,

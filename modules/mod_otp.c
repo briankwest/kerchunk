@@ -32,6 +32,16 @@ static int g_time_skew          = 1;       /* +/- time steps */
 /* Current caller */
 static int g_current_caller_id;
 
+/* Brute-force lockout */
+#define OTP_MAX_FAILURES 5
+#define OTP_LOCKOUT_S 300  /* 5 minutes */
+
+static struct {
+    int    user_id;
+    int    failures;
+    time_t last_failure;
+} g_otp_lockout[32];
+
 /* Session table */
 typedef struct {
     int user_id;
@@ -325,7 +335,33 @@ static void on_otp_command(const kerchevt_t *evt, void *ud)
         }
     }
 
+    /* Check lockout */
+    {
+        time_t now = time(NULL);
+        for (int i = 0; i < 32; i++) {
+            if (g_otp_lockout[i].user_id == caller_id) {
+                if (g_otp_lockout[i].failures >= OTP_MAX_FAILURES &&
+                    now - g_otp_lockout[i].last_failure < OTP_LOCKOUT_S) {
+                    g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                                "OTP locked out for user %d (%d failures)",
+                                caller_id, g_otp_lockout[i].failures);
+                    return;  /* silently ignore — don't reveal lockout to attacker */
+                }
+                if (now - g_otp_lockout[i].last_failure >= OTP_LOCKOUT_S)
+                    g_otp_lockout[i].failures = 0;  /* reset after lockout expires */
+                break;
+            }
+        }
+    }
+
     if (totp_verify(u->totp_secret, code, g_time_skew)) {
+        /* Clear lockout on success */
+        for (int i = 0; i < 32; i++) {
+            if (g_otp_lockout[i].user_id == caller_id) {
+                g_otp_lockout[i].failures = 0;
+                break;
+            }
+        }
         pthread_mutex_lock(&g_otp_mutex);
         session_start(caller_id);
         pthread_mutex_unlock(&g_otp_mutex);
@@ -336,6 +372,19 @@ static void on_otp_command(const kerchevt_t *evt, void *ud)
             .announcement = { .source = "otp", .description = "auth success" } };
         kerchevt_fire(&ae);
     } else {
+        /* Record failure */
+        {
+            int slot = -1;
+            for (int i = 0; i < 32; i++) {
+                if (g_otp_lockout[i].user_id == caller_id) { slot = i; break; }
+                if (g_otp_lockout[i].user_id == 0) { slot = i; break; }
+            }
+            if (slot >= 0) {
+                g_otp_lockout[slot].user_id = caller_id;
+                g_otp_lockout[slot].failures++;
+                g_otp_lockout[slot].last_failure = time(NULL);
+            }
+        }
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                     "OTP failed for %s (id=%d)", u->name, u->id);
         if (g_core->tts_speak)

@@ -507,6 +507,8 @@ time_skew = 1                    ; Accept +/- N time steps (each 30s)
 ; enabled = off
 ; freeswitch_host = 127.0.0.1
 ; esl_port = 8021
+; SECURITY: ESL should only connect to localhost. Do not expose the
+; FreeSWITCH ESL port to untrusted networks.
 ; esl_password = ClueCon
 ; sip_gateway = voip_provider
 ; udp_base_port = 16000

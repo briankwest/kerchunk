@@ -212,6 +212,16 @@ static int cmd_queue(int argc, const char **argv, kerchunk_resp_t *r)
             resp_str(r, "error", "path traversal not allowed");
             return -1;
         }
+        /* Reject absolute paths outside sounds_dir for security */
+        if (path[0] == '/') {
+            const kerchunk_config_t *cfg = kerchunk_core_get_config();
+            const char *sdir = kerchunk_config_get(cfg, "general", "sounds_dir");
+            if (!sdir) sdir = "/usr/share/kerchunk/sounds";
+            if (strncmp(path, sdir, strlen(sdir)) != 0) {
+                resp_str(r, "error", "path must be relative or within sounds_dir");
+                return -1;
+            }
+        }
         size_t plen = strlen(path);
         if (plen < 4 ||
             (strcmp(path + plen - 4, ".wav") != 0 &&
@@ -608,6 +618,16 @@ static int cmd_play(int argc, const char **argv, kerchunk_resp_t *r)
     if (strstr(path, "..") != NULL) {
         resp_str(r, "error", "path traversal not allowed");
         return -1;
+    }
+    /* Reject absolute paths outside sounds_dir for security */
+    if (path[0] == '/') {
+        const kerchunk_config_t *cfg = kerchunk_core_get_config();
+        const char *sdir = kerchunk_config_get(cfg, "general", "sounds_dir");
+        if (!sdir) sdir = "/usr/share/kerchunk/sounds";
+        if (strncmp(path, sdir, strlen(sdir)) != 0) {
+            resp_str(r, "error", "path must be relative or within sounds_dir");
+            return -1;
+        }
     }
     int id = kerchunk_queue_add_file(path, KERCHUNK_PRI_NORMAL);
     if (id >= 0) {
