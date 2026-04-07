@@ -808,13 +808,24 @@ static void call_setup_audio(void)
         return;
     }
 
-    /* Tell FreeSWITCH to send/receive audio via UDP unicast */
-    char cmd[256];
+    /* Tell FreeSWITCH to send/receive audio via UDP unicast.
+     * Uses ESL sendmsg with call-command: unicast (same protocol as socket2me).
+     * FreeSWITCH will send RX audio to local-port and listen on remote-port. */
+    char cmd[512];
     snprintf(cmd, sizeof(cmd),
-             "uuid_unicast %s %s %d %d mono %d",
-             g_call_uuid, g_fs_host, g_udp_base_port, g_udp_base_port + 1,
-             g_core->sample_rate);
-    esl_api(cmd);
+             "sendmsg %s\n"
+             "call-command: unicast\n"
+             "local-ip: %s\n"
+             "local-port: %d\n"
+             "remote-ip: %s\n"
+             "remote-port: %d\n"
+             "transport: udp\n"
+             "flags: native\n"
+             "\n",
+             g_call_uuid,
+             g_fs_host, g_udp_base_port,      /* FS sends audio here (we recv) */
+             g_fs_host, g_udp_base_port + 1);  /* FS listens here (we send) */
+    esl_send(cmd);
 
     /* Register audio tap (radio → phone) */
     g_core->audio_tap_register(radio_audio_tap, NULL);
