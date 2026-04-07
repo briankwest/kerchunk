@@ -94,6 +94,7 @@ kerchunkmod_LTLIBRARIES = \
 	modules/mod_parrot.la \
 	modules/mod_cdr.la \
 	modules/mod_tts.la \
+	modules/mod_asr.la \
 	modules/mod_nws.la \
 	modules/mod_stats.la \
 	modules/mod_web.la \
@@ -225,6 +226,11 @@ modules_mod_tts_la_SOURCES       = modules/mod_tts.c
 modules_mod_tts_la_CFLAGS        = $(MOD_CFLAGS) $(CURL_CFLAGS) $(NEMO_CFLAGS) $(LIBWYOMING_CFLAGS)
 modules_mod_tts_la_LDFLAGS       = $(MOD_LDFLAGS)
 modules_mod_tts_la_LIBADD        = $(PLCODE_LIBS) $(CURL_LIBS) $(NEMO_LIBS) $(LIBWYOMING_LIBS)
+
+modules_mod_asr_la_SOURCES       = modules/mod_asr.c
+modules_mod_asr_la_CFLAGS        = $(MOD_CFLAGS) $(LIBWYOMING_CFLAGS)
+modules_mod_asr_la_LDFLAGS       = $(MOD_LDFLAGS)
+modules_mod_asr_la_LIBADD        = $(LIBWYOMING_LIBS)
 
 # --- web module (mongoose + openssl) ---
 

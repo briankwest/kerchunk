@@ -378,6 +378,25 @@ model = eleven_turbo_v2_5        ; eleven_turbo_v2_5 | eleven_monolingual_v1
 ;                                ; Install: make -C libnemo_normalize && make install
 
 ; ----------------------------------------------------------------------------
+; Automatic speech recognition for inbound transmissions
+;
+; Captures RX audio during COR active, sends to a Wyoming ASR server
+; (e.g. wyoming-faster-whisper) after COR drops.  Transcripts are logged
+; and available via CLI "asr history".
+;
+; Requires: libwyoming, a running Wyoming ASR server
+; Run: wyoming-faster-whisper --uri tcp://0.0.0.0:10300 --model base.en \
+;      --data-dir /path/to/models --language en --device cpu --compute-type int8
+; ----------------------------------------------------------------------------
+[asr]
+; enabled = on                   ; on | off
+; wyoming_host = 127.0.0.1      ; Wyoming ASR server host
+; wyoming_port = 10300           ; Wyoming ASR server port
+; language = en                  ; Language code (or empty for auto-detect)
+; max_capture = 30               ; Max seconds to capture per transmission
+; min_duration = 500             ; Min duration (ms) to transcribe (skip kerchunks)
+
+; ----------------------------------------------------------------------------
 ; National Weather Service alert monitor
 ;
 ; Polls api.weather.gov for active alerts at your location.
