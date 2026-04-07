@@ -222,9 +222,9 @@ modules_mod_webhook_la_LIBADD    = $(PLCODE_LIBS) $(CURL_LIBS)
 # --- TTS module (curl + optional nemo) ---
 
 modules_mod_tts_la_SOURCES       = modules/mod_tts.c
-modules_mod_tts_la_CFLAGS        = $(MOD_CFLAGS) $(CURL_CFLAGS) $(NEMO_CFLAGS)
+modules_mod_tts_la_CFLAGS        = $(MOD_CFLAGS) $(CURL_CFLAGS) $(NEMO_CFLAGS) $(LIBWYOMING_CFLAGS)
 modules_mod_tts_la_LDFLAGS       = $(MOD_LDFLAGS)
-modules_mod_tts_la_LIBADD        = $(PLCODE_LIBS) $(CURL_LIBS) $(NEMO_LIBS)
+modules_mod_tts_la_LIBADD        = $(PLCODE_LIBS) $(CURL_LIBS) $(NEMO_LIBS) $(LIBWYOMING_LIBS)
 
 # --- web module (mongoose + openssl) ---
 

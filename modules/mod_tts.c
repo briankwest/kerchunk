@@ -1,5 +1,5 @@
 /*
- * mod_tts.c — Text-to-speech service (ElevenLabs cloud / Piper local)
+ * mod_tts.c — Text-to-speech service
  *
  * Provides g_core->tts_speak(text, priority) for other modules.
  * Synthesis runs on a background thread to avoid blocking the main loop.
@@ -7,6 +7,8 @@
  * Engines:
  *   elevenlabs — POSTs text to ElevenLabs API, receives PCM at 16kHz.
  *   piper      — Pipes text to local Piper binary, receives raw PCM.
+ *   wyoming    — Connects to Wyoming protocol server (e.g. wyoming-piper)
+ *                via TCP. No subprocess, network-capable, HA-compatible.
  *
  * Both engines resample to g_core->sample_rate before playback.
  *
@@ -17,6 +19,10 @@
  * Config: [tts] section in kerchunk.conf
  * Requires: libcurl (ElevenLabs), pthreads
  */
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 #include "kerchunk.h"
 #include "kerchunk_module.h"
@@ -36,6 +42,10 @@
 
 #ifdef HAVE_NEMO_NORMALIZE
 #include "nemo_normalize.h"
+#endif
+
+#ifdef HAVE_LIBWYOMING
+#include <libwyoming/wyoming.h>
 #endif
 
 #define LOG_MOD "tts"
@@ -58,12 +68,17 @@ static char g_cache_dir[512] = "";
 static volatile int g_initialized = 0;
 
 /* Engine selection */
-typedef enum { TTS_ELEVENLABS, TTS_PIPER } tts_engine_t;
+typedef enum { TTS_ELEVENLABS, TTS_PIPER, TTS_WYOMING } tts_engine_t;
 static tts_engine_t g_engine      = TTS_ELEVENLABS;
 static char g_piper_binary[512]   = "/usr/bin/piper";
 static char g_piper_model[512]    = "";
 static int  g_piper_speaker       = 0;
 static int  g_piper_sample_rate   = 22050;
+
+/* Wyoming engine */
+static char g_wyoming_host[64]    = "127.0.0.1";
+static int  g_wyoming_port        = 10200;
+static char g_wyoming_voice[64]   = "";
 
 /* ── Background worker thread ── */
 
@@ -98,6 +113,9 @@ static void cache_path_for_text(const char *text, char *out, size_t outsz)
     char key[3072];
     if (g_engine == TTS_PIPER)
         snprintf(key, sizeof(key), "piper:%s:%d:%s", g_piper_model, g_piper_speaker, text);
+    else if (g_engine == TTS_WYOMING)
+        snprintf(key, sizeof(key), "wyoming:%s:%d:%s:%s",
+                 g_wyoming_host, g_wyoming_port, g_wyoming_voice, text);
     else
         snprintf(key, sizeof(key), "el:%s:%s:%s", g_voice_id, g_model, text);
     uint32_t h = fnv1a(key);
@@ -316,6 +334,43 @@ static int piper_synthesize(const char *text, int16_t **out, size_t *out_len)
     return 0;
 }
 
+/* ── Wyoming synthesis (libwyoming TCP client) ── */
+
+#ifdef HAVE_LIBWYOMING
+static int wyoming_tts_synthesize(const char *text, int16_t **out,
+                                   size_t *out_len, int *out_rate)
+{
+    wyoming_conn_t *conn = wyoming_connect(g_wyoming_host,
+                                            (uint16_t)g_wyoming_port);
+    if (!conn) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "wyoming: connect failed: %s:%d", g_wyoming_host, g_wyoming_port);
+        return -1;
+    }
+
+    const char *voice = g_wyoming_voice[0] ? g_wyoming_voice : NULL;
+    wyoming_audio_format_t fmt = {0};
+    int16_t *pcm = NULL;
+    size_t samples = 0;
+
+    wyoming_error_t rc = wyoming_synthesize_pcm(conn, text, voice,
+                                                 &pcm, &samples, &fmt);
+    wyoming_close(conn);
+
+    if (rc != WYOMING_OK || !pcm || samples == 0) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "wyoming: synthesis failed (%d)", rc);
+        free(pcm);
+        return -1;
+    }
+
+    *out      = pcm;
+    *out_len  = samples;
+    *out_rate = fmt.rate;
+    return 0;
+}
+#endif
+
 /* ── Synthesis dispatcher (runs on worker thread) ── */
 
 static void synthesize_and_queue(const char *text, int priority)
@@ -356,6 +411,11 @@ static void synthesize_and_queue(const char *text, int priority)
         if (piper_synthesize(text, &raw_pcm, &raw_samples) != 0)
             return;
         src_rate = g_piper_sample_rate;
+#ifdef HAVE_LIBWYOMING
+    } else if (g_engine == TTS_WYOMING) {
+        if (wyoming_tts_synthesize(text, &raw_pcm, &raw_samples, &src_rate) != 0)
+            return;
+#endif
     } else {
         if (elevenlabs_synthesize(text, &raw_pcm, &raw_samples) != 0)
             return;
@@ -484,6 +544,8 @@ static int tts_configure(const kerchunk_config_t *cfg)
     if (v) {
         if (strcmp(v, "piper") == 0)
             g_engine = TTS_PIPER;
+        else if (strcmp(v, "wyoming") == 0)
+            g_engine = TTS_WYOMING;
         else
             g_engine = TTS_ELEVENLABS;
     }
@@ -507,6 +569,16 @@ static int tts_configure(const kerchunk_config_t *cfg)
 
     v = kerchunk_config_get(cfg, "tts", "piper_speaker");
     if (v) g_piper_speaker = atoi(v);
+
+    /* Wyoming settings */
+    v = kerchunk_config_get(cfg, "tts", "wyoming_host");
+    if (v) snprintf(g_wyoming_host, sizeof(g_wyoming_host), "%s", v);
+
+    v = kerchunk_config_get(cfg, "tts", "wyoming_port");
+    if (v) g_wyoming_port = atoi(v);
+
+    v = kerchunk_config_get(cfg, "tts", "wyoming_voice");
+    if (v) snprintf(g_wyoming_voice, sizeof(g_wyoming_voice), "%s", v);
 
     /* Auto-detect sample rate from Piper .onnx.json sidecar */
     if (g_piper_model[0]) {
@@ -590,6 +662,18 @@ static int tts_configure(const kerchunk_config_t *cfg)
                         "piper model not readable: %s — TTS disabled", g_piper_model);
             return 0;
         }
+    } else if (g_engine == TTS_WYOMING) {
+#ifndef HAVE_LIBWYOMING
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "wyoming engine selected but libwyoming not available — TTS disabled");
+        return 0;
+#else
+        if (g_wyoming_port <= 0 || g_wyoming_port > 65535) {
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "invalid wyoming_port %d — TTS disabled", g_wyoming_port);
+            return 0;
+        }
+#endif
     } else {
         if (g_api_key[0] == '\0') {
             g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
@@ -622,6 +706,12 @@ static int tts_configure(const kerchunk_config_t *cfg)
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                     "Piper TTS ready: model=%s speaker=%d rate=%d cache=%s",
                     g_piper_model, g_piper_speaker, g_piper_sample_rate, g_cache_dir);
+    else if (g_engine == TTS_WYOMING)
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "Wyoming TTS ready: %s:%d voice=%s cache=%s",
+                    g_wyoming_host, g_wyoming_port,
+                    g_wyoming_voice[0] ? g_wyoming_voice : "(default)",
+                    g_cache_dir);
     else
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                     "ElevenLabs TTS ready: voice=%s model=%s cache=%s",
@@ -677,6 +767,11 @@ static int cli_tts(int argc, const char **argv, kerchunk_resp_t *r)
             resp_str(r, "piper_model", g_piper_model);
             resp_int(r, "piper_speaker", g_piper_speaker);
             resp_int(r, "piper_sample_rate", g_piper_sample_rate);
+        } else if (g_engine == TTS_WYOMING) {
+            resp_str(r, "engine", "Wyoming (network)");
+            resp_str(r, "wyoming_host", g_wyoming_host);
+            resp_int(r, "wyoming_port", g_wyoming_port);
+            resp_str(r, "wyoming_voice", g_wyoming_voice[0] ? g_wyoming_voice : "(default)");
         } else {
             resp_str(r, "engine", "ElevenLabs (cloud)");
             resp_str(r, "voice_id", g_voice_id);
@@ -733,9 +828,10 @@ usage:
         "    Synthesis runs on a background thread. Responses are cached\n"
         "    as WAV files keyed by FNV-1a text hash. Identical text is\n"
         "    synthesized once and replayed from disk on subsequent calls.\n\n"
-        "Config: [tts] engine (elevenlabs|piper)\n"
+        "Config: [tts] engine (elevenlabs|piper|wyoming)\n"
         "  ElevenLabs: api_key, voice_id, model\n"
         "  Piper:      piper_binary, piper_model, piper_speaker\n"
+        "  Wyoming:    wyoming_host, wyoming_port, wyoming_voice\n"
         "  [general]   sounds_dir (cache stored in <sounds_dir>/cache/tts/)\n");
     resp_str(r, "error", "usage: tts <say <text>|status|cache-clear>");
     resp_finish(r);
@@ -756,7 +852,7 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
 static kerchunk_module_def_t mod_tts = {
     .name             = "mod_tts",
     .version          = "1.1.0",
-    .description      = "Text-to-speech (ElevenLabs cloud / Piper local)",
+    .description      = "Text-to-speech (ElevenLabs / Piper / Wyoming)",
     .load             = tts_load,
     .configure        = tts_configure,
     .unload           = tts_unload,

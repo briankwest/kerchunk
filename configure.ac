@@ -1,5 +1,5 @@
 AC_PREREQ([2.69])
-AC_INIT([kerchunk], [1.0.2], [brian@mcalester.net])
+AC_INIT([kerchunk], [1.0.2], [brian@kerchunk.net])
 AC_CONFIG_SRCDIR([src/main.c])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIRS([m4])
@@ -92,6 +92,12 @@ if test "x$have_libpoc" = "xyes"; then
   AC_DEFINE([HAVE_LIBPOC], [1], [Have libpoc])
 fi
 
+# Optional: libwyoming (Wyoming protocol for Piper TTS)
+PKG_CHECK_MODULES([LIBWYOMING], [libwyoming], [have_libwyoming=yes], [have_libwyoming=no])
+if test "x$have_libwyoming" = "xyes"; then
+  AC_DEFINE([HAVE_LIBWYOMING], [1], [Have libwyoming])
+fi
+
 # Optional: libnemo_normalize
 PKG_CHECK_MODULES([NEMO], [nemo_normalize], [have_nemo=yes], [have_nemo=no])
 AM_CONDITIONAL([HAVE_NEMO], [test "x$have_nemo" = "xyes"])
@@ -114,6 +120,7 @@ AC_MSG_NOTICE([  libaprs:          $have_libaprs])
 AC_MSG_NOTICE([  libpoc:           $have_libpoc])
 AC_MSG_NOTICE([  libpocsag:        $have_libpocsag])
 AC_MSG_NOTICE([  libflex:          $have_libflex])
+AC_MSG_NOTICE([  libwyoming:       $have_libwyoming])
 AC_MSG_NOTICE([  libnemo_normalize: $have_nemo])
 AC_MSG_NOTICE([  module dir:       $kerchunkmoddir])
 AC_MSG_NOTICE([])

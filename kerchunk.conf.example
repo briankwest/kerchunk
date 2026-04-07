@@ -350,22 +350,37 @@ directory = /var/lib/kerchunk/cdr  ; Output directory
 ; Engines:
 ;   elevenlabs — Cloud API. Get an API key at https://elevenlabs.io
 ;                Voice IDs: https://api.elevenlabs.io/v1/voices
-;   piper      — Local inference via Piper TTS (https://github.com/rhasspy/piper)
-;                Download .onnx voice models from the Piper releases page.
+;   piper      — Local inference via Piper TTS subprocess
+;                Download .onnx voice models from Piper releases page.
+;   wyoming    — Wyoming protocol client (requires libwyoming).
+;                Connects to a wyoming-piper server over TCP. No subprocess,
+;                network-capable, Home Assistant compatible.
+;                Run: wyoming-piper --voice en_US-lessac-high --uri tcp://0.0.0.0:10200
 ;
 ; Responses are cached as WAV files keyed by text hash in
 ; <sounds_dir>/cache/tts/. Identical text is synthesized once.
 ; Use "tts cache-clear" CLI command to flush the cache.
 ; ----------------------------------------------------------------------------
 [tts]
-; engine = elevenlabs              ; elevenlabs (default) | piper
+; engine = elevenlabs              ; elevenlabs (default) | piper | wyoming
+
+; --- ElevenLabs settings ---
 api_key = YOUR_ELEVENLABS_API_KEY
 voice_id = 21m00Tcm4TlvDq8ikWAM ; Rachel (default ElevenLabs voice)
 model = eleven_turbo_v2_5        ; eleven_turbo_v2_5 | eleven_monolingual_v1
+
+; --- Piper settings (engine = piper) ---
 ; piper_binary = /usr/bin/piper
 ; piper_model =                    ; Path to .onnx voice model (required for piper)
 ; piper_speaker = 0                ; Speaker index for multi-speaker models
-; normalize_far_dir =            ; Path to NeMo FAR grammar files for text normalization
+
+; --- Wyoming settings (engine = wyoming) ---
+; wyoming_host = 127.0.0.1        ; Wyoming server hostname or IP
+; wyoming_port = 10200             ; Wyoming server port (default 10200)
+; wyoming_voice =                  ; Voice name (empty = server default)
+
+; --- Text normalization (optional, any engine) ---
+; normalize_far_dir =            ; Path to NeMo FAR grammar files
 ;                                ; Normalizes numbers, times, abbreviations before TTS.
 ;                                ; Install: make -C libnemo_normalize && make install
 
