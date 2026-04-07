@@ -586,15 +586,78 @@ static void udp_close(void)
  * Sends captured radio RX audio to FreeSWITCH via UDP.
  * Only active when call is connected AND COR is active.
  */
+static int g_tx_pkt_count = 0;
+
+/*
+ * Playback tap — sends repeater TX audio (CW ID, TTS, weather, courtesy
+ * tones, relayed audio) to the phone caller so they hear everything the
+ * repeater transmits.
+ */
+static void playback_audio_tap(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    if (!g_call_active || g_udp_tx_fd < 0)
+        return;
+
+    /* Don't echo back audio that came FROM the phone (VOX→queue→playback) */
+    if (g_vox_ptt_held)
+        return;
+
+    int src_rate = g_core->sample_rate;
+    if (src_rate > 8000) {
+        int ratio = src_rate / 8000;
+        size_t out_n = evt->audio.n / (size_t)ratio;
+        int16_t ds[960];
+        if (out_n > sizeof(ds)/sizeof(ds[0])) out_n = sizeof(ds)/sizeof(ds[0]);
+        for (size_t i = 0; i < out_n; i++)
+            ds[i] = evt->audio.samples[i * ratio];
+        sendto(g_udp_tx_fd, ds, out_n * sizeof(int16_t), MSG_DONTWAIT,
+               (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
+    } else {
+        sendto(g_udp_tx_fd, evt->audio.samples,
+               evt->audio.n * sizeof(int16_t), MSG_DONTWAIT,
+               (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
+    }
+}
+
+/*
+ * RX audio tap — sends captured radio RX audio to the phone caller.
+ * Only active when COR is active (someone keying up on RF).
+ */
 static void radio_audio_tap(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
     if (!g_call_active || !g_cor_active || g_udp_tx_fd < 0)
         return;
 
-    sendto(g_udp_tx_fd, evt->audio.samples,
-           evt->audio.n * sizeof(int16_t), MSG_DONTWAIT,
-           (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
+    /* Downsample from pipeline rate (48kHz) to FS rate (8kHz SLIN) */
+    int src_rate = g_core->sample_rate;
+    if (src_rate > 8000) {
+        int ratio = src_rate / 8000;
+        size_t out_n = evt->audio.n / (size_t)ratio;
+        int16_t ds[960]; /* max 48000/50 / 6 = 160 */
+        if (out_n > sizeof(ds)/sizeof(ds[0])) out_n = sizeof(ds)/sizeof(ds[0]);
+        for (size_t i = 0; i < out_n; i++)
+            ds[i] = evt->audio.samples[i * ratio];
+        ssize_t sent = sendto(g_udp_tx_fd, ds, out_n * sizeof(int16_t), MSG_DONTWAIT,
+               (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
+        g_tx_pkt_count++;
+        if (g_tx_pkt_count <= 10 || g_tx_pkt_count % 100 == 0)
+            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                        "UDP TX #%d: %zu samples@%dHz → %zu samples@8kHz (%zd bytes sent to port %d)",
+                        g_tx_pkt_count, evt->audio.n, src_rate, out_n,
+                        sent, ntohs(g_fs_udp_addr.sin_port));
+    } else {
+        ssize_t sent = sendto(g_udp_tx_fd, evt->audio.samples,
+               evt->audio.n * sizeof(int16_t), MSG_DONTWAIT,
+               (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
+        g_tx_pkt_count++;
+        if (g_tx_pkt_count <= 10 || g_tx_pkt_count % 100 == 0)
+            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                        "UDP TX #%d: %zu samples (%zd bytes sent to port %d)",
+                        g_tx_pkt_count, evt->audio.n, sent,
+                        ntohs(g_fs_udp_addr.sin_port));
+    }
 }
 
 /*
@@ -608,13 +671,32 @@ static void udp_receive_audio(void)
     socklen_t fromlen = sizeof(from);
 
     /* Drain all available packets */
+    static int rx_pkt_count = 0;
+    static int rx_poll_count = 0;
+    rx_poll_count++;
+
+    /* Log every second that we're polling (50 ticks = 1 sec) */
+    if (rx_poll_count % 50 == 0)
+        g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                    "UDP poll #%d: fd=%d port=%d total_pkts=%d",
+                    rx_poll_count, g_udp_rx_fd, g_udp_base_port, rx_pkt_count);
+
     for (int i = 0; i < 10; i++) {
         ssize_t n = recvfrom(g_udp_rx_fd, pkt, sizeof(pkt), MSG_DONTWAIT,
                              (struct sockaddr *)&from, &fromlen);
         if (n <= 0) break;
         size_t samples = (size_t)n / sizeof(int16_t);
-        if (samples > 0)
+        if (samples > 0) {
             jitter_buf_write(&g_jitter, pkt, samples);
+            rx_pkt_count++;
+            if (rx_pkt_count <= 10 || rx_pkt_count % 100 == 0) {
+                uint8_t *ip = (uint8_t *)&from.sin_addr;
+                g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                            "UDP RX #%d: %zd bytes (%zu samples) from %d.%d.%d.%d:%d",
+                            rx_pkt_count, n, samples,
+                            ip[0], ip[1], ip[2], ip[3], ntohs(from.sin_port));
+            }
+        }
     }
 }
 
@@ -741,7 +823,7 @@ static void autopatch_dial(const char *digits)
              g_sip_gateway, g_dial_prefix, digits);
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                 "dialing %s%s via %s", g_dial_prefix, digits, g_sip_gateway);
+                 "dialing %s%s via %s (cmd: %s)", g_dial_prefix, digits, g_sip_gateway, cmd);
 
     if (esl_bgapi(cmd) < 0) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "ESL bgapi failed");
@@ -810,7 +892,14 @@ static void call_setup_audio(void)
 
     /* Tell FreeSWITCH to send/receive audio via UDP unicast.
      * Uses ESL sendmsg with call-command: unicast (same protocol as socket2me).
-     * FreeSWITCH will send RX audio to local-port and listen on remote-port. */
+     * Without "flags: native", FS sends SLIN (signed linear 16-bit) at 8kHz.
+     * We resample between 8kHz (FS) and our pipeline rate (typically 48kHz).
+     *
+     * From FS's perspective:
+     *   local-ip/port  = where FS BINDS (receives from us)
+     *   remote-ip/port = where FS SENDS to (we receive)
+     *
+     * So: FS binds on base+1 (we sendto base+1), FS sends to base (we recvfrom base) */
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
              "sendmsg %s\n"
@@ -820,15 +909,23 @@ static void call_setup_audio(void)
              "remote-ip: %s\n"
              "remote-port: %d\n"
              "transport: udp\n"
-             "flags: native\n"
              "\n",
              g_call_uuid,
-             g_fs_host, g_udp_base_port,      /* FS sends audio here (we recv) */
-             g_fs_host, g_udp_base_port + 1);  /* FS listens here (we send) */
+             g_fs_host, g_udp_base_port + 1,  /* FS binds here (we sendto here) */
+             g_fs_host, g_udp_base_port);      /* FS sends here (we recvfrom here) */
+
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                "unicast: FS binds %s:%d, sends to %s:%d (uuid=%s)",
+                g_fs_host, g_udp_base_port + 1,
+                g_fs_host, g_udp_base_port,
+                g_call_uuid);
     esl_send(cmd);
 
-    /* Register audio tap (radio → phone) */
+    /* Register audio taps:
+     *   RX tap: radio inbound audio → phone (when COR active)
+     *   Playback tap: repeater TX audio → phone (CW ID, TTS, etc.) */
     g_core->audio_tap_register(radio_audio_tap, NULL);
+    g_core->playback_tap_register(playback_audio_tap, NULL);
 
     /* Reset jitter buffer and VAD */
     jitter_buf_reset(&g_jitter);
@@ -883,6 +980,7 @@ static void call_teardown(void)
 
     /* Unregister audio tap */
     g_core->audio_tap_unregister(radio_audio_tap);
+    g_core->playback_tap_unregister(playback_audio_tap);
 
     /* Close UDP sockets */
     udp_close();
@@ -995,10 +1093,24 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
  * Read from jitter buffer, run VAD, manage PTT and queue audio.
  * Called from tick handler when call is active and COR is inactive.
  */
+static int g_vox_debug_count = 0;
+
 static void vox_process_and_queue(void)
 {
-    int16_t frame[VAD_FRAME_SAMPLES];
+    int16_t frame[VAD_FRAME_SAMPLES];  /* 8kHz frame from FS (160 samples = 20ms) */
     size_t got = jitter_buf_read(&g_jitter, frame, VAD_FRAME_SAMPLES);
+
+    g_vox_debug_count++;
+    if (g_vox_debug_count <= 10 || g_vox_debug_count % 250 == 0) {
+        /* Compute RMS for debug */
+        int64_t pwr = 0;
+        for (size_t k = 0; k < (got > 0 ? got : 1); k++)
+            pwr += (int64_t)frame[k] * frame[k];
+        int rms = got > 0 ? (int)sqrt((double)pwr / got) : 0;
+        g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                    "VOX #%d: jitter_read=%zu samples, rms=%d, threshold=%d, cor_active=%d",
+                    g_vox_debug_count, got, rms, g_vad_threshold, (int)g_cor_active);
+    }
 
     /* If no real data, treat as silence */
     int speaking = 0;
@@ -1010,8 +1122,30 @@ static void vox_process_and_queue(void)
             g_core->request_ptt("freeswitch");
             g_vox_ptt_held = 1;
         }
-        g_core->queue_audio_buffer(frame, VAD_FRAME_SAMPLES,
-                                    KERCHUNK_PRI_ELEVATED, 0);
+        /* Upsample from 8kHz (FS) to pipeline rate (48kHz) before queuing */
+        int dst_rate = g_core->sample_rate;
+        if (dst_rate > 8000) {
+            int ratio = dst_rate / 8000;
+            size_t out_n = VAD_FRAME_SAMPLES * (size_t)ratio;
+            int16_t us[960]; /* max 160 * 6 = 960 */
+            if (out_n > sizeof(us)/sizeof(us[0])) out_n = sizeof(us)/sizeof(us[0]);
+            for (size_t i = 0; i < out_n; i++) {
+                size_t src_idx = i / (size_t)ratio;
+                size_t frac = i % (size_t)ratio;
+                if (src_idx + 1 < VAD_FRAME_SAMPLES) {
+                    int32_t a = frame[src_idx];
+                    int32_t b = frame[src_idx + 1];
+                    us[i] = (int16_t)(a + (b - a) * (int32_t)frac / ratio);
+                } else {
+                    us[i] = frame[VAD_FRAME_SAMPLES - 1];
+                }
+            }
+            g_core->queue_audio_buffer(us, out_n,
+                                        KERCHUNK_PRI_ELEVATED, 0);
+        } else {
+            g_core->queue_audio_buffer(frame, VAD_FRAME_SAMPLES,
+                                        KERCHUNK_PRI_ELEVATED, 0);
+        }
     } else {
         if (g_vox_ptt_held) {
             g_core->release_ptt("freeswitch");
