@@ -289,8 +289,11 @@ endif
 
 # ---------- tests ----------
 
-check_PROGRAMS = test_kerchunk
-TESTS = test_kerchunk
+check_PROGRAMS = test_kerchunk test_web_acl
+TESTS = test_kerchunk test_web_acl
+
+test_web_acl_SOURCES = tests/test_web_acl.c
+test_web_acl_CFLAGS = -std=c99 -D_POSIX_C_SOURCE=200809L -Wall -Wextra
 
 test_kerchunk_SOURCES = \
 	tests/test_main.c \
