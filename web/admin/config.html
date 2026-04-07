@@ -96,8 +96,9 @@ header .sub { color: var(--dim); font-size: 14px; }
 // ============================================================
 const SECTION_ORDER = [
   'general','audio','hid','repeater','courtesy','caller','dtmf','voicemail',
-  'weather','time','nws','emergency','recording','cdr','parrot','tts','otp',
-  'gpio','logger','stats','web','modules'
+  'weather','time','nws','emergency','recording','cdr','parrot','tts','asr',
+  'scrambler','otp','gpio','logger','stats','webhook','web',
+  'freeswitch','sdr','pocsag','flex','aprs','poc','modules'
 ];
 
 const SECTION_NAMES = {
@@ -105,48 +106,80 @@ const SECTION_NAMES = {
   courtesy:'Courtesy Tone', caller:'Caller ID', dtmf:'DTMF Processing', voicemail:'Voicemail',
   weather:'Weather', time:'Time', nws:'NWS Alerts', emergency:'Emergency',
   recording:'Recording', cdr:'CDR Logging', parrot:'Parrot / Echo', tts:'Text-to-Speech',
-  otp:'OTP Auth', gpio:'GPIO Control', logger:'Event Logger', stats:'Statistics',
-  web:'Web Dashboard', modules:'Modules'
+  asr:'Speech Recognition', scrambler:'Voice Scrambler', otp:'OTP Auth',
+  gpio:'GPIO Control', logger:'Event Logger', stats:'Statistics',
+  webhook:'Webhooks', web:'Web Dashboard', freeswitch:'AutoPatch (FreeSWITCH)',
+  sdr:'SDR Monitor', pocsag:'POCSAG Paging', flex:'FLEX Paging',
+  aprs:'APRS', poc:'PoC Radio Bridge', modules:'Modules'
 };
 
 const TOGGLE_KEYS = new Set([
   'preemphasis','software_relay','require_identification','enabled',
   'auto_announce','announce_temp','announce_conditions','announce_wind',
-  'attention_tones','persist'
+  'attention_tones','persist','ptt_enabled','registration_enabled',
+  'queue_courtesy','voice_id','streaming','rf_to_poc','poc_to_rf',
+  'auto_punctuation','vad_filter'
 ]);
 
 const NUMBER_KEYS = new Set([
   'tail_time','hang_time','timeout_time','cor_debounce','tx_delay','tx_tail',
-  'relay_drain','cwid_interval','cwid_wpm','cwid_freq',
+  'relay_drain','cwid_interval','cwid_wpm','cwid_freq','cwid_amplitude',
+  'cor_drop_hold','quiet_start','quiet_end','solar_offset',
   'freq','duration','amplitude','ani_window','login_timeout','max_messages',
   'max_duration','inter_digit_timeout','cor_gate_ms','interval','timeout',
   'session_timeout','time_skew','port','hw_rate','preemphasis_alpha',
-  'cor_bit','ptt_bit','max_size_mb','poll_interval','reannounce_interval'
+  'cor_bit','ptt_bit','max_size_mb','poll_interval','reannounce_interval',
+  'wyoming_port','max_capture','min_duration','ptt_max_duration','ptt_priority',
+  'priority','virtual_user_id','rf_bridge_group',
+  'carrier_freq','scrambler_code','tx_level',
+  'default_speed','cap_code','udp_base_port',
+  'dial_timeout','inactivity_timeout','max_call_duration','vad_threshold','vad_hold_ms',
+  'center_freq','sample_rate_sdr','gain','squelch'
 ]);
 
-const PASSWORD_KEYS = new Set(['api_key','auth_token','auth_password','google_maps_api_key']);
+const PASSWORD_KEYS = new Set([
+  'api_key','auth_token','auth_password','google_maps_api_key',
+  'esl_password','poc_password'
+]);
 
 const SELECT_KEYS = {
   log_level: ['error','warn','info','debug'],
   cor_polarity: ['active_low','active_high'],
-  min_severity: ['extreme','severe','moderate','minor']
+  min_severity: ['extreme','severe','moderate','minor'],
+  engine: ['elevenlabs','wyoming'],
+  mode: ['batch','streaming'],
+  cwid_mode: ['always','on_call'],
+  tone_display: ['ctcss','dcs','private'],
+  quiet_mode: ['fixed','solar'],
+  environment: ['open','suburban','forest','urban'],
+  modulation: ['fsk','baseband'],
+  default_speed: ['512','1200','2400']
 };
 
 const READONLY_KEYS = new Set([
   'sample_rate','socket_path','pid_file','module_path','load',
   'tls_cert','tls_key','capture_device','playback_device','device',
-  'port','bind','static_dir'
+  'static_dir','rrd_file'
 ]);
 
+/* Duration values use human-readable format (5m, 300s, 500ms, etc.)
+ * Bare numbers = milliseconds. Show the unit hint from the config. */
 const UNIT_MAP = {
-  tail_time:'ms', hang_time:'ms', timeout_time:'ms', cor_debounce:'ms',
-  tx_delay:'ms', tx_tail:'ms', relay_drain:'ms', cwid_interval:'ms',
-  cwid_freq:'Hz', freq:'Hz', duration:'ms', ani_window:'ms',
-  login_timeout:'ms', max_duration:'sec', inter_digit_timeout:'ms',
-  cor_gate_ms:'ms', interval:'ms', timeout:'ms', session_timeout:'ms',
-  hw_rate:'Hz', max_size_mb:'MB', poll_interval:'ms', reannounce_interval:'ms',
-  port:'', cwid_wpm:'', amplitude:'', time_skew:'', preemphasis_alpha:'',
-  cor_bit:'', ptt_bit:'', max_messages:''
+  cwid_freq:'Hz', freq:'Hz', hw_rate:'Hz',
+  cwid_wpm:'WPM', cwid_amplitude:'0-32767',
+  amplitude:'0-32767', tx_level:'0-100%',
+  quiet_start:'hour 0-23', quiet_end:'hour 0-23',
+  solar_offset:'minutes',
+  max_capture:'seconds', max_messages:'',
+  port:'', wyoming_port:'', ptt_priority:'',
+  priority:'', virtual_user_id:'', rf_bridge_group:'',
+  cor_bit:'', ptt_bit:'', max_size_mb:'MB',
+  time_skew:'', preemphasis_alpha:'',
+  scrambler_code:'1-8', carrier_freq:'Hz',
+  cap_code:'', default_speed:'baud',
+  center_freq:'MHz', sample_rate_sdr:'Hz', gain:'dB', squelch:'dB',
+  vad_threshold:'', vad_hold_ms:'ms',
+  udp_base_port:''
 };
 
 // ============================================================
@@ -189,9 +222,11 @@ function formatLabel(key) {
   // Special abbreviations
   const abbrevs = {
     cwid:'CWID', wpm:'WPM', dcs:'DCS', ctcss:'CTCSS', ani:'ANI', nws:'NWS',
-    tts:'TTS', otp:'OTP', gpio:'GPIO', cdr:'CDR', hid:'HID', api:'API',
+    tts:'TTS', asr:'ASR', otp:'OTP', gpio:'GPIO', cdr:'CDR', hid:'HID', api:'API',
     tls:'TLS', pid:'PID', hz:'Hz', ms:'ms', mb:'MB', ip:'IP', ptt:'PTT',
-    cor:'COR', tx:'TX', rx:'RX'
+    cor:'COR', tx:'TX', rx:'RX', sdr:'SDR', esl:'ESL', acl:'ACL',
+    poc:'PoC', rf:'RF', llm:'LLM', vad:'VAD', udp:'UDP', sip:'SIP',
+    aprs:'APRS', mdc:'MDC', fsk:'FSK'
   };
 
   var parts = key.split('_');
@@ -212,8 +247,12 @@ function formatLabel(key) {
 // ============================================================
 function getFieldType(key, section) {
   if (READONLY_KEYS.has(key)) return 'readonly';
-  /* voice_id is a toggle in repeater/stats but a text field in tts */
+  /* port/bind are readonly in [web] (requires restart) but editable elsewhere */
+  if ((key === 'port' || key === 'bind') && section === 'web') return 'readonly';
+  /* voice_id is a toggle in repeater but a text field in tts */
   if (key === 'voice_id' && section !== 'tts') return 'toggle';
+  /* enabled is a toggle everywhere */
+  if (key === 'enabled') return 'toggle';
   if (TOGGLE_KEYS.has(key)) return 'toggle';
   if (NUMBER_KEYS.has(key)) return 'number';
   if (PASSWORD_KEYS.has(key)) return 'password';
