@@ -22,6 +22,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <arpa/inet.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <fcntl.h>
@@ -84,6 +85,19 @@ static int  g_tls_active    = 0;
 
 /* Registration config */
 static int g_registration_enabled = 0;
+
+/* Admin ACL — CIDR list for admin access.  Clients not matching
+ * get a plain 404 with no hint that /admin/ exists. */
+#define MAX_ACL_ENTRIES 16
+
+typedef struct {
+    uint8_t  addr[16];   /* network address (4 bytes IPv4, 16 bytes IPv6) */
+    int      prefix_len; /* CIDR prefix length */
+    int      is_ip6;
+} acl_entry_t;
+
+static acl_entry_t g_admin_acl[MAX_ACL_ENTRIES];
+static int          g_admin_acl_count = 0;
 
 /* PTT config */
 static int g_ptt_enabled        = 0;   /* [web] ptt_enabled */
@@ -467,6 +481,129 @@ static int ct_compare(const char *a, const char *b, size_t len)
     for (size_t i = 0; i < len; i++)
         result |= (unsigned char)a[i] ^ (unsigned char)b[i];
     return result == 0;
+}
+
+/* ── Admin ACL ─────────────────────────────────────────────── */
+
+/* Parse a single CIDR entry like "192.168.86.0/24" or "fd00::/8" or "10.0.0.1" */
+static int parse_acl_entry(const char *str, acl_entry_t *out)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s", str);
+
+    /* Strip whitespace */
+    char *s = buf;
+    while (*s == ' ') s++;
+    size_t len = strlen(s);
+    while (len > 0 && s[len-1] == ' ') s[--len] = '\0';
+    if (len == 0) return -1;
+
+    /* Split on '/' for prefix length */
+    int prefix_len = -1;
+    char *slash = strchr(s, '/');
+    if (slash) {
+        *slash = '\0';
+        prefix_len = atoi(slash + 1);
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    /* Try IPv6 first */
+    struct in6_addr addr6;
+    if (inet_pton(AF_INET6, s, &addr6) == 1) {
+        memcpy(out->addr, &addr6, 16);
+        out->is_ip6 = 1;
+        out->prefix_len = (prefix_len >= 0) ? prefix_len : 128;
+        return 0;
+    }
+
+    /* Try IPv4 */
+    struct in_addr addr4;
+    if (inet_pton(AF_INET, s, &addr4) == 1) {
+        memcpy(out->addr, &addr4, 4);
+        out->is_ip6 = 0;
+        out->prefix_len = (prefix_len >= 0) ? prefix_len : 32;
+        return 0;
+    }
+
+    return -1;
+}
+
+/* Parse comma-separated ACL: "192.168.86.0/24, 10.0.0.0/8, fd00::/8" */
+static void parse_admin_acl(const char *acl_str)
+{
+    g_admin_acl_count = 0;
+    if (!acl_str || !acl_str[0]) return;
+
+    char buf[1024];
+    snprintf(buf, sizeof(buf), "%s", acl_str);
+
+    char *saveptr = NULL;
+    char *tok = strtok_r(buf, ",", &saveptr);
+    while (tok && g_admin_acl_count < MAX_ACL_ENTRIES) {
+        acl_entry_t entry;
+        if (parse_acl_entry(tok, &entry) == 0) {
+            g_admin_acl[g_admin_acl_count++] = entry;
+        } else {
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "invalid admin_acl entry: %s", tok);
+        }
+        tok = strtok_r(NULL, ",", &saveptr);
+    }
+}
+
+/* Check if a client IP matches the admin ACL.
+ * Returns 1 if allowed, 0 if denied.
+ * If no ACL is configured, all clients are allowed (auth still required). */
+static int check_admin_acl(struct mg_connection *c)
+{
+    if (g_admin_acl_count == 0)
+        return 1;  /* no ACL = allow all (auth still gate) */
+
+    for (int i = 0; i < g_admin_acl_count; i++) {
+        acl_entry_t *acl = &g_admin_acl[i];
+
+        if (c->rem.is_ip6 != acl->is_ip6) {
+            /* Check for IPv4-mapped IPv6: ::ffff:x.x.x.x */
+            if (c->rem.is_ip6 && !acl->is_ip6) {
+                uint8_t *ip6 = c->rem.addr.ip;
+                /* IPv4-mapped IPv6 has bytes 10-11 = 0xff 0xff */
+                if (ip6[10] == 0xff && ip6[11] == 0xff) {
+                    /* Compare the IPv4 part (bytes 12-15) against the ACL */
+                    int bits = acl->prefix_len;
+                    int match = 1;
+                    for (int b = 0; b < 4 && bits > 0; b++) {
+                        uint8_t mask = (bits >= 8) ? 0xff
+                                     : (uint8_t)(0xff << (8 - bits));
+                        if ((ip6[12 + b] & mask) != (acl->addr[b] & mask)) {
+                            match = 0;
+                            break;
+                        }
+                        bits -= 8;
+                    }
+                    if (match) return 1;
+                }
+            }
+            continue;
+        }
+
+        int addr_len = acl->is_ip6 ? 16 : 4;
+        int bits = acl->prefix_len;
+        int match = 1;
+
+        for (int b = 0; b < addr_len && bits > 0; b++) {
+            uint8_t mask = (bits >= 8) ? 0xff : (uint8_t)(0xff << (8 - bits));
+            if ((c->rem.addr.ip[b] & mask) != (acl->addr[b] & mask)) {
+                match = 0;
+                break;
+            }
+            bits -= 8;
+        }
+
+        if (match) return 1;
+    }
+
+    return 0;
 }
 
 /* HTTP Basic Auth check for admin routes.
@@ -1626,10 +1763,19 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
         }
 
         /* ════════════════════════════════════════════════════════
-         *  /admin/... routes -- require Basic Auth
+         *  /admin/... routes -- ACL + Basic Auth
          * ════════════════════════════════════════════════════════ */
         if (mg_match(hm->uri, mg_str("/admin/#"), NULL) ||
             mg_match(hm->uri, mg_str("/admin"), NULL)) {
+
+            /* ACL check — if admin_acl is configured and client IP
+             * doesn't match, return a plain 404 with no hint that
+             * the admin interface exists. */
+            if (!check_admin_acl(c)) {
+                mg_http_reply(c, 404, "Content-Type: text/plain\r\n",
+                              "Not found\n");
+                return;
+            }
 
             /* public_only mode: all admin access blocked */
             if (g_public_only) {
@@ -1917,6 +2063,12 @@ static int web_configure(const kerchunk_config_t *cfg)
 
     v = kerchunk_config_get(cfg, "web", "public_only");
     g_public_only = (v && strcmp(v, "on") == 0);
+
+    v = kerchunk_config_get(cfg, "web", "admin_acl");
+    parse_admin_acl(v);
+    if (g_admin_acl_count > 0)
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "admin ACL: %d entries (non-matching IPs get 404)", g_admin_acl_count);
 
     v = kerchunk_config_get(cfg, "web", "static_dir");
     if (v) snprintf(g_static_dir, sizeof(g_static_dir), "%s", v);

@@ -155,8 +155,17 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ;
 ; Admin paths (/admin/*) require HTTP Basic Auth (auth_user + auth_password).
 ; Public paths have zero auth and do not expose sensitive data (API keys, etc).
-; Set public_only = on to block all /admin/ access (e.g. internet-facing sites
-; where admin is accessed via VPN).
+;
+; admin_acl: Comma-separated CIDR list for admin access. Clients outside
+; the ACL get a plain 404 — no auth challenge, no error body, zero hint
+; that /admin/ exists. Supports IPv4 and IPv6. If unset, all IPs may
+; attempt auth. Examples:
+;   admin_acl = 192.168.86.0/24
+;   admin_acl = 192.168.0.0/16, 10.0.0.0/8
+;   admin_acl = 192.168.86.0/24, fd00::/8
+;   admin_acl = 192.168.86.105/32            (single host)
+;
+; public_only: Block all /admin/ access regardless of IP or auth.
 ;
 ; Migration: auth_token is still accepted for backward compatibility —
 ; if auth_password is empty, auth_token is used as the password.
@@ -167,6 +176,7 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; bind = 127.0.0.1              ; Use 0.0.0.0 for external access
 ; auth_user = admin              ; HTTP Basic Auth username for /admin/
 ; auth_password =                ; HTTP Basic Auth password for /admin/
+; admin_acl =                    ; CIDR list for admin IP restriction (empty = allow all)
 ; public_only = off              ; Block all /admin/ access (public site only)
 ; static_dir = /usr/share/kerchunk/web  ; Path to HTML/JS/CSS files
 ; tls_cert =                    ; Path to TLS certificate (PEM). Enables HTTPS.
