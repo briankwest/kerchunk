@@ -400,6 +400,13 @@ model = eleven_turbo_v2_5        ; eleven_turbo_v2_5 | eleven_monolingual_v1
 ; ----------------------------------------------------------------------------
 [asr]
 ; enabled = on                   ; on | off
+; mode = batch                   ; batch (default) | streaming
+;                                ;   batch: accumulates audio, sends after COR drop
+;                                ;          Best accuracy (Whisper). ~1-3s delay.
+;                                ;          Server: wyoming-asr-server --model-type whisper
+;                                ;   streaming: feeds audio in real-time during TX
+;                                ;          Instant transcript on COR drop.
+;                                ;          Server: wyoming-asr-server --model-type zipformer --streaming
 ; wyoming_host = 127.0.0.1      ; Wyoming ASR server host
 ; wyoming_port = 10300           ; Wyoming ASR server port
 ; language = en                  ; Language code (or empty for auto-detect)

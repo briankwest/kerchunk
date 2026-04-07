@@ -1,10 +1,13 @@
 /*
  * mod_asr.c — Automatic speech recognition for inbound transmissions
  *
- * Captures RX audio via the audio tap during COR active, then sends
- * the complete audio to a Wyoming ASR server (e.g. wyoming-faster-whisper)
- * after COR drops.  The transcript is logged, fired as an event, and
- * available via CLI/dashboard.
+ * Captures RX audio via the audio tap during COR active and transcribes
+ * it via a Wyoming ASR server.
+ *
+ * Two modes:
+ *   batch     — Accumulates audio, sends after COR drop (Whisper)
+ *   streaming — Connects on COR assert, feeds chunks in real-time,
+ *               transcript available instantly on COR drop (Zipformer)
  *
  * Config: [asr] section in kerchunk.conf
  * Requires: libwyoming
@@ -41,14 +44,26 @@ static char g_host[64]     = "127.0.0.1";
 static int  g_port         = 10300;
 static char g_language[16] = "en";
 static int  g_max_capture_s = 30;
-static int  g_min_duration_ms = 500;  /* skip very short transmissions */
+static int  g_min_duration_ms = 500;
 
-/* Capture state */
+typedef enum { ASR_MODE_BATCH, ASR_MODE_STREAMING } asr_mode_t;
+static asr_mode_t g_mode = ASR_MODE_BATCH;
+
+/* ── Batch mode state ── */
 static atomic_int g_capturing;
 static int16_t   *g_cap_buf;
 static size_t     g_cap_len;
 static size_t     g_cap_cap;
 static int        g_caller_id;
+
+/* ── Streaming mode state ── */
+#ifdef HAVE_LIBWYOMING
+static wyoming_conn_t       *g_stream_conn;
+static wyoming_audio_format_t g_stream_fmt;
+#endif
+static atomic_int             g_streaming_active;
+static size_t                 g_stream_samples;   /* total samples sent */
+static uint64_t               g_stream_start_us;
 
 /* Transcript history */
 typedef struct {
@@ -63,7 +78,7 @@ static int           g_transcript_idx;
 static int           g_transcript_count;
 static pthread_mutex_t g_transcript_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* Background worker */
+/* Batch worker */
 typedef struct {
     int16_t *pcm;
     size_t   samples;
@@ -77,9 +92,59 @@ static pthread_mutex_t g_asr_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_asr_cond  = PTHREAD_COND_INITIALIZER;
 static int             g_asr_tid   = -1;
 
-/* ── Audio tap callback ── */
+/* ── Shared helpers ── */
 
-static void rx_audio_tap(const kerchevt_t *evt, void *ud)
+static void store_transcript(const char *text, const char *caller, float dur)
+{
+    pthread_mutex_lock(&g_transcript_mutex);
+    transcript_t *t = &g_transcripts[g_transcript_idx];
+    snprintf(t->text, sizeof(t->text), "%s", text);
+    snprintf(t->caller, sizeof(t->caller), "%s", caller ? caller : "unknown");
+    t->timestamp = time(NULL);
+    t->duration_s = dur;
+    g_transcript_idx = (g_transcript_idx + 1) % MAX_TRANSCRIPTS;
+    if (g_transcript_count < MAX_TRANSCRIPTS)
+        g_transcript_count++;
+    pthread_mutex_unlock(&g_transcript_mutex);
+}
+
+static const char *get_caller_name(int caller_id)
+{
+    if (caller_id > 0) {
+        const kerchunk_user_t *u = g_core->user_lookup_by_id(caller_id);
+        if (u) return u->name;
+    }
+    return "unknown";
+}
+
+static void emit_transcript(const char *raw, const char *caller, float dur)
+{
+    /* Strip leading/trailing whitespace */
+    const char *s = raw;
+    while (*s == ' ') s++;
+    size_t len = strlen(s);
+    char *trimmed = strdup(s);
+    if (!trimmed) return;
+    while (len > 0 && trimmed[len-1] == ' ') trimmed[--len] = '\0';
+
+    if (trimmed[0]) {
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "[%s %.1fs] %s", caller, dur, trimmed);
+
+        store_transcript(trimmed, caller, dur);
+
+        kerchevt_t ae = {
+            .type = KERCHEVT_ANNOUNCEMENT,
+            .announcement = { .source = "asr", .description = trimmed },
+        };
+        kerchevt_fire(&ae);
+    }
+    free(trimmed);
+}
+
+/* ── Batch mode: audio tap accumulates, worker sends after COR drop ── */
+
+static void batch_audio_tap(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
     if (!g_capturing || !evt->audio.samples)
@@ -108,25 +173,7 @@ static void rx_audio_tap(const kerchevt_t *evt, void *ud)
     g_cap_len += to_copy;
 }
 
-/* ── Store transcript ── */
-
-static void store_transcript(const char *text, const char *caller, float dur)
-{
-    pthread_mutex_lock(&g_transcript_mutex);
-    transcript_t *t = &g_transcripts[g_transcript_idx];
-    snprintf(t->text, sizeof(t->text), "%s", text);
-    snprintf(t->caller, sizeof(t->caller), "%s", caller ? caller : "unknown");
-    t->timestamp = time(NULL);
-    t->duration_s = dur;
-    g_transcript_idx = (g_transcript_idx + 1) % MAX_TRANSCRIPTS;
-    if (g_transcript_count < MAX_TRANSCRIPTS)
-        g_transcript_count++;
-    pthread_mutex_unlock(&g_transcript_mutex);
-}
-
-/* ── Worker thread ── */
-
-static void *asr_worker(void *arg)
+static void *batch_worker(void *arg)
 {
     (void)arg;
 
@@ -143,7 +190,6 @@ static void *asr_worker(void *arg)
             break;
         }
 
-        /* Take ownership of the request */
         int16_t *pcm       = g_asr_req.pcm;
         size_t   samples   = g_asr_req.samples;
         int      rate      = g_asr_req.rate;
@@ -156,20 +202,13 @@ static void *asr_worker(void *arg)
             continue;
 
         float dur = (float)samples / (float)rate;
-
-        /* Look up caller name */
-        const char *caller_name = "unknown";
-        if (caller_id > 0) {
-            const kerchunk_user_t *u = g_core->user_lookup_by_id(caller_id);
-            if (u) caller_name = u->name;
-        }
+        const char *caller_name = get_caller_name(caller_id);
 
 #ifdef HAVE_LIBWYOMING
-        /* Connect to ASR server */
         wyoming_conn_t *conn = wyoming_connect(g_host, (uint16_t)g_port);
         if (!conn) {
             g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
-                        "ASR connect failed: %s:%d", g_host, g_port);
+                        "batch connect failed: %s:%d", g_host, g_port);
             free(pcm);
             continue;
         }
@@ -181,103 +220,185 @@ static void *asr_worker(void *arg)
         wyoming_close(conn);
 #else
         (void)rate;
-        wyoming_error_t rc = WYOMING_ERR_PROTO;
+        int rc = -1;
         char *text = NULL;
 #endif
         free(pcm);
 
-        if (rc == WYOMING_OK && text && text[0]) {
-            /* Strip leading/trailing whitespace */
-            char *s = text;
-            while (*s == ' ') s++;
-            size_t len = strlen(s);
-            while (len > 0 && s[len-1] == ' ') s[--len] = '\0';
-
-            if (s[0]) {
-                g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                            "[%s %.1fs] %s", caller_name, dur, s);
-
-                store_transcript(s, caller_name, dur);
-
-                /* Fire event so dashboard/webhook can display it */
-                kerchevt_t ae = {
-                    .type = KERCHEVT_ANNOUNCEMENT,
-                    .announcement = {
-                        .source = "asr",
-                        .description = s,
-                    },
-                };
-                kerchevt_fire(&ae);
-            }
-        } else if (rc != WYOMING_OK) {
+        if (rc == 0 && text && text[0])
+            emit_transcript(text, caller_name, dur);
+        else if (rc != 0)
             g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                        "transcription failed (%d) for %.1fs from %s",
+                        "batch transcription failed (%d) for %.1fs from %s",
                         rc, dur, caller_name);
-        }
-
         free(text);
     }
-
     return NULL;
+}
+
+/* ── Streaming mode: connect on COR, feed chunks in real-time ── */
+
+static void stream_audio_tap(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+#ifdef HAVE_LIBWYOMING
+    if (!g_streaming_active || !evt->audio.samples || !g_stream_conn)
+        return;
+
+    size_t max_samples = (size_t)g_core->sample_rate * (size_t)g_max_capture_s;
+    if (g_stream_samples >= max_samples)
+        return;
+
+    size_t n = evt->audio.n;
+    if (g_stream_samples + n > max_samples)
+        n = max_samples - g_stream_samples;
+
+    wyoming_error_t rc = wyoming_transcribe_chunk(g_stream_conn,
+                                                   evt->audio.samples, n,
+                                                   &g_stream_fmt);
+    if (rc == WYOMING_OK)
+        g_stream_samples += n;
+    else {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "streaming chunk failed (%d)", rc);
+        /* Connection broken — stop streaming, will be cleaned up on COR drop */
+        g_streaming_active = 0;
+    }
+#else
+    (void)evt;
+#endif
 }
 
 /* ── Event handlers ── */
 
 static void on_cor_assert(const kerchevt_t *evt, void *ud)
 {
-    (void)evt; (void)ud;
+    (void)ud;
     if (!g_enabled) return;
 
-    g_capturing = 1;
-    g_cap_len = 0;
-    g_cap_cap = (size_t)g_core->sample_rate * 10;  /* start with 10s buffer */
-    g_cap_buf = malloc(g_cap_cap * sizeof(int16_t));
-    if (!g_cap_buf) { g_capturing = 0; return; }
     g_caller_id = 0;
-    g_core->audio_tap_register(rx_audio_tap, NULL);
+
+    if (g_mode == ASR_MODE_STREAMING) {
+#ifdef HAVE_LIBWYOMING
+        /* Connect and start streaming immediately */
+        g_stream_conn = wyoming_connect(g_host, (uint16_t)g_port);
+        if (!g_stream_conn) {
+            g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                        "streaming connect failed: %s:%d", g_host, g_port);
+            return;
+        }
+
+        g_stream_fmt.rate     = g_core->sample_rate;
+        g_stream_fmt.width    = 2;
+        g_stream_fmt.channels = 1;
+        g_stream_samples = 0;
+        g_stream_start_us = evt->timestamp_us;
+
+        wyoming_error_t rc = wyoming_transcribe_start(g_stream_conn,
+                                                       &g_stream_fmt,
+                                                       g_language);
+        if (rc != WYOMING_OK) {
+            g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                        "streaming start failed (%d)", rc);
+            wyoming_close(g_stream_conn);
+            g_stream_conn = NULL;
+            return;
+        }
+
+        g_streaming_active = 1;
+        g_core->audio_tap_register(stream_audio_tap, NULL);
+        g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "streaming started");
+#endif
+    } else {
+        /* Batch mode: accumulate audio */
+        g_capturing = 1;
+        g_cap_len = 0;
+        g_cap_cap = (size_t)g_core->sample_rate * 10;
+        g_cap_buf = malloc(g_cap_cap * sizeof(int16_t));
+        if (!g_cap_buf) { g_capturing = 0; return; }
+        g_core->audio_tap_register(batch_audio_tap, NULL);
+    }
 }
 
 static void on_cor_drop(const kerchevt_t *evt, void *ud)
 {
-    (void)evt; (void)ud;
-    if (!g_capturing) return;
-    g_capturing = 0;
-    g_core->audio_tap_unregister(rx_audio_tap);
+    (void)ud;
 
-    if (!g_cap_buf || g_cap_len == 0) {
-        free(g_cap_buf);
+    if (g_mode == ASR_MODE_STREAMING) {
+#ifdef HAVE_LIBWYOMING
+        if (!g_streaming_active && !g_stream_conn) return;
+        g_streaming_active = 0;
+        g_core->audio_tap_unregister(stream_audio_tap);
+
+        if (!g_stream_conn || g_stream_samples == 0) {
+            if (g_stream_conn) {
+                wyoming_close(g_stream_conn);
+                g_stream_conn = NULL;
+            }
+            return;
+        }
+
+        /* Skip short transmissions */
+        float dur_ms = (float)g_stream_samples / (float)g_core->sample_rate * 1000.0f;
+        if (dur_ms < (float)g_min_duration_ms) {
+            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                        "skipping short TX (%.0fms < %dms)", dur_ms, g_min_duration_ms);
+            wyoming_close(g_stream_conn);
+            g_stream_conn = NULL;
+            return;
+        }
+
+        /* Stop streaming and get final transcript */
+        char *text = NULL;
+        wyoming_error_t rc = wyoming_transcribe_stop(g_stream_conn, &text);
+        wyoming_close(g_stream_conn);
+        g_stream_conn = NULL;
+
+        float dur = (float)g_stream_samples / (float)g_core->sample_rate;
+        const char *caller_name = get_caller_name(g_caller_id);
+
+        if (rc == WYOMING_OK && text && text[0])
+            emit_transcript(text, caller_name, dur);
+        else if (rc != 0)
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "streaming transcription failed (%d) for %.1fs",
+                        rc, dur);
+        free(text);
+#endif
+    } else {
+        /* Batch mode: hand off to worker */
+        (void)evt;
+        if (!g_capturing) return;
+        g_capturing = 0;
+        g_core->audio_tap_unregister(batch_audio_tap);
+
+        if (!g_cap_buf || g_cap_len == 0) {
+            free(g_cap_buf);
+            g_cap_buf = NULL;
+            return;
+        }
+
+        float dur_ms = (float)g_cap_len / (float)g_core->sample_rate * 1000.0f;
+        if (dur_ms < (float)g_min_duration_ms) {
+            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                        "skipping short TX (%.0fms < %dms)", dur_ms, g_min_duration_ms);
+            free(g_cap_buf);
+            g_cap_buf = NULL;
+            return;
+        }
+
+        pthread_mutex_lock(&g_asr_mutex);
+        if (g_asr_pending && g_asr_req.pcm)
+            free(g_asr_req.pcm);
+        g_asr_req.pcm       = g_cap_buf;
+        g_asr_req.samples    = g_cap_len;
+        g_asr_req.rate       = g_core->sample_rate;
+        g_asr_req.caller_id  = g_caller_id;
+        g_asr_pending = 1;
         g_cap_buf = NULL;
-        return;
+        g_cap_len = 0;
+        pthread_cond_signal(&g_asr_cond);
+        pthread_mutex_unlock(&g_asr_mutex);
     }
-
-    /* Skip very short transmissions (kerchunks, noise) */
-    float dur_ms = (float)g_cap_len / (float)g_core->sample_rate * 1000.0f;
-    if (dur_ms < (float)g_min_duration_ms) {
-        g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
-                    "skipping short TX (%.0fms < %dms)", dur_ms, g_min_duration_ms);
-        free(g_cap_buf);
-        g_cap_buf = NULL;
-        return;
-    }
-
-    /* Hand off to worker thread */
-    pthread_mutex_lock(&g_asr_mutex);
-
-    /* Drop previous pending request if worker is still busy */
-    if (g_asr_pending && g_asr_req.pcm) {
-        free(g_asr_req.pcm);
-    }
-
-    g_asr_req.pcm       = g_cap_buf;
-    g_asr_req.samples    = g_cap_len;
-    g_asr_req.rate       = g_core->sample_rate;
-    g_asr_req.caller_id  = g_caller_id;
-    g_asr_pending = 1;
-    g_cap_buf = NULL;
-    g_cap_len = 0;
-
-    pthread_cond_signal(&g_asr_cond);
-    pthread_mutex_unlock(&g_asr_mutex);
 }
 
 static void on_caller_identified(const kerchevt_t *evt, void *ud)
@@ -313,6 +434,12 @@ static int asr_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "asr", "language");
     if (v) snprintf(g_language, sizeof(g_language), "%s", v);
 
+    v = kerchunk_config_get(cfg, "asr", "mode");
+    if (v && strcmp(v, "streaming") == 0)
+        g_mode = ASR_MODE_STREAMING;
+    else
+        g_mode = ASR_MODE_BATCH;
+
     g_max_capture_s = kerchunk_config_get_int(cfg, "asr", "max_capture", 30);
     if (g_max_capture_s > MAX_CAPTURE_S) g_max_capture_s = MAX_CAPTURE_S;
     if (g_max_capture_s < 1) g_max_capture_s = 1;
@@ -332,7 +459,7 @@ static int asr_configure(const kerchunk_config_t *cfg)
     return 0;
 #endif
 
-    /* Stop existing worker on reload */
+    /* Stop existing worker on reload (batch mode only) */
     if (g_asr_tid >= 0) {
         g_core->thread_stop(g_asr_tid);
         pthread_cond_signal(&g_asr_cond);
@@ -340,17 +467,22 @@ static int asr_configure(const kerchunk_config_t *cfg)
         g_asr_tid = -1;
     }
 
-    g_asr_pending = 0;
-    g_asr_tid = g_core->thread_create("asr-worker", asr_worker, NULL);
-    if (g_asr_tid < 0) {
-        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "failed to create worker thread");
-        g_enabled = 0;
-        return -1;
+    /* Batch mode needs a worker thread; streaming mode works inline */
+    if (g_mode == ASR_MODE_BATCH) {
+        g_asr_pending = 0;
+        g_asr_tid = g_core->thread_create("asr-worker", batch_worker, NULL);
+        if (g_asr_tid < 0) {
+            g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "failed to create worker thread");
+            g_enabled = 0;
+            return -1;
+        }
     }
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "ready: %s:%d lang=%s max=%ds min=%dms",
-                g_host, g_port, g_language, g_max_capture_s, g_min_duration_ms);
+                "ready: %s:%d lang=%s mode=%s max=%ds min=%dms",
+                g_host, g_port, g_language,
+                g_mode == ASR_MODE_STREAMING ? "streaming" : "batch",
+                g_max_capture_s, g_min_duration_ms);
     return 0;
 }
 
@@ -358,6 +490,7 @@ static void asr_unload(void)
 {
     g_enabled = 0;
     g_capturing = 0;
+    g_streaming_active = 0;
 
     if (g_asr_tid >= 0) {
         g_core->thread_stop(g_asr_tid);
@@ -368,6 +501,13 @@ static void asr_unload(void)
 
     free(g_cap_buf);
     g_cap_buf = NULL;
+
+#ifdef HAVE_LIBWYOMING
+    if (g_stream_conn) {
+        wyoming_close(g_stream_conn);
+        g_stream_conn = NULL;
+    }
+#endif
 
     pthread_mutex_lock(&g_asr_mutex);
     free(g_asr_req.pcm);
@@ -408,12 +548,13 @@ static int cli_asr(int argc, const char **argv, kerchunk_resp_t *r)
 
     /* Default: status */
     resp_bool(r, "enabled", g_enabled);
+    resp_str(r, "mode", g_mode == ASR_MODE_STREAMING ? "streaming" : "batch");
     resp_str(r, "wyoming_host", g_host);
     resp_int(r, "wyoming_port", g_port);
     resp_str(r, "language", g_language);
     resp_int(r, "max_capture_s", g_max_capture_s);
     resp_int(r, "min_duration_ms", g_min_duration_ms);
-    resp_bool(r, "capturing", g_capturing);
+    resp_bool(r, "capturing", g_mode == ASR_MODE_STREAMING ? (int)g_streaming_active : (int)g_capturing);
     resp_int(r, "transcript_count", g_transcript_count);
 
     if (g_transcript_count > 0) {
@@ -431,7 +572,13 @@ usage:
         "    Show ASR status and last transcript.\n\n"
         "  asr history\n"
         "    Show recent transcripts (up to 10).\n\n"
-        "Config: [asr] enabled, wyoming_host, wyoming_port,\n"
+        "Modes:\n"
+        "  batch     — Accumulates audio, transcribes after COR drop.\n"
+        "              Best accuracy (Whisper). ~1-3s delay after unkey.\n\n"
+        "  streaming — Feeds audio in real-time during transmission.\n"
+        "              Transcript available instantly on COR drop.\n"
+        "              Requires streaming model (Zipformer).\n\n"
+        "Config: [asr] enabled, mode, wyoming_host, wyoming_port,\n"
         "        language, max_capture, min_duration\n");
     resp_str(r, "error", "usage: asr [history]");
     resp_finish(r);
@@ -448,7 +595,7 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
 
 static kerchunk_module_def_t mod_asr = {
     .name             = "mod_asr",
-    .version          = "1.0.0",
+    .version          = "2.0.0",
     .description      = "Automatic speech recognition (Wyoming ASR)",
     .load             = asr_load,
     .configure        = asr_configure,
