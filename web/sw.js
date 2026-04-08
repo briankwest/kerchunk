@@ -1,6 +1,6 @@
-const CACHE_NAME = 'kerchunk-ptt-v1';
+const CACHE_NAME = 'kerchunk-v2';
 const CORE_ASSETS = [
-  'ptt.html',
+  '/',
   'capture-processor.js',
   'stream-processor.js',
   'manifest.json'

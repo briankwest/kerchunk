@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
+<link rel="manifest" href="/admin/manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="apple-touch-icon" href="/logo.png">
 <title>Kerchunk Dashboard</title>
 <style>
 :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
@@ -11,9 +15,13 @@
         --yellow: #d29922; }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
-       background: var(--bg); color: var(--text); padding: 16px; max-width: 1200px; margin: 0 auto; }
+       background: var(--bg); color: var(--text); padding: 16px;
+       max-width: 1200px; margin: 0 auto; }
 header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 header h1 { font-size: 20px; }
+header nav { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; width: 100%; }
+header nav .btn { text-decoration: none; white-space: nowrap; flex: 1; text-align: center;
+                  padding: 5px 10px; }
 header .sub { color: var(--dim); font-size: 14px; }
 .badge { font-size: 12px; padding: 2px 10px; border-radius: 12px; font-weight: 600; }
 .badge-idle { background: var(--green); color: #000; }
@@ -72,9 +80,8 @@ table td:last-child { text-align: right; font-weight: 600; font-variant-numeric:
   body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
   header { gap: 8px; margin-bottom: 10px; }
   header h1 { font-size: 16px; }
-  header nav { margin-left: 0; width: 100%; justify-content: stretch; }
-  header nav .btn { flex: 1; text-align: center; min-height: 44px; display: flex;
-                    align-items: center; justify-content: center; padding: 8px 6px; }
+  header nav .btn { min-height: 36px; display: flex;
+                    align-items: center; justify-content: center; }
   .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
   .btn-sm { min-height: 32px; padding: 4px 8px; }
   .controls { gap: 8px; }
@@ -113,21 +120,39 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 .cmd-form .btn { align-self: flex-end; margin-top: 14px; }
 .btn.active-form { background: var(--accent); color: #fff; border-color: var(--accent); }
 .toggle-on { border-color: var(--green); color: var(--green); }
+#login-overlay { position:fixed; inset:0; background:var(--bg); z-index:9999;
+  display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px; }
+#login-overlay form { display:flex; flex-direction:column; gap:12px; }
+#login-overlay.hidden { display:none; }
+#login-overlay h1 { font-size:20px; margin-bottom:8px; }
+#login-overlay input { padding:10px 14px; background:var(--card); border:1px solid var(--border);
+  color:var(--text); border-radius:5px; font-size:16px; width:260px; }
+#login-overlay button { padding:10px 14px; background:var(--accent); color:#fff; border:none;
+  border-radius:5px; font-size:14px; cursor:pointer; width:260px; }
+#login-overlay .error { color:var(--red); font-size:13px; min-height:18px; }
 </style>
 </head>
 <body>
+<div id="login-overlay" class="hidden">
+  <h1>Kerchunk Admin</h1>
+  <form onsubmit="doLogin();return false" autocomplete="on">
+    <input id="login-user" type="text" placeholder="Username" autocomplete="username" autocapitalize="off">
+    <input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
+    <button type="submit">Sign In</button>
+  </form>
+  <div class="error" id="login-error"></div>
+</div>
 <header>
   <h1 id="callsign">Repeater</h1>
   <span id="state-badge" class="badge badge-idle">IDLE</span>
   <span id="ptt-badge" class="badge badge-off">PTT off</span>
-  <nav style="margin-left:auto;display:flex;gap:8px">
-    <a href="/" class="btn">Public</a>
+  <nav>
     <a href="/admin/" class="btn" style="border-color:var(--accent);color:var(--accent)">Admin</a>
     <a href="/admin/users.html" class="btn">Users</a>
     <a href="/admin/config.html" class="btn">Config</a>
     <a href="/admin/coverage.html" class="btn">Coverage</a>
     <a href="/admin/ptt.html" class="btn">PTT</a>
-    <a href="https://github.com/briankwest/kerchunk/issues" class="btn" target="_blank" rel="noopener" style="border-color:var(--dim);color:var(--dim);font-size:11px">Issues</a>
+    <a href="https://github.com/briankwest/kerchunk/issues" class="btn" target="_blank" rel="noopener" title="Issues"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-2px"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
   </nav>
 </header>
 
@@ -243,11 +268,58 @@ let dtmfBuf = '';
 let dtmfTimer = null;
 let relaying = false;  // COR active — TX is in relay mode
 
+/* Auth: store Base64 credentials for fetch() and pass via header.
+ * In normal browser mode, the browser handles Basic Auth natively.
+ * In PWA standalone mode, there's no auth dialog, so we show a login form
+ * and store credentials in sessionStorage. */
+let _authToken = sessionStorage.getItem('kerchunk_auth') || '';
+
+function authHeaders() {
+  const h = {'Content-Type':'application/json'};
+  if (_authToken) h['Authorization'] = 'Basic ' + _authToken;
+  return h;
+}
+
 const CRED = {credentials:'same-origin'};
-async function fetchJSON(p) { return (await fetch(API+p, CRED)).json(); }
+async function fetchJSON(p) {
+  const opts = {credentials:'same-origin'};
+  if (_authToken) opts.headers = {'Authorization': 'Basic ' + _authToken};
+  const r = await fetch(API+p, opts);
+  if (r.status === 401) { showLogin(); throw new Error('auth'); }
+  return r.json();
+}
+
+function showLogin() {
+  document.getElementById('login-overlay').classList.remove('hidden');
+  document.getElementById('login-user').focus();
+}
+
+async function doLogin() {
+  const u = document.getElementById('login-user').value;
+  const p = document.getElementById('login-pass').value;
+  const token = btoa(u + ':' + p);
+  try {
+    const r = await fetch(API+'/api/status', {
+      credentials:'same-origin',
+      headers: {'Authorization': 'Basic ' + token}
+    });
+    if (r.ok) {
+      _authToken = token;
+      sessionStorage.setItem('kerchunk_auth', token);
+      document.getElementById('login-overlay').classList.add('hidden');
+      document.getElementById('login-error').textContent = '';
+      init();
+    } else {
+      document.getElementById('login-error').textContent = 'Invalid credentials';
+    }
+  } catch(e) {
+    document.getElementById('login-error').textContent = 'Connection error';
+  }
+}
+
 
 async function cmd(c) {
-  await fetch(API+'/api/cmd',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
+  await fetch(API+'/api/cmd',{method:'POST',credentials:'same-origin',headers:authHeaders(),body:JSON.stringify({cmd:c})});
 }
 
 function ttsSpeak() {
@@ -548,6 +620,9 @@ function closeZoom() {
 
 function initCharts() {
   if (typeof Chart === 'undefined') return;
+  if (chartMinute) { chartMinute.destroy(); chartMinute = null; }
+  if (chartHourly) { chartHourly.destroy(); chartHourly = null; }
+  if (chartDaily)  { chartDaily.destroy();  chartDaily = null; }
   Chart.defaults.color = '#aaa';
   Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
 
@@ -997,6 +1072,17 @@ function setAudioVolume(v) {
 (async function init() {
   initCharts();
   refreshStation();
+  /* Check auth before starting — in PWA mode there's no browser auth dialog */
+  try {
+    const opts = {credentials:'same-origin'};
+    if (_authToken) opts.headers = {'Authorization': 'Basic ' + _authToken};
+    const r = await fetch(API+'/api/status', opts);
+    if (r.status === 401) { showLogin(); return; }
+  } catch(e) { showLogin(); return; }
+  init();
+})();
+
+function init() {
   refreshStatus();
   refreshStats();
   refreshAlerts();
@@ -1004,11 +1090,11 @@ function setAudioVolume(v) {
   refreshUsers();
   buildDynamicControls().then(() => refreshStatus());
   connectSSE();
-  setInterval(renderStats,1000);   // live tick — uptime + active timers
-  setInterval(refreshStats,30000); // full server sync
+  setInterval(renderStats,1000);
+  setInterval(refreshStats,30000);
   setInterval(refreshAlerts,60000);
   setInterval(refreshWeather,60000);
-})();
+}
 </script>
 </body>
 </html>

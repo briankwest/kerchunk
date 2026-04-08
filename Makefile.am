@@ -371,7 +371,8 @@ kerchunkwebadmin_DATA = \
 	web/admin/users.html \
 	web/admin/config.html \
 	web/admin/coverage.html \
-	web/admin/ptt.html
+	web/admin/ptt.html \
+	web/admin/manifest.json
 
 # Config examples
 kerchunkconfdir = $(sysconfdir)/kerchunk

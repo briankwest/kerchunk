@@ -16,6 +16,7 @@
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
 #include "kerchunk_user.h"
+#include "kerchunk_queue.h"
 #include "mongoose.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,6 +84,35 @@ static char g_tls_cert[256] = "";
 static char g_tls_key[256]  = "";
 static int  g_tls_active    = 0;
 
+static int ct_compare(const char *a, const char *b, size_t len);
+
+/* Session token — set as cookie on successful Basic Auth, accepted on
+ * WebSocket/EventSource upgrades where browsers don't send Basic Auth. */
+static char g_session_token[65] = "";
+
+static void generate_session_token(void)
+{
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f) {
+        uint8_t buf[32];
+        if (fread(buf, 1, sizeof(buf), f) == sizeof(buf)) {
+            for (int i = 0; i < 32; i++)
+                snprintf(g_session_token + i*2, 3, "%02x", buf[i]);
+        }
+        fclose(f);
+    }
+}
+
+static int check_session_cookie(struct mg_http_message *hm)
+{
+    if (g_session_token[0] == '\0') return 0;
+    struct mg_str *cookie_hdr = mg_http_get_header(hm, "Cookie");
+    if (!cookie_hdr) return 0;
+    struct mg_str val = mg_http_get_header_var(*cookie_hdr, mg_str("kerchunk_session"));
+    if (val.len != 64) return 0;
+    return ct_compare(val.buf, g_session_token, 64);
+}
+
 /* Registration config */
 static int g_registration_enabled = 0;
 
@@ -98,6 +128,9 @@ typedef struct {
 
 static acl_entry_t g_admin_acl[MAX_ACL_ENTRIES];
 static int          g_admin_acl_count = 0;
+
+/* Callsign for dynamic manifest */
+static char g_callsign[32] = "Kerchunk";
 
 /* PTT config */
 static int g_ptt_enabled        = 0;   /* [web] ptt_enabled */
@@ -426,8 +459,9 @@ static void ws_handle_audio_frame(ws_conn_state_t *st,
 
     /* Queue each frame immediately for real-time playback.
      * Thread-safe: kerchunk_queue has internal mutex protection. */
-    g_core->queue_audio_buffer((const int16_t *)(data + 1), fs,
-                               g_ptt_priority, 0);
+    int qid = g_core->queue_audio_buffer((const int16_t *)(data + 1), fs,
+                                          g_ptt_priority, 0);
+    if (qid > 0) kerchunk_queue_tag_item(qid, "web_ptt");
     st->audio_len += fs;
 }
 
@@ -622,10 +656,16 @@ static int check_admin_acl(struct mg_connection *c)
 }
 
 /* HTTP Basic Auth check for admin routes.
- * Uses Mongoose's mg_http_creds() to extract user/pass from Authorization header.
- * Returns 1 if authenticated, 0 if not. */
+ * Accepts: Authorization: Basic header, or kerchunk_session cookie.
+ * The cookie fallback is needed because WebSocket and EventSource
+ * APIs do not send Basic Auth credentials from the browser cache.
+ * Returns: 1=authenticated, 0=not, 2=authenticated via Basic (set cookie). */
 static int check_basic_auth(struct mg_http_message *hm)
 {
+    /* Accept session cookie — needed for WS/SSE upgrades */
+    if (check_session_cookie(hm))
+        return 1;
+
     if (g_auth_password[0] == '\0') {
         /* No password configured — only allow when binding to localhost */
         if (strcmp(g_bind, "127.0.0.1") == 0 ||
@@ -656,7 +696,7 @@ static int check_basic_auth(struct mg_http_message *hm)
     int user_ok = (ulen == alen) & ct_compare(user, g_auth_user, ucmp ? ucmp : 1);
     int pass_ok = (plen == elen) & ct_compare(pass, g_auth_password, pcmp ? pcmp : 1);
 
-    return user_ok && pass_ok;
+    return (user_ok && pass_ok) ? 2 : 0;  /* 2 = Basic Auth success (set cookie) */
 }
 
 /* Send 401 with WWW-Authenticate header for Basic Auth */
@@ -1848,6 +1888,23 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                 return;
             }
 
+            /* /admin/manifest.json — served without auth so the browser
+             * can fetch it for PWA install prompts and home screen icons */
+            if (mg_match(hm->uri, mg_str("/admin/manifest.json"), NULL)) {
+                mg_http_reply(c, 200,
+                    "Content-Type: application/manifest+json\r\n"
+                    "Cache-Control: no-cache\r\n",
+                    "{\"name\":\"%s\",\"short_name\":\"%s\","
+                    "\"description\":\"Kerchunk repeater controller\","
+                    "\"start_url\":\"/admin/\",\"scope\":\"/admin/\","
+                    "\"display\":\"standalone\",\"orientation\":\"any\","
+                    "\"background_color\":\"#0d1117\",\"theme_color\":\"#0d1117\","
+                    "\"icons\":[{\"src\":\"/logo.png\",\"sizes\":\"512x512\","
+                    "\"type\":\"image/png\",\"purpose\":\"any maskable\"}]}",
+                    g_callsign, g_callsign);
+                return;
+            }
+
             /* public_only mode: all admin access blocked */
             if (g_public_only) {
                 mg_http_reply(c, 403, API_HEADERS,
@@ -1855,11 +1912,22 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                 return;
             }
 
-            /* Check Basic Auth */
-            if (!check_basic_auth(hm)) {
+            /* Check Basic Auth or session cookie */
+            int auth = check_basic_auth(hm);
+            if (!auth) {
                 send_basic_auth_required(c,
                     mg_match(hm->uri, mg_str("/admin/api/#"), NULL) ? 1 : 0);
                 return;
+            }
+
+            /* Build Set-Cookie header if authenticated via Basic Auth (not cookie).
+             * Browsers don't send Basic Auth on WebSocket/EventSource upgrades,
+             * so the cookie provides auth for those connections. */
+            char set_cookie[256] = "";
+            if (auth == 2 && g_session_token[0]) {
+                snprintf(set_cookie, sizeof(set_cookie),
+                    "Set-Cookie: kerchunk_session=%s; Path=/admin; HttpOnly; SameSite=Strict%s\r\n",
+                    g_session_token, g_tls_active ? "; Secure" : "");
             }
 
             /* /admin/api/... -- admin API endpoints */
@@ -1876,7 +1944,10 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                     mg_http_reply(c, 403, "", "Forbidden\n");
                     return;
                 }
-                struct mg_http_serve_opts opts = { .root_dir = g_static_dir };
+                struct mg_http_serve_opts opts = {
+                    .root_dir = g_static_dir,
+                    .extra_headers = set_cookie[0] ? set_cookie : NULL
+                };
                 mg_http_serve_dir(c, hm, &opts);
             } else {
                 mg_http_reply(c, 404, "", "Not found\n");
@@ -2114,6 +2185,7 @@ static int web_load(kerchunk_core_t *core)
 {
     g_core = core;
     build_cors_headers();
+    generate_session_token();
     return 0;
 }
 
@@ -2159,6 +2231,9 @@ static int web_configure(const kerchunk_config_t *cfg)
 
     v = kerchunk_config_get(cfg, "web", "tls_key");
     if (v) snprintf(g_tls_key, sizeof(g_tls_key), "%s", v);
+
+    v = kerchunk_config_get(cfg, "general", "callsign");
+    if (v) snprintf(g_callsign, sizeof(g_callsign), "%s", v);
 
     v = kerchunk_config_get(cfg, "web", "cors_origin");
     if (v) snprintf(g_cors_origin, sizeof(g_cors_origin) - 1, "%s", v);

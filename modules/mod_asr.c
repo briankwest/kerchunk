@@ -315,7 +315,8 @@ static void on_queue_drain(const kerchevt_t *evt, void *ud)
 
     /* Check if this queue drain is from phone or PoC audio */
     const char *src = kerchunk_queue_drain_source();
-    if (src && (strcmp(src, "phone") == 0 || strcmp(src, "poc") == 0)) {
+    if (src && (strcmp(src, "phone") == 0 || strcmp(src, "poc") == 0 ||
+                strcmp(src, "web_ptt") == 0)) {
         if (!g_tx_capturing) {
             g_tx_capturing = 1;
             g_tx_len = 0;

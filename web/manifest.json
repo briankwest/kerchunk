@@ -1,8 +1,8 @@
 {
-  "name": "Kerchunk PTT",
-  "short_name": "PTT",
-  "description": "Push-to-talk for kerchunkd repeater",
-  "start_url": "/ptt.html",
+  "name": "Kerchunk",
+  "short_name": "Kerchunk",
+  "description": "Kerchunk repeater controller",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
