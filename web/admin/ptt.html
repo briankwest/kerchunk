@@ -4,11 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
-<link rel="manifest" href="/admin/manifest.json">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="theme-color" content="#0d1117">
-<link rel="apple-touch-icon" href="icon-192.png">
 <title>Kerchunk PTT</title>
 <style>
 :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
@@ -443,9 +438,6 @@ if (document.readyState === 'complete') {
   window.addEventListener('load', connect);
 }
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
-}
 })();
 </script>
 </body>

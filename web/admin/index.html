@@ -4,10 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
-<link rel="manifest" href="/admin/manifest.json">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
-<link rel="apple-touch-icon" href="/logo.png">
 <title>Kerchunk Dashboard</title>
 <style>
 :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
@@ -120,28 +116,9 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 .cmd-form .btn { align-self: flex-end; margin-top: 14px; }
 .btn.active-form { background: var(--accent); color: #fff; border-color: var(--accent); }
 .toggle-on { border-color: var(--green); color: var(--green); }
-#login-overlay { position:fixed; inset:0; background:var(--bg); z-index:9999;
-  display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px; }
-#login-overlay form { display:flex; flex-direction:column; gap:12px; }
-#login-overlay.hidden { display:none; }
-#login-overlay h1 { font-size:20px; margin-bottom:8px; }
-#login-overlay input { padding:10px 14px; background:var(--card); border:1px solid var(--border);
-  color:var(--text); border-radius:5px; font-size:16px; width:260px; }
-#login-overlay button { padding:10px 14px; background:var(--accent); color:#fff; border:none;
-  border-radius:5px; font-size:14px; cursor:pointer; width:260px; }
-#login-overlay .error { color:var(--red); font-size:13px; min-height:18px; }
 </style>
 </head>
 <body>
-<div id="login-overlay" class="hidden">
-  <h1>Kerchunk Admin</h1>
-  <form onsubmit="doLogin();return false" autocomplete="on">
-    <input id="login-user" type="text" placeholder="Username" autocomplete="username" autocapitalize="off">
-    <input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
-    <button type="submit">Sign In</button>
-  </form>
-  <div class="error" id="login-error"></div>
-</div>
 <header>
   <h1 id="callsign">Repeater</h1>
   <span id="state-badge" class="badge badge-idle">IDLE</span>
@@ -268,58 +245,11 @@ let dtmfBuf = '';
 let dtmfTimer = null;
 let relaying = false;  // COR active — TX is in relay mode
 
-/* Auth: store Base64 credentials for fetch() and pass via header.
- * In normal browser mode, the browser handles Basic Auth natively.
- * In PWA standalone mode, there's no auth dialog, so we show a login form
- * and store credentials in sessionStorage. */
-let _authToken = sessionStorage.getItem('kerchunk_auth') || '';
-
-function authHeaders() {
-  const h = {'Content-Type':'application/json'};
-  if (_authToken) h['Authorization'] = 'Basic ' + _authToken;
-  return h;
-}
-
 const CRED = {credentials:'same-origin'};
-async function fetchJSON(p) {
-  const opts = {credentials:'same-origin'};
-  if (_authToken) opts.headers = {'Authorization': 'Basic ' + _authToken};
-  const r = await fetch(API+p, opts);
-  if (r.status === 401) { showLogin(); throw new Error('auth'); }
-  return r.json();
-}
-
-function showLogin() {
-  document.getElementById('login-overlay').classList.remove('hidden');
-  document.getElementById('login-user').focus();
-}
-
-async function doLogin() {
-  const u = document.getElementById('login-user').value;
-  const p = document.getElementById('login-pass').value;
-  const token = btoa(u + ':' + p);
-  try {
-    const r = await fetch(API+'/api/status', {
-      credentials:'same-origin',
-      headers: {'Authorization': 'Basic ' + token}
-    });
-    if (r.ok) {
-      _authToken = token;
-      sessionStorage.setItem('kerchunk_auth', token);
-      document.getElementById('login-overlay').classList.add('hidden');
-      document.getElementById('login-error').textContent = '';
-      init();
-    } else {
-      document.getElementById('login-error').textContent = 'Invalid credentials';
-    }
-  } catch(e) {
-    document.getElementById('login-error').textContent = 'Connection error';
-  }
-}
-
+async function fetchJSON(p) { return (await fetch(API+p, CRED)).json(); }
 
 async function cmd(c) {
-  await fetch(API+'/api/cmd',{method:'POST',credentials:'same-origin',headers:authHeaders(),body:JSON.stringify({cmd:c})});
+  await fetch(API+'/api/cmd',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
 }
 
 function ttsSpeak() {
@@ -1072,17 +1002,6 @@ function setAudioVolume(v) {
 (async function init() {
   initCharts();
   refreshStation();
-  /* Check auth before starting — in PWA mode there's no browser auth dialog */
-  try {
-    const opts = {credentials:'same-origin'};
-    if (_authToken) opts.headers = {'Authorization': 'Basic ' + _authToken};
-    const r = await fetch(API+'/api/status', opts);
-    if (r.status === 401) { showLogin(); return; }
-  } catch(e) { showLogin(); return; }
-  init();
-})();
-
-function init() {
   refreshStatus();
   refreshStats();
   refreshAlerts();
@@ -1094,7 +1013,7 @@ function init() {
   setInterval(refreshStats,30000);
   setInterval(refreshAlerts,60000);
   setInterval(refreshWeather,60000);
-}
+})();
 </script>
 </body>
 </html>
