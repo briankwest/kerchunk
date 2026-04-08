@@ -11,6 +11,7 @@ kerchunkd
 kerchunk
 kerchunk-diag
 test_kerchunk
+test_web_acl
 
 # Autotools generated
 /aclocal.m4
