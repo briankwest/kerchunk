@@ -91,3 +91,4 @@ void kerchunk_console_log_line(const char *line)
 {
     (void)line;
 }
+

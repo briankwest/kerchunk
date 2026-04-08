@@ -131,7 +131,7 @@ static int mock_queue_audio_buffer(const int16_t *b, size_t n, int pri, int flag
 {
     (void)b; (void)n; (void)pri; (void)flags;
     g_mock.buffer_calls++;
-    return 0;
+    return g_mock.buffer_calls;  /* return positive ID for tag_item */
 }
 
 static int mock_queue_tone(int f, int d, int16_t a, int pri)

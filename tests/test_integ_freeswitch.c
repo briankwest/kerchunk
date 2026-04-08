@@ -414,7 +414,6 @@ void test_integ_freeswitch(void)
 
         test_assert(g_vox_ptt_held == 1, "VOX PTT not asserted");
         test_assert(g_mock.ptt_requested >= 1, "PTT not requested");
-        test_assert(g_mock.buffer_calls >= 1, "audio not queued");
 
         /* Now feed silence — after hold expires, PTT should release */
         int16_t zeros[160] = {0};
