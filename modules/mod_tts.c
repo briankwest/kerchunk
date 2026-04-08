@@ -351,8 +351,8 @@ static void synthesize_and_queue(const char *text, int priority)
             if (kerchunk_wav_write(tmp, resampled, out_len, g_core->sample_rate) == 0) {
                 rename(tmp, path);  /* atomic */
                 g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                            "cached: %s (%zu samples, %.1fs)",
-                            path, out_len, (float)out_len / g_core->sample_rate);
+                            "synthesized (%.1fs): %s",
+                            (float)out_len / g_core->sample_rate, text);
                 /* Queue from file so buffer can be freed immediately */
                 g_core->queue_audio_file(path, priority);
                 free(resampled);
@@ -365,9 +365,9 @@ static void synthesize_and_queue(const char *text, int priority)
         }
 
         g_core->queue_audio_buffer(resampled, out_len, priority, 0);
-        g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
-                    "spoke %zu samples (%.1fs): %s",
-                    out_len, (float)out_len / g_core->sample_rate, text);
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "synthesized (%.1fs): %s",
+                    (float)out_len / g_core->sample_rate, text);
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "tts", .description = text } };
         kerchevt_fire(&ae);

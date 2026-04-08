@@ -14,6 +14,7 @@
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
+#include "kerchunk_queue.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1140,11 +1141,13 @@ static void vox_process_and_queue(void)
                     us[i] = frame[VAD_FRAME_SAMPLES - 1];
                 }
             }
-            g_core->queue_audio_buffer(us, out_n,
+            int qid = g_core->queue_audio_buffer(us, out_n,
                                         KERCHUNK_PRI_ELEVATED, 0);
+            if (qid > 0) kerchunk_queue_tag_item(qid, "phone");
         } else {
-            g_core->queue_audio_buffer(frame, VAD_FRAME_SAMPLES,
+            int qid = g_core->queue_audio_buffer(frame, VAD_FRAME_SAMPLES,
                                         KERCHUNK_PRI_ELEVATED, 0);
+            if (qid > 0) kerchunk_queue_tag_item(qid, "phone");
         }
     } else {
         if (g_vox_ptt_held) {

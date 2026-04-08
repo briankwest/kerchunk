@@ -25,6 +25,7 @@
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
+#include "kerchunk_queue.h"
 #include <libpoc/poc.h>
 #include <libpoc/poc_server.h>
 
@@ -182,8 +183,9 @@ static void poc_on_audio(poc_server_t *srv, uint32_t speaker_id,
     int16_t upsampled[960];
     upsample_8_to_48(pcm, n_samples, upsampled, 960);
 
-    g_core->queue_audio_buffer(upsampled, 960, g_priority,
+    int qid = g_core->queue_audio_buffer(upsampled, 960, g_priority,
                                QUEUE_FLAG_NO_TAIL);
+    if (qid > 0) kerchunk_queue_tag_item(qid, "poc");
 }
 
 static void poc_on_message(poc_server_t *srv, uint32_t from,

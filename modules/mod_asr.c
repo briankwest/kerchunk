@@ -20,6 +20,7 @@
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
+#include "kerchunk_queue.h"
 
 #ifdef HAVE_LIBWYOMING
 #include <libwyoming/wyoming.h>
@@ -49,12 +50,18 @@ static int  g_min_duration_ms = 500;
 typedef enum { ASR_MODE_BATCH, ASR_MODE_STREAMING } asr_mode_t;
 static asr_mode_t g_mode = ASR_MODE_BATCH;
 
-/* ── Batch mode state ── */
+/* ── Batch mode state (RF inbound via COR) ── */
 static atomic_int g_capturing;
 static int16_t   *g_cap_buf;
 static size_t     g_cap_len;
 static size_t     g_cap_cap;
 static int        g_caller_id;
+
+/* ── TX capture state (phone/PoC audio via playback tap) ── */
+static atomic_int g_tx_capturing;
+static int16_t   *g_tx_buf;
+static size_t     g_tx_len;
+static size_t     g_tx_cap;
 
 /* ── Streaming mode state ── */
 #ifdef HAVE_LIBWYOMING
@@ -270,6 +277,96 @@ static void stream_audio_tap(const kerchevt_t *evt, void *ud)
 
 /* ── Event handlers ── */
 
+/* ── TX audio capture (phone/PoC → ASR) ── */
+
+static void tx_playback_tap(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    if (!g_tx_capturing || !evt->audio.samples)
+        return;
+
+    size_t max_samples = (size_t)g_core->sample_rate * (size_t)g_max_capture_s;
+    if (g_tx_len >= max_samples)
+        return;
+
+    size_t n = evt->audio.n;
+    size_t needed = g_tx_len + n;
+    if (needed > g_tx_cap) {
+        size_t new_cap = g_tx_cap * 2;
+        if (new_cap < needed) new_cap = needed + (size_t)g_core->sample_rate;
+        if (new_cap > max_samples) new_cap = max_samples;
+        int16_t *new_buf = realloc(g_tx_buf, new_cap * sizeof(int16_t));
+        if (!new_buf) return;
+        g_tx_buf = new_buf;
+        g_tx_cap = new_cap;
+    }
+
+    size_t to_copy = n;
+    if (g_tx_len + to_copy > max_samples)
+        to_copy = max_samples - g_tx_len;
+    memcpy(g_tx_buf + g_tx_len, evt->audio.samples, to_copy * sizeof(int16_t));
+    g_tx_len += to_copy;
+}
+
+static void on_queue_drain(const kerchevt_t *evt, void *ud)
+{
+    (void)evt; (void)ud;
+    if (!g_enabled) return;
+
+    /* Check if this queue drain is from phone or PoC audio */
+    const char *src = kerchunk_queue_drain_source();
+    if (src && (strcmp(src, "phone") == 0 || strcmp(src, "poc") == 0)) {
+        if (!g_tx_capturing) {
+            g_tx_capturing = 1;
+            g_tx_len = 0;
+            g_tx_cap = (size_t)g_core->sample_rate * 10;
+            g_tx_buf = malloc(g_tx_cap * sizeof(int16_t));
+            if (!g_tx_buf) { g_tx_capturing = 0; return; }
+            g_core->playback_tap_register(tx_playback_tap, NULL);
+        }
+    }
+}
+
+static void on_queue_complete(const kerchevt_t *evt, void *ud)
+{
+    (void)evt; (void)ud;
+    if (!g_tx_capturing) return;
+    g_tx_capturing = 0;
+    g_core->playback_tap_unregister(tx_playback_tap);
+
+    if (!g_tx_buf || g_tx_len == 0) {
+        free(g_tx_buf);
+        g_tx_buf = NULL;
+        return;
+    }
+
+    float dur_ms = (float)g_tx_len / (float)g_core->sample_rate * 1000.0f;
+    if (dur_ms < (float)g_min_duration_ms) {
+        free(g_tx_buf);
+        g_tx_buf = NULL;
+        return;
+    }
+
+    /* Hand off to batch worker for transcription */
+    pthread_mutex_lock(&g_asr_mutex);
+    if (g_asr_pending && g_asr_req.pcm)
+        free(g_asr_req.pcm);
+    g_asr_req.pcm       = g_tx_buf;
+    g_asr_req.samples    = g_tx_len;
+    g_asr_req.rate       = g_core->sample_rate;
+    g_asr_req.caller_id  = 0;  /* phone/PoC caller unknown */
+    g_asr_pending = 1;
+    g_tx_buf = NULL;
+    g_tx_len = 0;
+    pthread_cond_signal(&g_asr_cond);
+    pthread_mutex_unlock(&g_asr_mutex);
+
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                "TX audio captured for ASR (%.1fs)", dur_ms / 1000.0f);
+}
+
+/* ── Event handlers ── */
+
 static void on_cor_assert(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
@@ -415,6 +512,8 @@ static int asr_load(kerchunk_core_t *core)
     core->subscribe(KERCHEVT_COR_ASSERT, on_cor_assert, NULL);
     core->subscribe(KERCHEVT_COR_DROP, on_cor_drop, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
+    core->subscribe(KERCHEVT_QUEUE_DRAIN, on_queue_drain, NULL);
+    core->subscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete, NULL);
     return 0;
 }
 
@@ -501,6 +600,9 @@ static void asr_unload(void)
 
     free(g_cap_buf);
     g_cap_buf = NULL;
+    free(g_tx_buf);
+    g_tx_buf = NULL;
+    g_tx_capturing = 0;
 
 #ifdef HAVE_LIBWYOMING
     if (g_stream_conn) {
@@ -517,6 +619,8 @@ static void asr_unload(void)
     g_core->unsubscribe(KERCHEVT_COR_ASSERT, on_cor_assert);
     g_core->unsubscribe(KERCHEVT_COR_DROP, on_cor_drop);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
+    g_core->unsubscribe(KERCHEVT_QUEUE_DRAIN, on_queue_drain);
+    g_core->unsubscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete);
 }
 
 /* ── CLI ── */
