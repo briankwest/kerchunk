@@ -308,27 +308,30 @@ static void tx_playback_tap(const kerchevt_t *evt, void *ud)
     g_tx_len += to_copy;
 }
 
-static void on_queue_drain(const kerchevt_t *evt, void *ud)
-{
-    (void)evt; (void)ud;
-    if (!g_enabled) return;
+/* Virtual COR — web PTT, PoC, phone.  Captures TX audio via playback tap
+ * between VCOR_ASSERT and VCOR_DROP, then sends to ASR. */
+static int g_vcor_user_id;
 
-    /* Check if this queue drain is from phone or PoC audio */
-    const char *src = kerchunk_queue_drain_source();
-    if (src && (strcmp(src, "phone") == 0 || strcmp(src, "poc") == 0 ||
-                strcmp(src, "web_ptt") == 0)) {
-        if (!g_tx_capturing) {
-            g_tx_capturing = 1;
-            g_tx_len = 0;
-            g_tx_cap = (size_t)g_core->sample_rate * 10;
-            g_tx_buf = malloc(g_tx_cap * sizeof(int16_t));
-            if (!g_tx_buf) { g_tx_capturing = 0; return; }
-            g_core->playback_tap_register(tx_playback_tap, NULL);
-        }
-    }
+static void on_vcor_assert(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    if (!g_enabled) return;
+    if (g_tx_capturing) return;
+
+    g_tx_capturing = 1;
+    g_tx_len = 0;
+    g_vcor_user_id = evt->vcor.user_id;
+    g_tx_cap = (size_t)g_core->sample_rate * (size_t)g_max_capture_s;
+    g_tx_buf = malloc(g_tx_cap * sizeof(int16_t));
+    if (!g_tx_buf) { g_tx_capturing = 0; return; }
+    g_core->playback_tap_register(tx_playback_tap, NULL);
+
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                "VCOR assert: capturing TX audio (source=%s user=%d)",
+                evt->vcor.source ? evt->vcor.source : "?", evt->vcor.user_id);
 }
 
-static void on_queue_complete(const kerchevt_t *evt, void *ud)
+static void on_vcor_drop(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
     if (!g_tx_capturing) return;
@@ -355,7 +358,7 @@ static void on_queue_complete(const kerchevt_t *evt, void *ud)
     g_asr_req.pcm       = g_tx_buf;
     g_asr_req.samples    = g_tx_len;
     g_asr_req.rate       = g_core->sample_rate;
-    g_asr_req.caller_id  = 0;  /* phone/PoC caller unknown */
+    g_asr_req.caller_id  = g_vcor_user_id;
     g_asr_pending = 1;
     g_tx_buf = NULL;
     g_tx_len = 0;
@@ -363,7 +366,7 @@ static void on_queue_complete(const kerchevt_t *evt, void *ud)
     pthread_mutex_unlock(&g_asr_mutex);
 
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
-                "TX audio captured for ASR (%.1fs)", dur_ms / 1000.0f);
+                "VCOR drop: TX audio captured for ASR (%.1fs)", dur_ms / 1000.0f);
 }
 
 /* ── Event handlers ── */
@@ -512,9 +515,9 @@ static int asr_load(kerchunk_core_t *core)
     g_core = core;
     core->subscribe(KERCHEVT_COR_ASSERT, on_cor_assert, NULL);
     core->subscribe(KERCHEVT_COR_DROP, on_cor_drop, NULL);
+    core->subscribe(KERCHEVT_VCOR_ASSERT, on_vcor_assert, NULL);
+    core->subscribe(KERCHEVT_VCOR_DROP, on_vcor_drop, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
-    core->subscribe(KERCHEVT_QUEUE_DRAIN, on_queue_drain, NULL);
-    core->subscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete, NULL);
     return 0;
 }
 
@@ -619,9 +622,9 @@ static void asr_unload(void)
 
     g_core->unsubscribe(KERCHEVT_COR_ASSERT, on_cor_assert);
     g_core->unsubscribe(KERCHEVT_COR_DROP, on_cor_drop);
+    g_core->unsubscribe(KERCHEVT_VCOR_ASSERT, on_vcor_assert);
+    g_core->unsubscribe(KERCHEVT_VCOR_DROP, on_vcor_drop);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
-    g_core->unsubscribe(KERCHEVT_QUEUE_DRAIN, on_queue_drain);
-    g_core->unsubscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete);
 }
 
 /* ── CLI ── */

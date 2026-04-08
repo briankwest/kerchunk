@@ -248,12 +248,8 @@ static void send_cwid(void)
 
     if (pos > 0) {
         g_core->queue_silence(200, KERCHUNK_PRI_LOW);
-        int id = g_core->queue_audio_buffer(buf, pos, KERCHUNK_PRI_LOW, 0);
+        kerchunk_queue_add_buffer_src(buf, pos, KERCHUNK_PRI_LOW, 0, "cwid");
         g_core->queue_silence(100, KERCHUNK_PRI_LOW);
-
-        /* Tag the CW audio item so preemption can identify it */
-        if (id > 0)
-            kerchunk_queue_tag_item(id, "cwid");
 
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "CW ID queued: %s (%zu samples)",
                     g_callsign, pos);

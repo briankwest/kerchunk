@@ -349,7 +349,8 @@ static int cmd_event(int argc, const char **argv, kerchunk_resp_t *r)
     (void)argc; (void)argv;
     static const char *names[] = {
         "AUDIO_FRAME", "CTCSS_DETECT", "DCS_DETECT", "DTMF_DIGIT", "DTMF_END",
-        "COR_ASSERT", "COR_DROP", "PTT_ASSERT", "PTT_DROP",
+        "COR_ASSERT", "COR_DROP", "VCOR_ASSERT", "VCOR_DROP",
+        "PTT_ASSERT", "PTT_DROP",
         "STATE_CHANGE", "TAIL_START", "TAIL_EXPIRE", "TIMEOUT",
         "CALLER_IDENTIFIED", "CALLER_CLEARED",
         "QUEUE_DRAIN", "QUEUE_COMPLETE", "RECORDING_SAVED", "ANNOUNCEMENT",

@@ -141,6 +141,12 @@ static bool poc_on_ptt_request(poc_server_t *srv, uint32_t uid,
     g_poc_ptt_active = 1;
     g_poc_ptt_speaker = uid;
     g_audio_frame_count = 0;
+
+    /* Fire virtual COR so ASR/recorder treat this like RF */
+    kerchevt_t vc = { .type = KERCHEVT_VCOR_ASSERT,
+        .vcor = { .source = "poc", .user_id = (int)uid } };
+    kerchevt_fire(&vc);
+
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "PTT granted to user %u on group %u", uid, gid);
     return true;
@@ -155,6 +161,10 @@ static void poc_on_ptt_end(poc_server_t *srv, uint32_t uid,
     if (uid == g_poc_ptt_speaker) {
         g_poc_ptt_active = 0;
         g_poc_ptt_speaker = 0;
+
+        kerchevt_t vc = { .type = KERCHEVT_VCOR_DROP,
+            .vcor = { .source = "poc", .user_id = (int)uid } };
+        kerchevt_fire(&vc);
     }
 }
 
@@ -183,9 +193,8 @@ static void poc_on_audio(poc_server_t *srv, uint32_t speaker_id,
     int16_t upsampled[960];
     upsample_8_to_48(pcm, n_samples, upsampled, 960);
 
-    int qid = g_core->queue_audio_buffer(upsampled, 960, g_priority,
-                               QUEUE_FLAG_NO_TAIL);
-    if (qid > 0) kerchunk_queue_tag_item(qid, "poc");
+    kerchunk_queue_add_buffer_src(upsampled, 960, g_priority,
+                                  QUEUE_FLAG_NO_TAIL, "poc");
 }
 
 static void poc_on_message(poc_server_t *srv, uint32_t from,

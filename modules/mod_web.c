@@ -373,6 +373,11 @@ static void ws_handle_ptt_on(struct mg_connection *c, ws_conn_state_t *st)
      * automatically when it sees items in the queue.  This ensures
      * proper tx_delay + CTCSS/DCS ramp-up before audio plays. */
 
+    /* Fire virtual COR so ASR/recorder treat this like an RF transmission */
+    kerchevt_t vc = { .type = KERCHEVT_VCOR_ASSERT,
+        .vcor = { .source = "web_ptt", .user_id = st->user_id } };
+    kerchevt_fire(&vc);
+
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "WS PTT on: user=%s", st->user_name);
 
@@ -392,6 +397,11 @@ static void ws_handle_ptt_off(struct mg_connection *c, ws_conn_state_t *st)
     double duration = (double)st->audio_len / (double)g_core->sample_rate;
     /* No release_ptt — queue system manages PTT automatically.
      * It will hold PTT through tx_tail after the last frame drains. */
+
+    /* Fire virtual COR drop — ASR will capture and transcribe */
+    kerchevt_t vc = { .type = KERCHEVT_VCOR_DROP,
+        .vcor = { .source = "web_ptt", .user_id = st->user_id } };
+    kerchevt_fire(&vc);
 
     /* Fire announcement for CDR */
     if (st->audio_len > 0) {
@@ -425,10 +435,10 @@ static void ws_handle_audio_frame(ws_conn_state_t *st,
     if (st->audio_len >= max_samples) return;
 
     /* Queue each frame immediately for real-time playback.
-     * Thread-safe: kerchunk_queue has internal mutex protection. */
-    int qid = g_core->queue_audio_buffer((const int16_t *)(data + 1), fs,
-                                          g_ptt_priority, 0);
-    if (qid > 0) kerchunk_queue_tag_item(qid, "web_ptt");
+     * Use _src variant to tag source atomically — the frame may drain
+     * before a separate tag_item call could find it in the queue. */
+    kerchunk_queue_add_buffer_src((const int16_t *)(data + 1), fs,
+                                  g_ptt_priority, 0, "web_ptt");
     st->audio_len += fs;
 }
 
@@ -1953,6 +1963,10 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
         if (st) {
             st->magic = WS_PTT_MAGIC;
             st->admin = (c->data[1] == 'A') ? 1 : 0;
+            /* Admin WS: mark authenticated (HTTP Basic Auth already passed).
+             * user_id/user_name set later if WS auth command is sent (PTT page). */
+            if (st->admin)
+                st->authenticated = 1;
             ws_set_state(c, st);
         }
         int prev = atomic_fetch_add(&g_ws_audio_count, 1);
@@ -2267,7 +2281,8 @@ static int web_configure(const kerchunk_config_t *cfg)
     /* Subscribe to events for SSE broadcast (unsubscribe first to avoid
      * duplicates on config reload — configure() is called on every SIGHUP) */
     static const kerchevt_type_t types[] = {
-        KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
+        KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_VCOR_ASSERT, KERCHEVT_VCOR_DROP,
+        KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
         KERCHEVT_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_TIMEOUT,
         KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
         KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
@@ -2325,7 +2340,8 @@ static void web_unload(void)
 {
     /* Unsubscribe from all event types */
     static const kerchevt_type_t types[] = {
-        KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
+        KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_VCOR_ASSERT, KERCHEVT_VCOR_DROP,
+        KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
         KERCHEVT_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_TIMEOUT,
         KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
         KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,

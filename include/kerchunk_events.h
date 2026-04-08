@@ -20,6 +20,8 @@ typedef enum {
     /* COR/PTT events */
     KERCHEVT_COR_ASSERT,
     KERCHEVT_COR_DROP,
+    KERCHEVT_VCOR_ASSERT,       /* Virtual COR — web PTT, PoC, phone */
+    KERCHEVT_VCOR_DROP,
     KERCHEVT_PTT_ASSERT,
     KERCHEVT_PTT_DROP,
 
@@ -61,6 +63,7 @@ typedef struct {
         struct { uint16_t code; int normal; int active; }  dcs;
         struct { char digit; int duration_ms; }            dtmf;
         struct { int active; }                             cor;
+        struct { const char *source; int user_id; }       vcor;
         struct { int old_state; int new_state; }           state;
         struct { int user_id; int method; }                caller;
         struct { int item_id; uint32_t duration_ms; }        queue;

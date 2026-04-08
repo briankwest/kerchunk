@@ -47,6 +47,16 @@ int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max)
         return snprintf(buf, max,
             "{\"type\":\"cor_drop\",\"ts\":%llu}", ts);
 
+    case KERCHEVT_VCOR_ASSERT:
+        return snprintf(buf, max,
+            "{\"type\":\"vcor_assert\",\"source\":\"%s\",\"user_id\":%d,\"ts\":%llu}",
+            evt->vcor.source ? evt->vcor.source : "", evt->vcor.user_id, ts);
+
+    case KERCHEVT_VCOR_DROP:
+        return snprintf(buf, max,
+            "{\"type\":\"vcor_drop\",\"source\":\"%s\",\"user_id\":%d,\"ts\":%llu}",
+            evt->vcor.source ? evt->vcor.source : "", evt->vcor.user_id, ts);
+
     case KERCHEVT_PTT_ASSERT:
         return snprintf(buf, max,
             "{\"type\":\"ptt_assert\",\"ts\":%llu}", ts);
