@@ -1013,6 +1013,10 @@ static void *audio_thread_fn(void *arg)
          * captured audio (relay_drain countdown) so the last few frames
          * of speech aren't cut off mid-word.
          */
+        /* Reset DTMF decoder on COR assert — clean slate for each transmission */
+        if (relay_active && !g_relay_was_active)
+            plcode_dtmf_dec_reset(ctx->dtmf_dec);
+
         /* Detect COR drop → start drain countdown */
         if (g_software_relay && g_relay_was_active && !relay_active) {
             g_relay_drain = (g_sample_rate * g_relay_drain_ms) / 1000;
