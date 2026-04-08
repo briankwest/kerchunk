@@ -53,9 +53,6 @@ table td:last-child { text-align: right; font-weight: 600; font-variant-numeric:
 .btn:hover { border-color: var(--accent); color: var(--accent); }
 .btn:active { background: rgba(88,166,255,0.12); border-color: var(--accent); color: var(--accent); }
 .btn-sm { font-size: 10px; padding: 2px 8px; }
-.tts-row { display: flex; gap: 6px; margin-top: 6px; }
-.tts-input { flex: 1; padding: 5px 8px; background: var(--bg); border: 1px solid var(--border);
-             color: var(--text); border-radius: 5px; font-size: 12px; }
 #log { max-height: 180px; overflow-y: auto; font-family: 'SF Mono', Monaco, monospace;
        font-size: 11px; line-height: 1.5; color: var(--dim); }
 #log div { padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -82,7 +79,6 @@ table td:last-child { text-align: right; font-weight: 600; font-variant-numeric:
   .btn-sm { min-height: 32px; padding: 4px 8px; }
   .controls { gap: 8px; }
   .controls .btn { flex: 1 1 calc(33% - 8px); }
-  .tts-input { min-height: 44px; font-size: 16px; } /* 16px prevents iOS zoom on focus */
   #log { -webkit-overflow-scrolling: touch; }
   #log div { white-space: normal; }  /* wrap on narrow screens */
 }
@@ -252,10 +248,6 @@ async function cmd(c) {
   await fetch(API+'/api/cmd',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
 }
 
-function ttsSpeak() {
-  const t=document.getElementById('tts-text').value;
-  if(t){cmd('tts say "'+t.replace(/"/g,'')+'"');document.getElementById('tts-text').value='';}
-}
 
 /* ── Dynamic controls from /api/commands ── */
 
