@@ -1002,7 +1002,7 @@ function setAudioVolume(v) {
   buildDynamicControls().then(() => refreshStatus());
   connectSSE();
   setInterval(renderStats,1000);
-  setInterval(refreshStats,30000);
+  setInterval(refreshStats,60000);
   setInterval(refreshAlerts,60000);
   setInterval(refreshWeather,60000);
 })();
