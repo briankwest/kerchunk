@@ -61,7 +61,7 @@ static void build_cors_headers(void)
 #define CORS_HEADERS g_cors_headers
 
 static int is_sensitive(const char *key) {
-    static const char *sens[] = {"api_key","auth_token","auth_password",
+    static const char *sens[] = {"api_key","auth_password",
                                   "totp_secret","tls_key","google_maps_api_key",
                                   NULL};
     for (int i = 0; sens[i]; i++)
@@ -75,7 +75,6 @@ static kerchunk_core_t *g_core;
 static int  g_enabled      = 0;
 static int  g_port         = 8080;
 static char g_bind[64]     = "127.0.0.1";
-static char g_auth_token[128] = "";   /* backward compat */
 static char g_auth_user[64]   = "admin";
 static char g_auth_password[128] = "";
 static int  g_public_only    = 0;
@@ -1284,7 +1283,7 @@ static void handle_api_config_get(struct mg_connection *c,
                                     struct mg_http_message *hm)
 {
     (void)hm;
-    if (g_auth_password[0] == '\0' && g_auth_token[0] == '\0') {
+    if (g_auth_password[0] == '\0') {
         mg_http_reply(c, 403, API_HEADERS,
                       "{\"error\":\"auth_password not configured\"}");
         return;
@@ -1349,7 +1348,7 @@ static void handle_api_config_get(struct mg_connection *c,
 static void handle_api_config_put(struct mg_connection *c,
                                     struct mg_http_message *hm)
 {
-    if (g_auth_password[0] == '\0' && g_auth_token[0] == '\0') {
+    if (g_auth_password[0] == '\0') {
         mg_http_reply(c, 403, API_HEADERS,
                       "{\"error\":\"auth_password not configured\"}");
         return;
@@ -2137,12 +2136,7 @@ static int web_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "web", "auth_password");
     if (v) snprintf(g_auth_password, sizeof(g_auth_password), "%s", v);
 
-    /* Backward compat: auth_token -> auth_password if auth_password not set */
-    v = kerchunk_config_get(cfg, "web", "auth_token");
-    if (v) snprintf(g_auth_token, sizeof(g_auth_token), "%s", v);
-    if (g_auth_password[0] == '\0' && g_auth_token[0] != '\0') {
-        snprintf(g_auth_password, sizeof(g_auth_password), "%s", g_auth_token);
-    }
+
 
     v = kerchunk_config_get(cfg, "web", "public_only");
     g_public_only = (v && strcmp(v, "on") == 0);
@@ -2196,7 +2190,7 @@ static int web_configure(const kerchunk_config_t *cfg)
     mg_log_set_fn(mg_log_cb, NULL);
     mg_log_set(MG_LL_DEBUG);
 
-    /* If already running, just update config values (auth_token, static_dir)
+    /* If already running, just update config values (auth_password, static_dir)
      * without restarting — restarting would deadlock if triggered by a web
      * API handler on the mongoose thread via SIGHUP. */
     if (g_web_tid >= 0) {
@@ -2432,7 +2426,7 @@ usage:
         "      enabled        Whether the web server is running\n"
         "      port           Listening port number\n"
         "      bind           Bind address (e.g. 127.0.0.1, 0.0.0.0)\n"
-        "      auth           Whether auth_token is configured\n"
+        "      auth           Whether auth_password is configured\n"
         "      tls            Whether TLS/HTTPS is active\n"
         "      sse_clients    Number of connected SSE event streams\n"
         "      audio_clients  Number of connected WebSocket audio streams\n"
@@ -2440,7 +2434,7 @@ usage:
         "      static_dir     Path to static file directory\n\n"
         "    Serves the web dashboard, JSON API, SSE live events,\n"
         "    and WebSocket audio streaming.\n\n"
-        "Config: [web] enabled, port, bind, auth_token, static_dir,\n"
+        "Config: [web] enabled, port, bind, auth_password, static_dir,\n"
         "        tls_cert, tls_key, ptt_enabled, ptt_max_duration,\n"
         "        ptt_priority, registration_enabled\n");
     resp_str(r, "error", "usage: web [help]");

@@ -854,10 +854,9 @@ Channel, per-user, and system metrics. 24h histogram. Persistence across restart
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `persist` | on/off | `off` | Save to disk on shutdown |
-| `persist_file` | string | `stats.dat` | Persistence file |
+| `rrd_file` | path | (none) | RRD database file (created if missing) |
 
-Config section: `[stats]`. CLI: `stats`, `stats user <name>`, `stats reset`, `stats save`
+Config section: `[stats]`. CLI: `stats`, `stats user <name>`, `stats reset`
 
 ### mod_web — Web Dashboard
 
@@ -887,10 +886,12 @@ Set `public_only = on` to block all `/admin/` access — for internet-facing dep
 | `bind` | string | `127.0.0.1` | Bind address (0.0.0.0 for external) |
 | `auth_user` | string | `admin` | HTTP Basic Auth username for /admin/ |
 | `auth_password` | string | | HTTP Basic Auth password for /admin/ |
+| `admin_acl` | string | | CIDR list for admin IP restriction (empty = allow all) |
 | `public_only` | on/off | `off` | Block all /admin/ access |
 | `static_dir` | string | | Path to HTML/JS/CSS files |
 | `tls_cert` | string | | Path to TLS certificate (PEM). Enables HTTPS |
 | `tls_key` | string | | Path to TLS private key (PEM). Required with tls_cert |
+| `cors_origin` | string | `*` | CORS Access-Control-Allow-Origin header |
 | `ptt_enabled` | on/off | `off` | Enable WebSocket PTT (admin only) |
 | `ptt_max_duration` | duration | `30s` | Max PTT duration |
 | `ptt_priority` | int | `2` | Queue priority for PTT audio |

@@ -179,8 +179,6 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ;
 ; public_only: Block all /admin/ access regardless of IP or auth.
 ;
-; Migration: auth_token is still accepted for backward compatibility —
-; if auth_password is empty, auth_token is used as the password.
 ; ----------------------------------------------------------------------------
 [web]
 ; enabled = off
@@ -193,19 +191,22 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; static_dir = /usr/share/kerchunk/web  ; Path to HTML/JS/CSS files
 ; tls_cert =                    ; Path to TLS certificate (PEM). Enables HTTPS.
 ; tls_key =                     ; Path to TLS private key (PEM). Required with tls_cert.
+; cors_origin = *                ; CORS Access-Control-Allow-Origin header.
+;                                ; Use a specific origin (e.g. https://example.com) for
+;                                ; security on non-localhost binds.
 ; ptt_enabled = off              ; Enable WebSocket push-to-talk (admin only)
 ; ptt_max_duration = 30s         ; Max PTT duration
 ; ptt_priority = 2               ; Queue priority for PTT audio
 ; registration_enabled = off     ; Enable public user self-registration
 
 ; ----------------------------------------------------------------------------
-; Statistics persistence
-; When on, saves counters to disk on shutdown and restores on startup.
-; Tracks total uptime, restart count, and cumulative metrics across restarts.
+; Statistics (RRDtool round-robin database)
+;
+; Tracks RX/TX counts, duty cycle, and other metrics in a compact RRD file.
+; Data automatically rolls up from 1-minute to hourly to daily granularity.
 ; ----------------------------------------------------------------------------
 [stats]
-; persist = off                  ; on | off (default: off)
-; persist_file = /var/lib/kerchunk/stats.dat  ; Binary file for persistence
+; rrd_file = /var/lib/kerchunk/stats.rrd  ; RRD database file (created if missing)
 
 ; ----------------------------------------------------------------------------
 ; Courtesy tone (short beep after user unkeys)
@@ -224,7 +225,6 @@ amplitude = 4000                 ; Tone amplitude (0-32767)
 ; ----------------------------------------------------------------------------
 ; Caller identification
 ;
-; Methods: dtmf_ani, dtmf_login (comma-separated)
 ; DTMF ANI: first digits after COR used as station ID
 ; DTMF login: *1XX# to identify (persists across COR cycles)
 ;
@@ -232,8 +232,7 @@ amplitude = 4000                 ; Tone amplitude (0-32767)
 ; They are reserved for repeater access, tone routing, and selective calling.
 ; ----------------------------------------------------------------------------
 [caller]
-methods = dtmf_ani,dtmf_login
-ani_window = 1500ms              ; Window to capture ANI digits (starts on first digit)
+ani_window = 1s                  ; Window to capture ANI digits (starts on first digit)
 login_timeout = 30m              ; DTMF login session timeout
 
 ; ----------------------------------------------------------------------------
@@ -411,10 +410,10 @@ directory = /var/lib/kerchunk/cdr  ; Output directory
 ;
 ; Requires: libwyoming, a running Wyoming ASR server
 ;
-; Wyoming quick start (native C — no Python needed):
-;   apt install wyoming-tools wyoming-model-whisper-base-en
-;   systemctl enable --now wyoming-asr
-;   # ASR server runs on port 10300 with Whisper base.en model
+; Wyoming quick start (same combined server as TTS):
+;   apt install wyoming-tools wyoming-model-zipformer-en
+;   systemctl enable --now wyoming-server
+;   # Combined TTS+ASR server runs on port 10200
 ;
 ; Alternative (Python):
 ;   pip install wyoming-faster-whisper
@@ -425,12 +424,11 @@ directory = /var/lib/kerchunk/cdr  ; Output directory
 ; mode = batch                   ; batch (default) | streaming
 ;                                ;   batch: accumulates audio, sends after COR drop
 ;                                ;          Best accuracy (Whisper). ~1-3s delay.
-;                                ;          Server: wyoming-asr-server --model-type whisper
 ;                                ;   streaming: feeds audio in real-time during TX
 ;                                ;          Instant transcript on COR drop.
-;                                ;          Server: wyoming-asr-server --model-type zipformer --streaming
+;                                ;          Requires Zipformer model with streaming=on
 ; wyoming_host = 127.0.0.1      ; Wyoming ASR server host
-; wyoming_port = 10300           ; Wyoming ASR server port
+; wyoming_port = 10200           ; Wyoming server port (same as TTS if combined)
 ; language = en                  ; Language code (or empty for auto-detect)
 ; max_capture = 30               ; Max seconds to capture per transmission
 ; min_duration = 500             ; Min duration (ms) to transcribe (skip kerchunks)
@@ -597,6 +595,7 @@ group = 2
 ; ----------------------------------------------------------------------------
 [pocsag]
 ; enabled = on
+; tx_level = 0.5                  ; TX level (0.0-1.0, scales audio output)
 ; modulation = baseband           ; baseband | fsk
                                   ; baseband: NRZ levels for direct modulator input
                                   ;   (RIM-Lite, repeater accessory port, varactor)
@@ -616,6 +615,7 @@ group = 2
 [flex]
 ; enabled = on
 ; default_speed = 1600
+; tx_level = 0.5                  ; TX level (0.0-1.0, scales audio output)
 ; modulation = baseband           ; baseband | fsk — same as [pocsag]
 ; deemphasis = off                ; on | off — baseband only
 
@@ -633,6 +633,7 @@ group = 2
 ; symbol = >
 ; comment = Kerchunk APRS gateway
 ; path = WIDE1-1,WIDE2-1
+; tx_level = 0.5                  ; TX level (0.0-1.0, scales audio output)
 
 ; ----------------------------------------------------------------------------
 ; PoC radio server bridge (requires libpoc)

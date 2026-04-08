@@ -245,16 +245,7 @@ static int stats_configure(const kerchunk_config_t *cfg)
     const char *v = kerchunk_config_get(cfg, "stats", "rrd_file");
     if (v) snprintf(g_rrd_path, sizeof(g_rrd_path), "%s", v);
 
-    /* Legacy compat: if persist_file is set but rrd_file isn't, use a .rrd alongside it */
-    if (!v) {
-        v = kerchunk_config_get(cfg, "stats", "persist_file");
-        if (v) {
-            snprintf(g_rrd_path, sizeof(g_rrd_path), "%s", v);
-            /* Replace .dat extension with .rrd */
-            char *dot = strrchr(g_rrd_path, '.');
-            if (dot) snprintf(dot, sizeof(g_rrd_path) - (size_t)(dot - g_rrd_path), ".rrd");
-        }
-    }
+
 
     if (g_rrd) kerchunk_rrd_close(g_rrd);
     g_rrd = kerchunk_rrd_open(g_rrd_path);
