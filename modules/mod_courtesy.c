@@ -10,6 +10,14 @@
 #include "kerchunk_log.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+
+static uint64_t courtesy_now_us(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
+}
 
 #define LOG_MOD "courtesy"
 
@@ -25,14 +33,14 @@ static int g_queue_courtesy = 0;  /* Also play after queue playback */
 
 /* Current caller info (set by CALLER_IDENTIFIED) */
 static int g_caller_id = 0;
-static int g_courtesy_pending;  /* 1 while our own tone is in the queue */
+static uint64_t g_last_courtesy_us;  /* timestamp of last courtesy queue */
 
 static void queue_tone(const char *reason)
 {
     if (!g_enabled) return;
     g_core->queue_silence(50, KERCHUNK_PRI_NORMAL);
     g_core->queue_tone(g_default_freq, g_default_dur, g_default_amp, KERCHUNK_PRI_NORMAL);
-    g_courtesy_pending = 1;
+    g_last_courtesy_us = courtesy_now_us();
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "courtesy tone queued (%s)", reason);
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
@@ -48,13 +56,19 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
 
 static void on_queue_complete(const kerchevt_t *evt, void *ud)
 {
-    (void)evt; (void)ud;
-    /* Skip if this QUEUE_COMPLETE was from our own courtesy tone —
-     * otherwise we chain endlessly: tone → complete → tone → ... */
-    if (g_courtesy_pending) {
-        g_courtesy_pending = 0;
-        return;
+    (void)ud;
+    /* Prevent chaining: if the queue contained ONLY our courtesy tone
+     * (no other audio between queue and complete), skip. The tone is
+     * 50ms silence + 100ms tone = ~150ms. If QUEUE_COMPLETE fires
+     * within 500ms of queuing, it was just our tone — don't re-queue. */
+    if (g_last_courtesy_us > 0) {
+        uint64_t elapsed_us = evt->timestamp_us - g_last_courtesy_us;
+        if (elapsed_us < 500000) {  /* 500ms */
+            g_last_courtesy_us = 0;
+            return;
+        }
     }
+    g_last_courtesy_us = 0;
     if (g_queue_courtesy && !(kerchunk_queue_drain_flags() & QUEUE_FLAG_NO_TAIL))
         queue_tone("queue_complete");
 }

@@ -97,9 +97,13 @@ void kerchunk_queue_shutdown(void)
 static int insert_item(kerchunk_queue_item_t *item)
 {
     if (g_count >= MAX_QUEUE_DEPTH) {
-        KERCHUNK_LOG_W(LOG_MOD, "queue full (%d items), dropping", g_count);
+        KERCHUNK_LOG_W(LOG_MOD, "queue full (%d items), dropping id=%d",
+                       g_count, item->id);
         return -1;
     }
+    KERCHUNK_LOG_D(LOG_MOD, "insert id=%d pri=%d type=%d count=%d draining=%d batch=%d",
+                   item->id, item->priority, item->type, g_count + 1,
+                   g_draining, g_batch_active);
 
     if (g_batch_active || g_draining || g_gap_remaining > 0) {
         /* Queue is mid-playback — append to tail */
@@ -256,7 +260,8 @@ int kerchunk_queue_add_tone(int freq_hz, int duration_ms, int16_t amplitude, int
     }
     pthread_mutex_unlock(&g_mutex);
 
-    KERCHUNK_LOG_D(LOG_MOD, "queued tone: %d Hz, %d ms (id=%d)", freq_hz, duration_ms, id);
+    KERCHUNK_LOG_D(LOG_MOD, "queued tone: %d Hz %d ms (id=%d, count=%d)",
+                   freq_hz, duration_ms, id, g_count);
     return id;
 }
 
@@ -376,6 +381,8 @@ static int load_next_item(void)
         snprintf(g_drain_source, sizeof(g_drain_source), "%s", item->source);
         g_draining = 1;
         g_batch_active = 1;
+        KERCHUNK_LOG_D(LOG_MOD, "drain start id=%d type=%d len=%zu remaining=%d",
+                       item->id, item->type, g_drain_len, g_count);
         free_item(item);
         return 1;
     }
@@ -423,6 +430,8 @@ int kerchunk_queue_drain(int16_t *out, size_t max_n)
 
     /* Check if item is complete */
     if (g_drain_pos >= g_drain_len) {
+        KERCHUNK_LOG_D(LOG_MOD, "drain done id=%d remaining=%d",
+                       g_drain_item_id, g_count);
         g_draining = 0;
         free(g_drain_buf);
         g_drain_buf = NULL;

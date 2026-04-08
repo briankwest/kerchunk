@@ -26,6 +26,10 @@
 #include <libwyoming/wyoming.h>
 #endif
 
+#ifdef HAVE_NEMO_NORMALIZE
+#include "nemo_normalize.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,6 +53,11 @@ static int  g_min_duration_ms = 500;
 
 typedef enum { ASR_MODE_BATCH, ASR_MODE_STREAMING } asr_mode_t;
 static asr_mode_t g_mode = ASR_MODE_BATCH;
+
+#ifdef HAVE_NEMO_NORMALIZE
+static void *g_itn = NULL;       /* nemo ITN normalizer (spoken→written) */
+static char  g_far_dir[256] = "";
+#endif
 
 /* ── Batch mode state (RF inbound via COR) ── */
 static atomic_int g_capturing;
@@ -133,6 +142,22 @@ static void emit_transcript(const char *raw, const char *caller, float dur)
     char *trimmed = strdup(s);
     if (!trimmed) return;
     while (len > 0 && trimmed[len-1] == ' ') trimmed[--len] = '\0';
+
+#ifdef HAVE_NEMO_NORMALIZE
+    /* Inverse text normalization: spoken form → written form
+     * e.g. "seventy two" → "72", "ten miles per hour" → "10 mph" */
+    if (g_itn && trimmed[0]) {
+        char normalized[1024];
+        if (nemo_normalize(g_itn, trimmed, normalized, (int)sizeof(normalized)) == 0
+            && normalized[0]) {
+            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                        "ITN: \"%s\" -> \"%s\"", trimmed, normalized);
+            free(trimmed);
+            trimmed = strdup(normalized);
+            if (!trimmed) return;
+        }
+    }
+#endif
 
     if (trimmed[0]) {
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
@@ -581,6 +606,34 @@ static int asr_configure(const kerchunk_config_t *cfg)
         }
     }
 
+#ifdef HAVE_NEMO_NORMALIZE
+    /* Initialize inverse text normalization (spoken→written) */
+    if (g_itn) { nemo_normalizer_destroy(g_itn); g_itn = NULL; }
+    v = kerchunk_config_get(cfg, "asr", "normalize_far_dir");
+    if (v) snprintf(g_far_dir, sizeof(g_far_dir), "%s", v);
+
+    /* Default to system-installed FAR grammars */
+    if (!g_far_dir[0])
+        snprintf(g_far_dir, sizeof(g_far_dir),
+                 "/usr/share/nemo-normalize/far_export");
+
+    if (g_far_dir[0]) {
+        char classify[600], verbalize[600];
+        snprintf(classify, sizeof(classify),
+                 "%s/en_itn_grammars_cased/classify/tokenize_and_classify.far",
+                 g_far_dir);
+        snprintf(verbalize, sizeof(verbalize),
+                 "%s/en_itn_grammars_cased/verbalize/verbalize.far",
+                 g_far_dir);
+        g_itn = nemo_normalizer_create(classify, verbalize, NULL);
+        if (g_itn)
+            g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "ITN enabled (nemo_normalize)");
+        else
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "ITN init failed — check FAR files in %s", g_far_dir);
+    }
+#endif
+
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "ready: %s:%d lang=%s mode=%s max=%ds min=%dms",
                 g_host, g_port, g_language,
@@ -619,6 +672,10 @@ static void asr_unload(void)
     free(g_asr_req.pcm);
     g_asr_req.pcm = NULL;
     pthread_mutex_unlock(&g_asr_mutex);
+
+#ifdef HAVE_NEMO_NORMALIZE
+    if (g_itn) { nemo_normalizer_destroy(g_itn); g_itn = NULL; }
+#endif
 
     g_core->unsubscribe(KERCHEVT_COR_ASSERT, on_cor_assert);
     g_core->unsubscribe(KERCHEVT_COR_DROP, on_cor_drop);

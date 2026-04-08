@@ -228,9 +228,9 @@ modules_mod_tts_la_LDFLAGS       = $(MOD_LDFLAGS)
 modules_mod_tts_la_LIBADD        = $(PLCODE_LIBS) $(CURL_LIBS) $(NEMO_LIBS) $(LIBWYOMING_LIBS)
 
 modules_mod_asr_la_SOURCES       = modules/mod_asr.c
-modules_mod_asr_la_CFLAGS        = $(MOD_CFLAGS) $(LIBWYOMING_CFLAGS)
+modules_mod_asr_la_CFLAGS        = $(MOD_CFLAGS) $(LIBWYOMING_CFLAGS) $(NEMO_CFLAGS)
 modules_mod_asr_la_LDFLAGS       = $(MOD_LDFLAGS)
-modules_mod_asr_la_LIBADD        = $(LIBWYOMING_LIBS)
+modules_mod_asr_la_LIBADD        = $(LIBWYOMING_LIBS) $(NEMO_LIBS)
 
 # --- web module (mongoose + openssl) ---
 

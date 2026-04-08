@@ -1189,6 +1189,19 @@ static void *audio_thread_fn(void *arg)
                 }
             }
 
+            /* Check if event handlers (courtesy tone) queued new items
+             * during the QUEUE_COMPLETE callback above.  If so, cancel
+             * the tail and resume draining — the new items will play
+             * before PTT releases. */
+            if (g_tx_tail_rem >= 0 && kerchunk_queue_depth() > 0) {
+                KERCHUNK_LOG_D(LOG_MOD, "tail cancelled: %d new items in queue",
+                               kerchunk_queue_depth());
+                g_tx_tail_rem = -1;
+                g_queue_fired_drain = 1;
+                g_ptt_hold_ticks = 0;
+                continue;  /* re-enter drain loop on next tick */
+            }
+
             /* Feed tail silence */
             while (g_tx_tail_rem > 0 &&
                    kerchunk_audio_playback_writable() >= (size_t)g_frame_samples) {

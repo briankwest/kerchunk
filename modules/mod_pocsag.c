@@ -27,6 +27,7 @@ static int g_tx_count = 0;
 static int g_deemph = 0;
 static int g_use_fsk = 0;  /* 0=baseband (direct mod), 1=FSK tones (mic input) */
 static float g_tx_level = 0.5f;  /* 0.0-1.0, scales audio output */
+static uint32_t g_default_speed = 1200;  /* default baud: 512, 1200, 2400 */
 
 /* ── Transmit a POCSAG page ── */
 
@@ -98,16 +99,25 @@ static int cli_pocsag(int argc, const char **argv, kerchunk_resp_t *resp)
 	const char *sub = argv[1];
 
 	if (strcmp(sub, "send") == 0) {
-		if (argc < 5) {
-			resp_str(resp, "error", "usage: pocsag send <addr> <baud> <message>");
+		if (argc < 4) {
+			resp_str(resp, "error", "usage: pocsag send <addr> [baud] <message>");
 			resp_finish(resp);
 			return -1;
 		}
 		uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 10);
-		uint32_t baud = (uint32_t)strtoul(argv[3], NULL, 10);
+		/* baud is optional — if argv[3] looks like a number and there's more args, it's baud */
+		uint32_t baud = g_default_speed;
+		int msg_start = 3;
+		if (argc >= 5) {
+			uint32_t maybe = (uint32_t)strtoul(argv[3], NULL, 10);
+			if (maybe == 512 || maybe == 1200 || maybe == 2400) {
+				baud = maybe;
+				msg_start = 4;
+			}
+		}
 		char msg[512] = {0};
-		for (int i = 4; i < argc; i++) {
-			if (i > 4) strncat(msg, " ", sizeof(msg) - strlen(msg) - 1);
+		for (int i = msg_start; i < argc; i++) {
+			if (i > msg_start) strncat(msg, " ", sizeof(msg) - strlen(msg) - 1);
 			strncat(msg, argv[i], sizeof(msg) - strlen(msg) - 1);
 		}
 		int rc = pocsag_tx(addr, baud, POCSAG_FUNC_ALPHA,
@@ -119,30 +129,44 @@ static int cli_pocsag(int argc, const char **argv, kerchunk_resp_t *resp)
 			resp_str(resp, "message", msg);
 		}
 	} else if (strcmp(sub, "numeric") == 0) {
-		if (argc < 5) {
-			resp_str(resp, "error", "usage: pocsag numeric <addr> <baud> <digits>");
+		if (argc < 4) {
+			resp_str(resp, "error", "usage: pocsag numeric <addr> [baud] <digits>");
 			resp_finish(resp);
 			return -1;
 		}
 		uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 10);
-		uint32_t baud = (uint32_t)strtoul(argv[3], NULL, 10);
+		uint32_t baud = g_default_speed;
+		int digit_idx = 3;
+		if (argc >= 5) {
+			uint32_t maybe = (uint32_t)strtoul(argv[3], NULL, 10);
+			if (maybe == 512 || maybe == 1200 || maybe == 2400) {
+				baud = maybe;
+				digit_idx = 4;
+			}
+		}
 		int rc = pocsag_tx(addr, baud, POCSAG_FUNC_NUMERIC,
-		                   POCSAG_MSG_NUMERIC, argv[4]);
+		                   POCSAG_MSG_NUMERIC, argv[digit_idx]);
 		resp_str(resp, "status", rc == 0 ? "queued" : "error");
 	} else if (strcmp(sub, "tone") == 0) {
-		if (argc < 4) {
-			resp_str(resp, "error", "usage: pocsag tone <addr> <baud>");
+		if (argc < 3) {
+			resp_str(resp, "error", "usage: pocsag tone <addr> [baud]");
 			resp_finish(resp);
 			return -1;
 		}
 		uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 10);
-		uint32_t baud = (uint32_t)strtoul(argv[3], NULL, 10);
+		uint32_t baud = g_default_speed;
+		if (argc >= 4) {
+			uint32_t maybe = (uint32_t)strtoul(argv[3], NULL, 10);
+			if (maybe == 512 || maybe == 1200 || maybe == 2400)
+				baud = maybe;
+		}
 		int rc = pocsag_tx(addr, baud, POCSAG_FUNC_TONE1,
 		                   POCSAG_MSG_TONE_ONLY, NULL);
 		resp_str(resp, "status", rc == 0 ? "queued" : "error");
 	} else if (strcmp(sub, "status") == 0) {
 		resp_str(resp, "module", "mod_pocsag");
 		resp_bool(resp, "enabled", g_enabled);
+		resp_int(resp, "default_speed", (int)g_default_speed);
 		resp_str(resp, "modulation", g_use_fsk ? "fsk" : "baseband");
 		resp_bool(resp, "deemphasis", g_deemph);
 		resp_int(resp, "tx_level_pct", (int)(g_tx_level * 100.0f));
@@ -156,18 +180,18 @@ static int cli_pocsag(int argc, const char **argv, kerchunk_resp_t *resp)
 
 usage:
 	resp_text_raw(resp, "POCSAG paging transmitter\n\n"
-		"  pocsag send <addr> <baud> <message>\n"
-		"    Send alphanumeric page to address at baud rate.\n"
+		"  pocsag send <addr> [baud] <message>\n"
+		"    Send alphanumeric page to address.\n"
 		"    addr:  0-2097151  Pager address (capcode)\n"
-		"    baud:  512, 1200, 2400\n"
+		"    baud:  512, 1200, 2400 (default: from config)\n"
 		"    message: text string\n\n"
-		"  pocsag numeric <addr> <baud> <digits>\n"
+		"  pocsag numeric <addr> [baud] <digits>\n"
 		"    Send numeric page (digits 0-9, *, #, -, space).\n\n"
-		"  pocsag tone <addr> <baud>\n"
+		"  pocsag tone <addr> [baud]\n"
 		"    Send tone-only page (no message content).\n\n"
 		"  pocsag status\n"
-		"    Show module status, TX count, deemphasis setting.\n\n"
-		"Config: [pocsag] enabled, deemphasis\n");
+		"    Show module status, TX count, settings.\n\n"
+		"Config: [pocsag] enabled, default_speed, deemphasis, tx_level\n");
 	resp_str(resp, "error", "usage: pocsag <send|numeric|tone|status>");
 	resp_finish(resp);
 	return -1;
@@ -228,7 +252,13 @@ static int mod_configure(const kerchunk_config_t *cfg)
 		float lv = (float)atof(v);
 		if (lv > 0.0f && lv <= 1.0f) g_tx_level = lv;
 	}
-	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "tx_level=%.0f%%", g_tx_level * 100.0f);
+	v = g_core->config_get("pocsag", "default_speed");
+	if (v) {
+		uint32_t s = (uint32_t)atoi(v);
+		if (s == 512 || s == 1200 || s == 2400) g_default_speed = s;
+	}
+	g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+	            "default_speed=%u tx_level=%.0f%%", g_default_speed, g_tx_level * 100.0f);
 	return 0;
 }
 
