@@ -351,6 +351,8 @@ timeout = 30m                    ; Auto-deactivate timeout
 [parrot]
 ; enabled = on                   ; on | off (default: on)
 max_duration = 10s               ; Max recording length (capped at 30s)
+; audio_report = on              ; TTS audio quality report after playback
+;                                ; Stats are always logged regardless of this setting
 
 ; ----------------------------------------------------------------------------
 ; Call Detail Records (CDR)

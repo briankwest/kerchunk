@@ -23,6 +23,7 @@ static kerchunk_core_t *g_core;
 /* Config */
 static int g_enabled       = 1;
 static int g_max_duration_s = 10;
+static int g_audio_report   = 1;   /* TTS audio quality report after playback */
 
 /* State (g_recording read by audio thread tap) */
 static int             g_armed;
@@ -129,8 +130,8 @@ static void stop_and_playback(void)
         g_core->queue_silence(200, KERCHUNK_PRI_NORMAL);
         g_core->queue_audio_buffer(g_buf, g_len, KERCHUNK_PRI_NORMAL, 0);
 
-        /* Announce signal quality via TTS */
-        if (g_core->tts_speak) {
+        /* Announce signal quality via TTS (configurable) */
+        if (g_audio_report && g_core->tts_speak) {
             char msg[128];
             snprintf(msg, sizeof(msg),
                      "Audio report. Duration %.1f seconds. "
@@ -211,8 +212,11 @@ static int parrot_configure(const kerchunk_config_t *cfg)
     if (g_max_duration_s > 30) g_max_duration_s = 30;
     if (g_max_duration_s < 1) g_max_duration_s = 1;
 
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "enabled=%d max_duration=%ds",
-                g_enabled, g_max_duration_s);
+    v = kerchunk_config_get(cfg, "parrot", "audio_report");
+    g_audio_report = (!v || strcmp(v, "off") != 0);  /* default on */
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "enabled=%d max_duration=%ds audio_report=%d",
+                g_enabled, g_max_duration_s, g_audio_report);
     return 0;
 }
 
@@ -260,7 +264,7 @@ usage:
         "    DTMF *88# arms parrot mode. User keys up and speaks,\n"
         "    then releases PTT. The repeater plays back the audio\n"
         "    with signal quality report (avg/peak level %).\n\n"
-        "Config: [parrot] enabled, max_duration\n"
+        "Config: [parrot] enabled, max_duration, audio_report\n"
         "DTMF:   *88#\n");
     resp_str(r, "error", "usage: parrot [help]");
     resp_finish(r);
