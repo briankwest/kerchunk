@@ -23,7 +23,8 @@ mod_ai (orchestrator)
      │      - DTMF trigger: *99# activates AI for next transmission
      │      - Always-on mode (optional, for dedicated AI channels)
      │
-     ├── 2. LLM inference (llama.cpp via HTTP API)
+     ├── 2. LLM inference (HTTP POST to OpenAI-compatible endpoint —
+     │      Ollama, llama.cpp, vLLM, or any /v1/chat/completions backend)
      │      - System prompt with available tools
      │      - User message = transcript
      │      - Tool calls returned as structured JSON
@@ -139,9 +140,13 @@ ASR handle this.
 3. Was `*99#` DTMF armed for this caller? → proceed, disarm
 4. None of the above → ignore, back to IDLE
 
-**LLM_CALL** — HTTP POST to llama.cpp with the full message history and
-tool definitions. This is blocking on the worker thread (not the audio
-thread). Takes 1-3 seconds on CPU.
+**LLM_CALL** — HTTP POST to the LLM endpoint with the full message history
+and tool definitions. This is blocking on the worker thread (not the audio
+thread). Local llama.cpp on CPU: 1-3 s. Remote Ollama on a GPU box on the
+LAN: typically <1 s for the round-trip plus inference. If the worker is in
+LLM_CALL for more than 2 s, the orchestrator queues a brief "stand by"
+prompt over TTS so the channel doesn't sound dead — see *UX during
+inference* below.
 
 **TOOL_EXEC** — LLM said "I need to call get_weather()". We execute the
 tool, get the result JSON, append it to the message history, and go back
@@ -221,15 +226,17 @@ AI worker thread:
 
 ## Tool Calling Protocol
 
-We use llama.cpp's OpenAI-compatible `/v1/chat/completions` endpoint with
-`tool_choice: "auto"` and structured tool definitions. The LLM decides
-which tools to call based on the user's request.
+We use the OpenAI-compatible `/v1/chat/completions` endpoint with
+`tool_choice: "auto"` and structured tool definitions. This is supported
+by Ollama (≥0.3.0), llama.cpp's `llama-server`, vLLM, LM Studio, and any
+hosted endpoint that mirrors the OpenAI API. The LLM decides which tools
+to call based on the user's request.
 
-### Request format (to llama.cpp):
+### Request format:
 
 ```json
 {
-  "model": "local",
+  "model": "qwen2.5:14b",
   "messages": [
     {
       "role": "system",
@@ -422,24 +429,29 @@ typedef enum {
 } ai_trigger_mode_t;
 ```
 
-## llama.cpp Integration
+## LLM API Integration
 
-mod_ai talks to llama.cpp via its OpenAI-compatible HTTP API (`/v1/chat/completions`).
-This keeps the LLM process separate from kerchunk — different process, can run on
-different hardware, easy to swap models.
+mod_ai talks to any OpenAI-compatible HTTP backend via `/v1/chat/completions`.
+The LLM runs in a separate process — typically on a separate host — so it
+can be GPU-accelerated, swapped, or restarted without touching kerchunk.
 
-### Server setup:
+**Supported backends** (any one of these):
+- **Ollama** ≥0.3.0 — easiest, runs on default port 11434, model selected
+  per-request via the `model` field. Function calling supported on tool-aware
+  models (llama3.1, qwen2.5, mistral-nemo, etc.).
+- **llama.cpp** `llama-server` — bare-metal GGUF, model fixed at server start.
+- **vLLM** / **LM Studio** / hosted OpenAI proxies — same protocol.
+
+### Initial deployment (remote Ollama)
+
+For the first iteration we point at an existing Ollama server on the LAN.
+No local LLM process is launched by kerchunk. The repeater box only needs
+network access to the Ollama host and a working model name.
 
 ```bash
-# Start llama.cpp server
-llama-server \
-  --model /path/to/model.gguf \
-  --host 127.0.0.1 \
-  --port 8081 \
-  --n-predict 200 \
-  --ctx-size 2048 \
-  --threads 4 \
-  --chat-template chatml
+# On the Ollama host (one-time)
+ollama pull qwen2.5:14b        # tool-calling capable
+ollama pull llama3.1:8b        # smaller alternative
 ```
 
 ### Config:
@@ -447,9 +459,16 @@ llama-server \
 ```ini
 [ai]
 enabled = on
-llm_host = 127.0.0.1
-llm_port = 8081
-llm_model = local              ; model name for API (llama.cpp ignores this)
+
+; LLM endpoint — point at any OpenAI-compatible /v1/chat/completions URL.
+; For Ollama: http://<host>:11434/v1/chat/completions
+; For llama.cpp: http://<host>:8081/v1/chat/completions
+llm_url = http://ollama.lan:11434/v1/chat/completions
+llm_model = qwen2.5:14b        ; required for Ollama; llama.cpp ignores it
+llm_api_key =                  ; optional Bearer token if behind auth proxy
+llm_timeout_s = 30             ; HTTP timeout for the worker (covers slow CPU LLMs)
+llm_verify_tls = on            ; verify cert when llm_url is https://
+
 max_tokens = 200               ; keep responses short for voice
 temperature = 0.3              ; low temperature for factual responses
 system_prompt = You are a radio repeater assistant for station WRDP519. \
@@ -460,14 +479,23 @@ wake_phrase = kerchunk          ; wake phrase to listen for
 dtmf_code = 99                 ; DTMF code for *99# activation
 conversation_timeout = 5m      ; reset conversation after idle
 max_tool_rounds = 3            ; max tool call → response rounds per request
+
+; UX during inference — voice gap on RF feels broken to users
+standby_delay_ms = 2000        ; if LLM_CALL exceeds this, queue the standby cue
+standby_cue = sound            ; sound | tts | none
+standby_sound = system/standby ; sounds_dir-relative WAV played as the cue
 ```
+
+The HTTP client uses libcurl. The `llm_api_key` value, if set, is sent
+as `Authorization: Bearer <key>` — works for both hosted Ollama proxies
+and OpenAI itself if anyone wants to point this at the cloud later.
 
 ## Module Structure (mod_ai.c)
 
 ```
 mod_ai.c
 ├── Tool registry (register, lookup, execute)
-├── LLM client (HTTP POST to llama.cpp, parse JSON response)
+├── LLM client (HTTP POST to /v1/chat/completions, parse JSON response)
 ├── Conversation manager (per-caller state, timeout cleanup)
 ├── Wake phrase detector (string prefix match on transcript)
 ├── Event handlers:
@@ -479,7 +507,7 @@ mod_ai.c
 │   1. Receive transcript
 │   2. Check wake/trigger
 │   3. Build messages (system + conversation history + user)
-│   4. POST to llama.cpp with tools
+│   4. POST to LLM endpoint with tools
 │   5. If tool_calls: execute tools, feed results back, goto 4
 │   6. Speak final response via tts_speak()
 └── CLI: ai status, ai history, ai tools, ai ask <text>
@@ -489,11 +517,11 @@ mod_ai.c
 
 | Dependency | Purpose | Required? |
 |-----------|---------|-----------|
-| libcurl | HTTP client for llama.cpp API | Yes |
+| libcurl | HTTP client for the LLM endpoint | Yes |
 | cJSON (bundled in kerchunk) | Parse LLM JSON responses | Yes (already available) |
 | mod_asr | Provides transcripts | Yes (must be loaded) |
 | mod_tts | Speaks responses | Yes (must be loaded) |
-| llama.cpp server | LLM inference | External process |
+| Ollama / llama.cpp / vLLM / OpenAI-compatible endpoint | LLM inference | External, network-reachable |
 
 ## CLI Commands
 
@@ -521,7 +549,7 @@ User keys up: "kerchunk what time is it"
   │     [system prompt]
   │     [user: "what time is it"]
   │
-  ├── POST to llama.cpp /v1/chat/completions with tools
+  ├── POST to LLM /v1/chat/completions with tools
   ├── LLM returns: tool_calls: [get_time()]
   │
   ├── Execute get_time → {"time":"11:42 AM","date":"Monday April 7","tz":"Central"}
@@ -568,16 +596,80 @@ User keys up again: "and what about the weather?"
 - LLM responses are sanitized before TTS (strip special chars, limit length)
 - Conversation timeout prevents stale context from being used
 - Rate limiting: max 1 AI request per COR cycle, configurable cooldown between requests
+- `llm_api_key` is treated as a secret: never logged, never echoed in
+  status output, redacted from any error message containing the request
+
+## Failure modes
+
+The LLM endpoint is over the network and *will* be unavailable
+occasionally — Ollama restart, network partition, model still loading,
+remote box down. The orchestrator handles each cleanly so the repeater
+never hangs:
+
+| Failure | Detection | Behavior |
+|---------|-----------|----------|
+| Connect refused / DNS failure | libcurl returns immediately | TTS "AI offline", drop to IDLE, log WARN |
+| HTTP 5xx | Response status check | TTS "AI error", drop to IDLE, log WARN with body |
+| HTTP 401/403 | Response status check | TTS "AI auth failed", drop to IDLE, log ERROR (likely bad `llm_api_key`) |
+| HTTP 404 / model missing | Ollama returns `model not found` | TTS "Model not loaded", drop to IDLE, log ERROR |
+| Timeout (`llm_timeout_s`) | libcurl `CURLE_OPERATION_TIMEDOUT` | TTS "AI timeout", drop to IDLE, increment counter |
+| Empty / malformed JSON | cJSON parse fail | TTS "AI error", drop to IDLE, log WARN with first 200 bytes |
+| Tool execution fail | tool returned error JSON | Feed error back to LLM as the tool result; LLM apologizes and explains, normal SPEAKING flow |
+| Tool round limit hit (`max_tool_rounds`) | Counter | Force one more LLM call with `tool_choice: "none"`; whatever it says becomes the response |
+
+The "AI offline" / "AI error" / "AI timeout" prompts are short
+pre-recorded WAVs in `sounds/system/` so we don't need a working LLM
+to apologize for the LLM being broken. mod_ai falls back to
+`tts_speak()` only if the WAV is missing.
+
+A persistent failure mode (e.g. 5 failed requests in a row, configurable)
+disables the AI for `disable_after_fail_s` seconds and announces "AI
+disabled" once. This prevents the repeater from making 30 useless
+inference attempts when the LLM box is down.
+
+## UX during inference
+
+A 1-3 second silence on RF after a user unkeys feels like the repeater
+is dead. The orchestrator handles this with a "standby cue":
+
+1. On entry to LLM_CALL the worker arms a `standby_delay_ms` timer
+   (default 2000 ms).
+2. If the LLM responds before the timer fires, the cue is cancelled and
+   the response is spoken normally.
+3. If the timer fires first, mod_ai queues the configured cue:
+   - `standby_cue = sound` — plays `<standby_sound>.wav` (default a short
+     courtesy beep)
+   - `standby_cue = tts` — speaks "stand by" (or whatever the user wants
+     in `[ai] standby_text`)
+   - `standby_cue = none` — silence, for users who'd rather hear nothing
+4. When the LLM finally responds, the actual answer is queued normally
+   and played after the cue clears.
+
+The standby cue is non-blocking and is queued through the same audio
+queue as everything else, so it respects PTT refcount and tx_delay.
 
 ## Model Recommendations
 
-| Model | Size | VRAM/RAM | Tokens/s (CPU) | Tool Calling | Notes |
-|-------|------|----------|----------------|--------------|-------|
-| Phi-3 mini 3.8B Q4 | 2.3GB | 3GB | 8-12 t/s | Good | Best for CPU |
-| Llama 3.2 3B Q4 | 2.0GB | 3GB | 10-15 t/s | Good | Fast, good quality |
-| Mistral 7B Q4 | 4.1GB | 5GB | 5-8 t/s | Excellent | Best tool calling |
-| Qwen 2.5 7B Q4 | 4.5GB | 5GB | 5-8 t/s | Excellent | Best multilingual |
-| Functionary 7B Q4 | 4.1GB | 5GB | 5-8 t/s | **Best** | Purpose-built for tools |
+The model **must** support OpenAI-style function calling, otherwise the
+tool registry is dead weight and the LLM will hallucinate plain-text
+answers instead of calling `get_weather`. Below: tool-calling capable
+models that work with Ollama as of late 2025.
 
-For your 12-core ARM CPU: **Llama 3.2 3B Q4** gives the best speed/quality tradeoff.
-For a GPU setup: **Functionary 7B** or **Mistral 7B** for superior tool calling.
+| Model | Ollama tag | Size (Q4) | Tool Calling | Notes |
+|-------|-----------|-----------|--------------|-------|
+| Llama 3.1 8B | `llama3.1:8b` | 4.7 GB | Excellent | Best general-purpose tradeoff |
+| Qwen 2.5 7B | `qwen2.5:7b` | 4.7 GB | Excellent | Strong multilingual, good tool use |
+| Qwen 2.5 14B | `qwen2.5:14b` | 9.0 GB | Excellent | Recommended if the GPU has the VRAM |
+| Mistral Nemo 12B | `mistral-nemo` | 7.1 GB | Excellent | Long-context, reliable tools |
+| Llama 3.1 70B | `llama3.1:70b` | 40 GB | Best | Overkill for radio commands but the gold standard |
+
+**Models we deliberately do NOT recommend:**
+- `phi3` / `phi3.5` — no native function calling
+- `llama3.2:3b` — limited tool calling, often misformats arguments
+- `gemma2` — no function calling support in Ollama
+- `tinyllama` / `qwen2.5:0.5b` — too small for reliable tool selection
+
+**Starting point:** `qwen2.5:7b` on the remote Ollama host. Pull it with
+`ollama pull qwen2.5:7b`, set `llm_model = qwen2.5:7b` in `[ai]`, and
+iterate from there. If the GPU has 16+ GB of VRAM, `qwen2.5:14b` is a
+clear upgrade for tool reliability.
