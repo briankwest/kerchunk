@@ -29,7 +29,13 @@ static pthread_mutex_t g_otp_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int g_session_timeout_ms = 120000;  /* 2 minutes */
 static int g_time_skew          = 1;       /* +/- time steps */
 
-/* Current caller */
+/* Last identified caller. Persists across COR drops to avoid the race
+ * with mod_dtmfcmd's deferred dispatch — see mod_voicemail.c for the
+ * full explanation. mod_caller fires CALLER_CLEARED on every COR drop
+ * for login sessions even though the session itself stays alive, so
+ * tracking the last identified user (instead of the transient
+ * "actively transmitting" id) is the only way OTP commands dispatched
+ * on COR drop can still see who they belong to. */
 static int g_current_caller_id;
 
 /* Brute-force lockout */
@@ -404,13 +410,13 @@ static void on_caller_identified(const kerchevt_t *evt, void *ud)
     pthread_mutex_unlock(&g_otp_mutex);
 }
 
-static void on_caller_cleared(const kerchevt_t *evt, void *ud)
-{
-    (void)ud; (void)evt;
-    pthread_mutex_lock(&g_otp_mutex);
-    g_current_caller_id = 0;
-    pthread_mutex_unlock(&g_otp_mutex);
-}
+/* Note: we deliberately do NOT subscribe to KERCHEVT_CALLER_CLEARED.
+ * mod_caller fires CALLER_CLEARED on every COR drop for login sessions,
+ * even though the session itself persists. Clearing g_current_caller_id
+ * here would race with the deferred DTMF command dispatch (also on
+ * COR_DROP) and cause every *68# command to land with caller_id == 0,
+ * speaking "Access denied. Please identify first." even when the user
+ * is logged in. Same race as mod_voicemail. */
 
 /* ── Module lifecycle ── */
 
@@ -426,7 +432,6 @@ static int otp_load(kerchunk_core_t *core)
 
     core->subscribe(DTMF_EVT_OTP_AUTH, on_otp_command, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
-    core->subscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared, NULL);
     return 0;
 }
 
@@ -462,7 +467,6 @@ static void otp_unload(void)
         g_core->dtmf_unregister("68");
     g_core->unsubscribe(DTMF_EVT_OTP_AUTH, on_otp_command);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
-    g_core->unsubscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared);
 }
 
 /* ── CLI ── */
