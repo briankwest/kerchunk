@@ -106,6 +106,18 @@ static void session_timeout_cb(void *ud)
         if (g_current_user_id > 0 &&
             g_current_method == KERCHUNK_CALLER_DTMF_LOGIN)
             fire_cleared("session expired");
+
+        /* Audible logout — only if TTS is available; tones in this
+         * context could be confused with other repeater alerts. */
+        if (g_core->tts_speak) {
+            char msg[96];
+            if (u && u->name[0])
+                snprintf(msg, sizeof(msg),
+                         "%s, your login session has expired.", u->name);
+            else
+                snprintf(msg, sizeof(msg), "Login session expired.");
+            g_core->tts_speak(msg, KERCHUNK_PRI_LOW);
+        }
     }
 }
 
@@ -124,6 +136,23 @@ static void session_start(int user_id)
                  "login session started: %s (id=%d, timeout=%ds)",
                  u ? u->name : "unknown", user_id,
                  g_login_timeout_ms / 1000);
+
+    /* Audible login confirmation. Only fires here (in session_start),
+     * not in fire_identified, so the welcome only plays on a fresh
+     * DTMF login — not on every COR re-identify. */
+    if (g_core->tts_speak) {
+        char msg[96];
+        if (u && u->name[0])
+            snprintf(msg, sizeof(msg), "Welcome %s, you are logged in.", u->name);
+        else
+            snprintf(msg, sizeof(msg), "Logged in.");
+        g_core->tts_speak(msg, KERCHUNK_PRI_NORMAL);
+    } else {
+        /* Ascending arpeggio: 600-800-1000 Hz, 80 ms each */
+        g_core->queue_tone(600,  80, 4000, KERCHUNK_PRI_LOW);
+        g_core->queue_tone(800,  80, 4000, KERCHUNK_PRI_LOW);
+        g_core->queue_tone(1000, 80, 4000, KERCHUNK_PRI_LOW);
+    }
 }
 
 static void session_refresh(void)
@@ -247,8 +276,15 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
         }
     }
 
-    /* DTMF login: *<code># sequence */
+    /* DTMF login: *<code># sequence.
+     *
+     * Skip entirely if a session is already active — every DTMF command
+     * starts with '*', and without this check we'd treat each command
+     * (e.g. *84# voicemail list) as a fresh login attempt against a
+     * non-existent user code, spamming "Login failed" announcements. */
     if (d == '*') {
+        if (g_session_user_id > 0)
+            return;
         g_login_active = 1;
         g_login_pos = 0;
         g_login_buf[0] = '\0';
@@ -273,8 +309,18 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
                     return;
                 }
             }
-            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                         "login failed: code '%s' not found", code);
+            /* Silent failure — every DTMF command (*84#, *87#, etc.)
+             * also lands in this handler, and we don't want to speak
+             * "Login failed" for every command that isn't also a login
+             * code. Logged at DEBUG so operators can still see attempts.
+             *
+             * This means a real fat-finger login won't get audible
+             * feedback either, but unauthenticated users will still
+             * notice nothing happens (no welcome) and can retry. The
+             * spam was worse than the missing feedback. */
+            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                         "login attempt: code '%s' did not match any user",
+                         code);
         } else if (g_login_pos < MAX_ANI_LEN) {
             g_login_buf[g_login_pos++] = d;
         } else {

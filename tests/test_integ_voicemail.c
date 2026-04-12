@@ -50,16 +50,27 @@ void test_integ_voicemail(void)
     test_assert(g_mock.last_tone_freq == 400, "wrong freq for no-messages");
     test_end();
 
-    /* 2. record start */
-    test_begin("voicemail: record starts");
+    /* 2. record arms on DTMF, then begins on next COR_ASSERT.
+     * The two-phase flow exists because mod_dtmfcmd's deferred dispatch
+     * and mod_voicemail's COR_DROP handler both fire on the *same*
+     * COR_DROP — without arming, recording would start and immediately
+     * be saved (empty) on that single COR cycle. */
+    test_begin("voicemail: record arms then starts on COR assert");
     g_mock.tone_calls = 0;
     {
         kerchevt_t e = { .type = (kerchevt_type_t)DTMF_EVT_VOICEMAIL_RECORD };
         kerchevt_fire(&e);
     }
-    test_assert(g_recording == 1, "not recording");
+    test_assert(g_record_armed == 1, "armed flag not set after dial");
+    test_assert(g_recording == 0, "started recording too early");
+    test_assert(g_mock.tap_registered == 0, "tap registered while only armed");
+    test_assert(g_mock.tone_calls >= 1, "no prompt beep");
+
+    /* User keys up — recording begins for real */
+    mock_fire_simple(KERCHEVT_COR_ASSERT);
+    test_assert(g_record_armed == 0, "armed flag not cleared");
+    test_assert(g_recording == 1, "not recording after COR assert");
     test_assert(g_mock.tap_registered == 1, "audio tap not registered");
-    test_assert(g_mock.tone_calls >= 1, "no beep");
     test_end();
 
     /* 3. COR drop stops recording */
@@ -69,7 +80,12 @@ void test_integ_voicemail(void)
     test_assert(g_mock.tap_registered == 0, "tap still registered");
     test_end();
 
-    /* 4. caller tracking via events */
+    /* 4. caller tracking via events.
+     * mod_voicemail tracks the *last identified* caller, not the
+     * "actively transmitting" one — CALLER_CLEARED is intentionally
+     * ignored so login sessions persist across COR drops and the
+     * deferred DTMF dispatch can still see the caller id when it
+     * runs after CALLER_CLEARED on the same COR_DROP event. */
     test_begin("voicemail: caller tracking");
     {
         kerchevt_t e = { .type = KERCHEVT_CALLER_IDENTIFIED,
@@ -81,11 +97,21 @@ void test_integ_voicemail(void)
         kerchevt_t e = { .type = KERCHEVT_CALLER_CLEARED };
         kerchevt_fire(&e);
     }
-    test_assert(g_current_caller_id == 0, "caller ID not cleared");
+    test_assert(g_current_caller_id == 5, "caller ID cleared by CALLER_CLEARED (should persist)");
+    /* A new identification updates it */
+    {
+        kerchevt_t e = { .type = KERCHEVT_CALLER_IDENTIFIED,
+                        .caller = { .user_id = 7, .method = 1 } };
+        kerchevt_fire(&e);
+    }
+    test_assert(g_current_caller_id == 7, "caller ID not updated by new identify");
     test_end();
 
-    /* 5. disabled flag prevents action */
-    test_begin("voicemail: disabled ignores commands");
+    /* 5. disabled flag rejects commands with audible feedback.
+     * The reject() helper plays a low-high tone pair (or speaks via
+     * TTS when available — mock has tts_speak=NULL so we get tones).
+     * The previous behavior of silently no-op'ing was a UX bug. */
+    test_begin("voicemail: disabled audibly rejects commands");
     g_enabled = 0;
     g_current_caller_id = 1;
     g_mock.tone_calls = 0;
@@ -93,7 +119,7 @@ void test_integ_voicemail(void)
         kerchevt_t e = { .type = (kerchevt_type_t)DTMF_EVT_VOICEMAIL_STATUS };
         kerchevt_fire(&e);
     }
-    test_assert(g_mock.tone_calls == 0, "tone played when disabled");
+    test_assert(g_mock.tone_calls >= 2, "no rejection tone pair played when disabled");
     test_end();
 
     mod_voicemail.unload();

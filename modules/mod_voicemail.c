@@ -34,15 +34,36 @@ static int  g_max_messages = 20;
 static int  g_max_duration_s = 60;
 static int  g_enabled = 0;
 
-/* Recording state (g_recording read by audio thread tap) */
+/* Recording state (g_recording read by audio thread tap).
+ *
+ * Two-phase flow:
+ *   1. *86<id># dispatched on COR drop -> on_vm_record arms the recorder
+ *      (sets g_record_armed and target). No tap, no timer yet.
+ *   2. Next COR_ASSERT -> on_cor_assert starts the tap and timer, clears
+ *      armed flag, sets g_recording.
+ *   3. Next COR_DROP -> on_cor_drop -> stop_recording saves the buffer.
+ *
+ * The arm step exists to avoid the race where mod_dtmfcmd's deferred
+ * dispatch and mod_voicemail's COR_DROP handler both fire on the *same*
+ * COR_DROP event — without arming, recording would start and immediately
+ * be saved (empty) on that single COR cycle.
+ */
 static atomic_int g_recording;
+static int      g_record_armed;
 static int      g_record_user_id;
 static int16_t *g_rec_buf;
 static size_t   g_rec_len;
 static size_t   g_rec_cap;
 static int      g_rec_timer = -1;
+static int      g_arm_timer = -1;        /* expires the armed state if user never keys up */
+static int      g_arm_timeout_ms = 30000; /* 30s to start recording after dial */
 
-static int g_current_caller_id;  /* Set by caller events */
+/* Last caller seen on the channel. Persists across COR drops because the
+ * voicemail commands are dispatched on COR drop — and mod_caller fires
+ * CALLER_CLEARED on the same COR_DROP event, racing us. Tracking the last
+ * identified user (instead of the transient "actively transmitting" id)
+ * sidesteps the race and matches the login session lifetime. */
+static int g_current_caller_id;
 
 /* Ensure user voicemail directory exists */
 static void ensure_dir(int user_id)
@@ -112,6 +133,7 @@ static void save_recording(void)
 
 /* Forward declaration */
 static void rec_audio_tap(const kerchevt_t *evt, void *ud);
+static void arm_timeout(void *ud);
 
 /* Stop recording helper (idempotent) */
 static void stop_recording(void)
@@ -182,10 +204,29 @@ static void rec_audio_tap(const kerchevt_t *evt, void *ud)
 
 /* DTMF command handlers */
 
+/* Audible reject — speaks the reason via TTS when available so the user
+ * understands why the command did nothing, with a tone-pair fallback for
+ * setups without TTS. Always logs at INFO so operators can debug. */
+static void reject(const char *spoken_reason)
+{
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "rejected: %s", spoken_reason);
+    if (g_core->tts_speak) {
+        g_core->tts_speak(spoken_reason, KERCHUNK_PRI_LOW);
+    } else {
+        g_core->queue_tone(400, 200, 4000, KERCHUNK_PRI_LOW);
+        g_core->queue_silence(80, KERCHUNK_PRI_LOW);
+        g_core->queue_tone(300, 200, 4000, KERCHUNK_PRI_LOW);
+    }
+}
+
 static void on_vm_status(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    if (!g_enabled || g_current_caller_id <= 0) return;
+    if (!g_enabled) { reject("Voicemail is disabled."); return; }
+    if (g_current_caller_id <= 0) {
+        reject("Please log in before using voicemail.");
+        return;
+    }
 
     int n = count_messages(g_current_caller_id);
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "user %d has %d messages", g_current_caller_id, n);
@@ -217,7 +258,7 @@ static void on_vm_status(const kerchevt_t *evt, void *ud)
 static void on_vm_record(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    if (!g_enabled) return;
+    if (!g_enabled) { reject("Voicemail is disabled."); return; }
 
     /* Get target user from argument or use current caller */
     int target_id = g_current_caller_id;
@@ -225,10 +266,13 @@ static void on_vm_record(const kerchevt_t *evt, void *ud)
         int arg = atoi((const char *)evt->custom.data);
         if (arg > 0) target_id = arg;
     }
-    if (target_id <= 0) return;
+    if (target_id <= 0) {
+        reject("Please log in before recording a voicemail.");
+        return;
+    }
 
     if (count_messages(target_id) >= g_max_messages) {
-        g_core->queue_tone(400, 1000, 4000, KERCHUNK_PRI_LOW);  /* Error tone */
+        reject("Mailbox is full.");
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "voicemail", .description = "mailbox full" } };
         kerchevt_fire(&ae);
@@ -243,27 +287,86 @@ static void on_vm_record(const kerchevt_t *evt, void *ud)
             snprintf(msg, sizeof(msg), "Recording message for %s.", target->name);
             g_core->tts_speak(msg, KERCHUNK_PRI_NORMAL);
         } else if (!target) {
-            g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_LOW);  /* Error — user not found */
+            reject("Unknown user.");
             g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "target user %d not found", target_id);
             return;
         }
     }
 
-    /* Start recording */
-    g_recording = 1;
+    /* Arm the recorder — actual capture starts on the next COR assert.
+     * See header comment on g_record_armed for the two-phase flow. */
+    g_record_armed = 1;
     g_record_user_id = target_id;
+
+    if (g_arm_timer >= 0) {
+        g_core->timer_cancel(g_arm_timer);
+        g_arm_timer = -1;
+    }
+    g_arm_timer = g_core->timer_create(g_arm_timeout_ms, 0, arm_timeout, NULL);
+
+    /* Prompt the user — TTS if available, otherwise a tone */
+    if (g_core->tts_speak) {
+        char msg[160];
+        if (target_id == g_current_caller_id) {
+            snprintf(msg, sizeof(msg),
+                     "Begin speaking after the beep. Unkey when done.");
+        } else {
+            const kerchunk_user_t *target = g_core->user_lookup_by_id(target_id);
+            snprintf(msg, sizeof(msg),
+                     "Recording message for %s. Begin after the beep, unkey when done.",
+                     target ? target->name : "user");
+        }
+        g_core->tts_speak(msg, KERCHUNK_PRI_NORMAL);
+    }
+    g_core->queue_tone(800, 200, 4000, KERCHUNK_PRI_LOW);
+
+    kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
+        .announcement = { .source = "voicemail", .description = "recording armed" } };
+    kerchevt_fire(&ae);
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "recorder armed for user %d (timeout %ds)",
+                target_id, g_arm_timeout_ms / 1000);
+}
+
+/* Recorder was armed but the user never keyed up to speak — disarm. */
+static void arm_timeout(void *ud)
+{
+    (void)ud;
+    g_arm_timer = -1;
+    if (g_record_armed) {
+        g_record_armed = 0;
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "recorder disarmed: no key-up within %ds",
+                    g_arm_timeout_ms / 1000);
+        if (g_core->tts_speak)
+            g_core->tts_speak("Voicemail timed out.", KERCHUNK_PRI_LOW);
+    }
+}
+
+/* Begin actual capture — called from on_cor_assert when armed. */
+static void start_recording_now(void)
+{
+    if (g_arm_timer >= 0) {
+        g_core->timer_cancel(g_arm_timer);
+        g_arm_timer = -1;
+    }
+    g_record_armed = 0;
+
     g_rec_len = 0;
     g_rec_cap = (size_t)g_core->sample_rate * (size_t)g_max_duration_s;
     g_rec_buf = malloc(g_rec_cap * sizeof(int16_t));
     if (!g_rec_buf) {
-        g_recording = 0;
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "rec_buf alloc failed");
         return;
     }
 
+    g_recording = 1;
     g_core->audio_tap_register(rec_audio_tap, NULL);
-    g_rec_timer = g_core->timer_create(g_max_duration_s * 1000, 0, rec_timeout, NULL);
+    g_rec_timer = g_core->timer_create(g_max_duration_s * 1000, 0,
+                                       rec_timeout, NULL);
     if (g_rec_timer < 0) {
-        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "failed to create recording timer");
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "rec timer create failed");
         g_recording = 0;
         g_core->audio_tap_unregister(rec_audio_tap);
         free(g_rec_buf);
@@ -271,33 +374,35 @@ static void on_vm_record(const kerchevt_t *evt, void *ud)
         return;
     }
 
-    /* Beep to indicate recording started */
-    g_core->queue_tone(800, 200, 4000, KERCHUNK_PRI_LOW);
-
-    kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
-        .announcement = { .source = "voicemail", .description = "recording started" } };
-    kerchevt_fire(&ae);
-
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "recording for user %d", target_id);
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "recording for user %d", g_record_user_id);
 }
 
 static void on_vm_play(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    if (!g_enabled || g_current_caller_id <= 0) return;
+    if (!g_enabled) { reject("Voicemail is disabled."); return; }
+    if (g_current_caller_id <= 0) {
+        reject("Please log in before using voicemail.");
+        return;
+    }
 
     /* Play first/next message */
     char path[512];
     snprintf(path, sizeof(path), "%s/%d", g_vm_dir, g_current_caller_id);
     DIR *d = opendir(path);
     if (!d) {
-        g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_LOW);
+        if (g_core->tts_speak)
+            g_core->tts_speak("You have no voicemail messages.", KERCHUNK_PRI_LOW);
+        else
+            g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_LOW);
         kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "voicemail", .description = "no messages" } };
         kerchevt_fire(&ae);
         return;
     }
 
+    int played = 0;
     struct dirent *ent;
     while ((ent = readdir(d))) {
         if (strstr(ent->d_name, ".pcm")) {
@@ -309,22 +414,35 @@ static void on_vm_play(const kerchevt_t *evt, void *ud)
             kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
                 .announcement = { .source = "voicemail", .description = "playback" } };
             kerchevt_fire(&ae);
+            played = 1;
             break;
         }
     }
     closedir(d);
+    if (!played && g_core->tts_speak)
+        g_core->tts_speak("You have no voicemail messages.", KERCHUNK_PRI_LOW);
 }
 
 static void on_vm_delete(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    if (!g_enabled || g_current_caller_id <= 0) return;
+    if (!g_enabled) { reject("Voicemail is disabled."); return; }
+    if (g_current_caller_id <= 0) {
+        reject("Please log in before using voicemail.");
+        return;
+    }
 
     char dirpath[512];
     snprintf(dirpath, sizeof(dirpath), "%s/%d", g_vm_dir, g_current_caller_id);
     DIR *d = opendir(dirpath);
-    if (!d) return;
+    if (!d) {
+        if (g_core->tts_speak)
+            g_core->tts_speak("You have no voicemail messages to delete.",
+                              KERCHUNK_PRI_LOW);
+        return;
+    }
 
+    int deleted = 0;
     struct dirent *ent;
     while ((ent = readdir(d))) {
         if (strstr(ent->d_name, ".pcm")) {
@@ -332,15 +450,22 @@ static void on_vm_delete(const kerchevt_t *evt, void *ud)
             snprintf(fpath, sizeof(fpath), "%s/%s", dirpath, ent->d_name);
             remove(fpath);
             g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "deleted: %s", fpath);
-            g_core->queue_tone(600, 200, 4000, KERCHUNK_PRI_LOW);  /* Confirm */
+            if (g_core->tts_speak)
+                g_core->tts_speak("Message deleted.", KERCHUNK_PRI_LOW);
+            else
+                g_core->queue_tone(600, 200, 4000, KERCHUNK_PRI_LOW);
 
             kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
                 .announcement = { .source = "voicemail", .description = "deleted" } };
             kerchevt_fire(&ae);
+            deleted = 1;
             break;
         }
     }
     closedir(d);
+    if (!deleted && g_core->tts_speak)
+        g_core->tts_speak("You have no voicemail messages to delete.",
+                          KERCHUNK_PRI_LOW);
 }
 
 static void on_vm_list(const kerchevt_t *evt, void *ud)
@@ -357,16 +482,31 @@ static void on_caller_identified(const kerchevt_t *evt, void *ud)
     g_current_caller_id = evt->caller.user_id;
 }
 
-static void on_caller_cleared(const kerchevt_t *evt, void *ud)
+/* Note: we deliberately do NOT subscribe to KERCHEVT_CALLER_CLEARED.
+ * mod_caller fires CALLER_CLEARED on every COR drop for login sessions,
+ * even though the session itself persists. Clearing g_current_caller_id
+ * here would race with the deferred DTMF command dispatch (also on
+ * COR_DROP) and cause every voicemail command to silently no-op. */
+
+/* Begin recording on COR assert if armed.
+ * The COR_ASSERT we want is the user's *next* key-up after dialing
+ * *86<id># — not the same key cycle that delivered the digits, because
+ * the dial transmission has already ended (we're waiting in the armed
+ * state). on_vm_record clears the armed flag after starting capture
+ * so a held PTT mid-recording doesn't restart the buffer. */
+static void on_cor_assert(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    g_current_caller_id = 0;
+    if (g_record_armed && !g_recording)
+        start_recording_now();
 }
 
 static void on_cor_drop(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    /* Stop recording on COR drop (idempotent) */
+    /* Stop recording on COR drop (idempotent — only acts if g_recording).
+     * The dial transmission's COR drop is harmless because g_recording is
+     * still 0 at that point — we're only armed, not recording. */
     stop_recording();
 }
 
@@ -388,7 +528,7 @@ static int voicemail_load(kerchunk_core_t *core)
     core->subscribe(DTMF_EVT_VOICEMAIL_DELETE,  on_vm_delete, NULL);
     core->subscribe(DTMF_EVT_VOICEMAIL_LIST,    on_vm_list, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
-    core->subscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared, NULL);
+    core->subscribe(KERCHEVT_COR_ASSERT, on_cor_assert, NULL);
     core->subscribe(KERCHEVT_COR_DROP, on_cor_drop, NULL);
 
     return 0;
@@ -432,9 +572,11 @@ static void voicemail_unload(void)
     g_core->unsubscribe(DTMF_EVT_VOICEMAIL_DELETE,  on_vm_delete);
     g_core->unsubscribe(DTMF_EVT_VOICEMAIL_LIST,    on_vm_list);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
-    g_core->unsubscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared);
+    g_core->unsubscribe(KERCHEVT_COR_ASSERT, on_cor_assert);
     g_core->unsubscribe(KERCHEVT_COR_DROP, on_cor_drop);
 
+    if (g_arm_timer >= 0)
+        g_core->timer_cancel(g_arm_timer);
     if (g_rec_timer >= 0)
         g_core->timer_cancel(g_rec_timer);
     free(g_rec_buf);
