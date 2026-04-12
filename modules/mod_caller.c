@@ -46,6 +46,11 @@ static int  g_session_user_id = 0;      /* persists across COR drops */
 static int  g_session_timer   = -1;
 static int  g_login_timeout_ms = 1800000; /* 30 min default */
 
+/* Optional DTMF logout code. Empty string = disabled (no DTMF logout).
+ * When set and the user is logged in, dialing *<logout_code># clears
+ * the active session. Configured via [caller] logout_code. */
+static char g_logout_code[MAX_ANI_LEN + 1] = "";
+
 static const char *method_name(int m)
 {
     switch (m) {
@@ -175,6 +180,39 @@ static void session_clear(void)
     g_session_user_id = 0;
 }
 
+/* Explicit logout — user-initiated (DTMF or CLI). Speaks goodbye and
+ * fires CALLER_CLEARED so other modules can react. Idempotent: a no-op
+ * if there's no active session. */
+static void do_logout(const char *reason)
+{
+    if (g_session_user_id <= 0)
+        return;
+
+    const kerchunk_user_t *u = g_core->user_lookup_by_id(g_session_user_id);
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "logout: %s (id=%d, %s)",
+                u ? u->name : "unknown", g_session_user_id,
+                reason ? reason : "explicit");
+
+    if (g_core->tts_speak) {
+        char msg[96];
+        if (u && u->name[0])
+            snprintf(msg, sizeof(msg), "Goodbye %s, you are logged out.", u->name);
+        else
+            snprintf(msg, sizeof(msg), "Logged out.");
+        g_core->tts_speak(msg, KERCHUNK_PRI_NORMAL);
+    } else {
+        /* Descending arpeggio: 1000-800-600 Hz, 80 ms each */
+        g_core->queue_tone(1000, 80, 4000, KERCHUNK_PRI_LOW);
+        g_core->queue_tone(800,  80, 4000, KERCHUNK_PRI_LOW);
+        g_core->queue_tone(600,  80, 4000, KERCHUNK_PRI_LOW);
+    }
+
+    session_clear();
+    if (g_current_user_id > 0)
+        fire_cleared(reason ? reason : "logout");
+}
+
 /* ---- ANI timeout ---- */
 
 static void ani_timeout(void *ud)
@@ -276,15 +314,16 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
         }
     }
 
-    /* DTMF login: *<code># sequence.
+    /* DTMF *<code># sequence handling. We always capture, regardless of
+     * login state, and decide at '#' time:
      *
-     * Skip entirely if a session is already active — every DTMF command
-     * starts with '*', and without this check we'd treat each command
-     * (e.g. *84# voicemail list) as a fresh login attempt against a
-     * non-existent user code, spamming "Login failed" announcements. */
+     *   - if logged in: try matching the logout code (silent if no match,
+     *     because most *<code># sequences are normal DTMF commands)
+     *   - if not logged in: try matching a user's dtmf_login code
+     *
+     * The previous design skipped capture entirely when logged in, which
+     * meant logout via DTMF was impossible. */
     if (d == '*') {
-        if (g_session_user_id > 0)
-            return;
         g_login_active = 1;
         g_login_pos = 0;
         g_login_buf[0] = '\0';
@@ -298,7 +337,17 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
 
             const char *code = g_login_buf;
 
-            /* Search all users for matching login code */
+            if (g_session_user_id > 0) {
+                /* Already logged in — only act on the logout code */
+                if (g_logout_code[0] && strcmp(code, g_logout_code) == 0) {
+                    do_logout("dtmf logout");
+                }
+                /* Otherwise silently ignore — most *<code># sequences
+                 * are normal DTMF commands handled by mod_dtmfcmd. */
+                return;
+            }
+
+            /* Not logged in — search all users for matching login code */
             int ucount = g_core->user_count();
             for (int i = 0; i < ucount; i++) {
                 const kerchunk_user_t *u = kerchunk_user_get(i);
@@ -312,12 +361,7 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
             /* Silent failure — every DTMF command (*84#, *87#, etc.)
              * also lands in this handler, and we don't want to speak
              * "Login failed" for every command that isn't also a login
-             * code. Logged at DEBUG so operators can still see attempts.
-             *
-             * This means a real fat-finger login won't get audible
-             * feedback either, but unauthenticated users will still
-             * notice nothing happens (no welcome) and can retry. The
-             * spam was worse than the missing feedback. */
+             * code. Logged at DEBUG so operators can still see attempts. */
             g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
                          "login attempt: code '%s' did not match any user",
                          code);
@@ -344,9 +388,17 @@ static int caller_configure(const kerchunk_config_t *cfg)
 {
     g_ani_window_ms    = kerchunk_config_get_duration_ms(cfg, "caller", "ani_window", 1000);
     g_login_timeout_ms = kerchunk_config_get_duration_ms(cfg, "caller", "login_timeout", 1800000);
+
+    const char *lc = kerchunk_config_get(cfg, "caller", "logout_code");
+    if (lc && lc[0])
+        snprintf(g_logout_code, sizeof(g_logout_code), "%s", lc);
+    else
+        g_logout_code[0] = '\0';
+
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "ani_window=%dms login_timeout=%ds",
-                g_ani_window_ms, g_login_timeout_ms / 1000);
+                "ani_window=%dms login_timeout=%ds logout_code=%s",
+                g_ani_window_ms, g_login_timeout_ms / 1000,
+                g_logout_code[0] ? g_logout_code : "(disabled)");
     return 0;
 }
 
@@ -364,6 +416,20 @@ static void caller_unload(void)
 static int cli_caller(int argc, const char **argv, kerchunk_resp_t *r)
 {
     if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+
+    if (argc >= 2 && strcmp(argv[1], "logout") == 0) {
+        if (g_session_user_id <= 0) {
+            resp_str(r, "status", "no active session");
+            return 0;
+        }
+        const kerchunk_user_t *u = g_core->user_lookup_by_id(g_session_user_id);
+        char who[64];
+        snprintf(who, sizeof(who), "%s", u ? u->name : "unknown");
+        do_logout("cli logout");
+        resp_str(r, "status", "logged out");
+        resp_str(r, "user", who);
+        return 0;
+    }
 
     if (g_current_user_id > 0) {
         const kerchunk_user_t *u = g_core->user_lookup_by_id(g_current_user_id);
@@ -386,20 +452,26 @@ usage:
         "  caller\n"
         "    Show the currently identified caller, identification method\n"
         "    (ANI or LOGIN), and active login session if any.\n\n"
+        "  caller logout\n"
+        "    Clear the active DTMF login session immediately.\n"
+        "    Equivalent to dialing the configured logout_code on the air.\n\n"
         "    Fields:\n"
         "      active_caller   Current caller name (or \"none\")\n"
         "      caller_id       Numeric user ID\n"
         "      method          ANI (automatic) or LOGIN (*code#)\n"
         "      login_session   Persistent login session user (survives COR drops)\n"
         "      session_timeout_s  Session expiry in seconds\n\n"
-        "Config: [caller] ani_window, login_timeout\n");
-    resp_str(r, "error", "usage: caller [help]");
+        "Config: [caller] ani_window, login_timeout, logout_code\n");
+    resp_str(r, "error", "usage: caller [logout|help]");
     resp_finish(r);
     return -1;
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { .name = "caller", .usage = "caller", .description = "Show current caller and login session", .handler = cli_caller, .category = "Identification" },
+    { .name = "caller", .usage = "caller [logout]",
+      .description = "Show or end the active caller session",
+      .handler = cli_caller, .category = "Identification",
+      .subcommands = "logout" },
 };
 
 static kerchunk_module_def_t mod_caller = {

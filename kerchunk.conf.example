@@ -234,6 +234,11 @@ amplitude = 4000                 ; Tone amplitude (0-32767)
 [caller]
 ani_window = 1s                  ; Window to capture ANI digits (starts on first digit)
 login_timeout = 30m              ; DTMF login session timeout
+;logout_code = 73                ; Optional DTMF logout code: dial *<code># to log out.
+                                 ; No default — DTMF logout is disabled unless set.
+                                 ; Pick a code that doesn't collide with any registered
+                                 ; DTMF command pattern (see *# table in README).
+                                 ; CLI alternative: `caller logout` (always available).
 
 ; ----------------------------------------------------------------------------
 ; Voicemail
