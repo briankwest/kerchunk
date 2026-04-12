@@ -231,8 +231,12 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
          * For simplicity, map to first letter of group.
          * But we also allow raw digits for numeric args. */
 
-        /* Store raw digit — patterns use digit chars */
+        /* Store raw digit — patterns use digit chars.
+         * Null-terminate after every write so g_buf is always a valid
+         * C string for logging; otherwise stale bytes from a prior
+         * command leak into log lines that print g_buf directly. */
         g_buf[g_pos++] = d;
+        g_buf[g_pos] = '\0';
         restart_timeout();
     } else {
         /* Command too long */

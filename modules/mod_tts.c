@@ -288,9 +288,10 @@ static void synthesize_and_queue(const char *text, int priority)
     /* Normalize text before cache lookup and synthesis */
     char normalized[1024];
     if (g_normalizer) {
-        if (nemo_normalize(g_normalizer, text, normalized, (int)sizeof(normalized)) == 0) {
-            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
-                        "normalized: \"%s\" -> \"%s\"", text, normalized);
+        if (nemo_normalize(g_normalizer, text, normalized, (int)sizeof(normalized)) == 0
+            && normalized[0]) {
+            g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                        "TN: \"%s\" -> \"%s\"", text, normalized);
             text = normalized;
         }
     }
@@ -496,6 +497,11 @@ static int tts_configure(const kerchunk_config_t *cfg)
     const char *far_dir = kerchunk_config_get(cfg, "tts", "normalize_far_dir");
     if (far_dir) snprintf(g_far_dir, sizeof(g_far_dir), "%s", far_dir);
 
+    /* Default to system-installed FAR grammars */
+    if (!g_far_dir[0])
+        snprintf(g_far_dir, sizeof(g_far_dir),
+                 "/usr/share/nemo-normalize/far_export");
+
     if (g_far_dir[0]) {
         char classify[600], verbalize[600];
         snprintf(classify, sizeof(classify),
@@ -504,10 +510,10 @@ static int tts_configure(const kerchunk_config_t *cfg)
                  "%s/en_tn_grammars_cased/verbalize/verbalize.far", g_far_dir);
         g_normalizer = nemo_normalizer_create(classify, verbalize, NULL);
         if (g_normalizer)
-            g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "text normalization enabled (FAR: %s)", g_far_dir);
+            g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "TN enabled (nemo_normalize)");
         else
             g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                        "text normalization init failed — check FAR files in %s", g_far_dir);
+                        "TN init failed — check FAR files in %s", g_far_dir);
     }
 #endif
 
