@@ -1380,7 +1380,8 @@ usage:
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
     { .name = "freeswitch", .usage = "freeswitch [dial <num>|hangup]",
-      .description = "AutoPatch status/control", .handler = cli_freeswitch, .category = "Audio" },
+      .description = "AutoPatch status/control", .handler = cli_freeswitch, .category = "Audio",
+      .subcommands = "dial,hangup" },
 };
 
 static kerchunk_module_def_t mod_freeswitch = {

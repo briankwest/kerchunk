@@ -40,6 +40,11 @@ typedef struct {
     const char *ui_command;                /* command string to fire */
     const kerchunk_ui_field_t *ui_fields;  /* input fields for FORM */
     int         num_ui_fields;
+
+    /* Tab completion: comma-separated list of subcommand names. Used by
+     * __COMPLETIONS__ so the CLI can offer subcommand suggestions even
+     * when no UI form is wired up. NULL = no subcommands. */
+    const char *subcommands;
 } kerchunk_cli_cmd_t;
 
 /* Module descriptor */

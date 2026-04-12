@@ -816,7 +816,13 @@ static const kerchunk_ui_field_t tone_fields[] = {
     { "duration", "Duration (ms)",  "number", NULL, "500" },
 };
 static const kerchunk_ui_field_t play_fields[] = {
-    { "path", "File Path", "text", NULL, "/path/to/file.wav" },
+    { "path", "File Path", "sound", NULL, "weather/wx_clear" },
+};
+static const kerchunk_ui_field_t module_name_fields[] = {
+    { "name", "Module", "module", NULL, "mod_parrot" },
+};
+static const kerchunk_ui_field_t queue_inject_fields[] = {
+    { "path", "WAV Path", "file", NULL, "/path/to/file.wav" },
 };
 static const kerchunk_ui_field_t log_fields[] = {
     { "level", "Level", "select", "error,warn,info,debug", NULL },
@@ -854,17 +860,31 @@ static const kerchunk_cli_cmd_t g_core_cmds[] = {
       .category = "Control", .ui_label = "PTT", .ui_type = CLI_UI_TOGGLE,
       .ui_command = "ptt" },
     { .name = "queue",    .usage = "queue list|inject <path>|flush",   .description = "Audio queue management",
-      .handler = cmd_queue },
+      .handler = cmd_queue,
+      .subcommands = "list,inject,flush",
+      .ui_command = "queue inject", .ui_fields = queue_inject_fields, .num_ui_fields = 1 },
     { .name = "module",   .usage = "module list|load|unload|reload <name>", .description = "Module management",
-      .handler = cmd_module },
+      .handler = cmd_module,
+      .subcommands = "list,load,unload,reload" },
+    { .name = "module",   .usage = "module load <name>",                .description = "Load a module",
+      .handler = cmd_module,
+      .ui_command = "module load", .ui_fields = module_name_fields, .num_ui_fields = 1 },
+    { .name = "module",   .usage = "module unload <name>",              .description = "Unload a module",
+      .handler = cmd_module,
+      .ui_command = "module unload", .ui_fields = module_name_fields, .num_ui_fields = 1 },
+    { .name = "module",   .usage = "module reload <name>",              .description = "Reload a module",
+      .handler = cmd_module,
+      .ui_command = "module reload", .ui_fields = module_name_fields, .num_ui_fields = 1 },
     { .name = "event",    .usage = "event list",                       .description = "Show event subscriptions",
       .handler = cmd_event },
     { .name = "config",   .usage = "config reload",                    .description = "Reload configuration",
       .handler = cmd_config,
       .category = "Control", .ui_label = "Reload Config", .ui_type = CLI_UI_BUTTON,
-      .ui_command = "config reload" },
+      .ui_command = "config reload",
+      .subcommands = "reload" },
     { .name = "sim",      .usage = "sim cor|dtmf|tx <args>",            .description = "Simulate radio events",
-      .handler = cmd_sim },
+      .handler = cmd_sim,
+      .subcommands = "cor,dtmf,tx" },
     { .name = "threads",  .usage = "threads",                           .description = "Show managed threads",
       .handler = cmd_threads },
     { .name = "schedule", .usage = "schedule",                          .description = "Show scheduled callbacks",
@@ -875,6 +895,7 @@ static const kerchunk_cli_cmd_t g_core_cmds[] = {
 #define NUM_CORE_CMDS (int)(sizeof(g_core_cmds) / sizeof(g_core_cmds[0]))
 
 extern void kerchunk_socket_set_core_commands(const kerchunk_cli_cmd_t *cmds, int count);
+extern void kerchunk_socket_set_sounds_dir(const char *path);
 
 /* ════════════════════════════════════════════════════════════════════
  *  Audio thread — runs DSP + queue drain on a tight cadence
@@ -1417,6 +1438,7 @@ int main(int argc, char **argv)
     const char *sock_path = kerchunk_config_get(cfg, "general", "socket_path");
     kerchunk_socket_init(sock_path);
     kerchunk_socket_set_core_commands(g_core_cmds, NUM_CORE_CMDS);
+    kerchunk_socket_set_sounds_dir(kerchunk_config_get(cfg, "general", "sounds_dir"));
 
     /* Load modules */
     const char *mod_path = kerchunk_config_get(cfg, "modules", "module_path");

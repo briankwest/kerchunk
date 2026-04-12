@@ -691,7 +691,8 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
     { .name = "tts", .usage = "tts say <text> | status | cache-clear",
       .description = "Text-to-speech (ElevenLabs cloud / Piper local)", .handler = cli_tts,
       .category = "Announcements", .ui_label = "TTS Speak", .ui_type = CLI_UI_FORM,
-      .ui_command = "tts say", .ui_fields = tts_fields, .num_ui_fields = 1 },
+      .ui_command = "tts say", .ui_fields = tts_fields, .num_ui_fields = 1,
+      .subcommands = "say,status,cache-clear" },
 };
 
 static kerchunk_module_def_t mod_tts = {

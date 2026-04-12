@@ -507,7 +507,8 @@ usage:
 }
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { .name = "voicemail", .usage = "voicemail status", .description = "Voicemail status", .handler = cli_voicemail, .category = "Audio" },
+    { .name = "voicemail", .usage = "voicemail status", .description = "Voicemail status", .handler = cli_voicemail, .category = "Audio",
+      .subcommands = "status" },
 };
 
 static kerchunk_module_def_t mod_voicemail = {

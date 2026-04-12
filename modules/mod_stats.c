@@ -558,7 +558,8 @@ usage:
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
     { .name = "stats", .usage = "stats [user <name>|reset|save]",
-      .description = "Repeater statistics", .handler = cli_stats, .category = "Control" },
+      .description = "Repeater statistics", .handler = cli_stats, .category = "Control",
+      .subcommands = "reset,save,user" },
 };
 
 static kerchunk_module_def_t mod_stats = {

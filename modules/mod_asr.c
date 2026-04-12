@@ -755,7 +755,8 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
       .description = "Speech recognition status and transcripts",
       .handler = cli_asr,
       .category = "Audio", .ui_label = "ASR Status",
-      .ui_type = CLI_UI_BUTTON, .ui_command = "asr" },
+      .ui_type = CLI_UI_BUTTON, .ui_command = "asr",
+      .subcommands = "history" },
 };
 
 static kerchunk_module_def_t mod_asr = {

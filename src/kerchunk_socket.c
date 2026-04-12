@@ -7,7 +7,11 @@
  *   E <text>    Async event/log line (server-pushed)
  *
  * Meta-commands (never collide with real commands):
- *   __COMMANDS__            Return all available commands (tab-separated)
+ *   __COMMANDS__            Return all unique command names (tab-separated)
+ *   __COMPLETIONS__         Return per-subcommand completion table
+ *   __USERS__               Return newline-separated usernames (for tab completion)
+ *   __MODULES__             Return newline-separated loaded module names
+ *   __SOUNDS__              Return newline-separated <subdir>/<name> sound paths
  *   __SUBSCRIBE__ <level>   Start log streaming (3=error, 4=warn, 6=info, 7=debug)
  *   __UNSUBSCRIBE__         Stop log streaming
  *
@@ -19,11 +23,13 @@
 #endif
 #include "kerchunk.h"
 #include "kerchunk_module.h"
+#include "kerchunk_user.h"
 #include "kerchunk_log.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
@@ -62,6 +68,9 @@ static char            g_socket_path[108] = "/run/kerchunk/kerchunk.sock";
 
 static const kerchunk_cli_cmd_t *g_core_cmds;
 static int                       g_num_core_cmds;
+
+/* Sounds directory for __SOUNDS__ enumeration. Set at startup from config. */
+static char g_sounds_dir[256] = "";
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
@@ -192,9 +201,29 @@ static int parse_cmd(char *line, const char **argv, int max_argv)
 
 /* ── Meta-commands ─────────────────────────────────────────────────── */
 
-static void cmd_iter_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
+/* Dedup state for __COMMANDS__ — multiple cli_cmd_t entries can share a
+ * name (e.g. mod_pocsag has three entries for send/numeric/tone forms).
+ * Completion only wants each name once. */
+#define MAX_SEEN_NAMES 256
+typedef struct {
+    client_slot_t *c;
+    const char *seen[MAX_SEEN_NAMES];
+    int seen_count;
+} cmd_dedup_ctx_t;
+
+static int dedup_seen(cmd_dedup_ctx_t *ctx, const char *name)
 {
-    client_slot_t *c = (client_slot_t *)ud;
+    for (int i = 0; i < ctx->seen_count; i++) {
+        if (strcmp(ctx->seen[i], name) == 0)
+            return 1;
+    }
+    if (ctx->seen_count < MAX_SEEN_NAMES)
+        ctx->seen[ctx->seen_count++] = name;
+    return 0;
+}
+
+static void emit_command_row(client_slot_t *c, const kerchunk_cli_cmd_t *cmd)
+{
     char line[512];
     int n = snprintf(line, sizeof(line), "R %s\t%s\t%s\n",
                      cmd->name,
@@ -203,22 +232,216 @@ static void cmd_iter_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
     write_all(c->fd, line, (size_t)n);
 }
 
+static void cmd_iter_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
+{
+    cmd_dedup_ctx_t *ctx = (cmd_dedup_ctx_t *)ud;
+    if (dedup_seen(ctx, cmd->name))
+        return;
+    emit_command_row(ctx->c, cmd);
+}
+
 static void handle_meta_commands(client_slot_t *c)
 {
     begin_response(c);
 
+    cmd_dedup_ctx_t ctx = { .c = c, .seen_count = 0 };
+
     for (int i = 0; i < g_num_core_cmds; i++) {
-        char line[512];
-        int n = snprintf(line, sizeof(line), "R %s\t%s\t%s\n",
-                         g_core_cmds[i].name,
-                         g_core_cmds[i].usage ? g_core_cmds[i].usage
-                                              : g_core_cmds[i].name,
-                         g_core_cmds[i].description ? g_core_cmds[i].description
-                                                    : "");
-        write_all(c->fd, line, (size_t)n);
+        if (dedup_seen(&ctx, g_core_cmds[i].name))
+            continue;
+        emit_command_row(c, &g_core_cmds[i]);
     }
 
-    kerchunk_module_iter_cli_commands(cmd_iter_cb, c);
+    kerchunk_module_iter_cli_commands(cmd_iter_cb, &ctx);
+    end_response(c);
+}
+
+/* __COMPLETIONS__ — return one row per cli_cmd_t entry with structured
+ * subcommand + field info for tab completion.
+ *
+ * Row format:
+ *   R <command>\t<subcommand>\t<field1>\t<field2>...
+ * where each <field> is "<name>:<type>:<options>" (options may be empty).
+ *
+ * <subcommand> is the second token of ui_command (e.g. "pocsag send" → "send").
+ * If ui_command is NULL or has no second token, <subcommand> is empty.
+ *
+ * subcommands field (P2): comma-separated list of subcommand names emitted
+ * one row per name with no fields, so first-word→subcommand completion works
+ * even when no ui form is wired up.
+ */
+static void emit_completion_row(client_slot_t *c, const kerchunk_cli_cmd_t *cmd)
+{
+    char line[1024];
+    size_t off = 0;
+
+    /* Extract subcommand from ui_command: "pocsag send" → "send" */
+    const char *sub = "";
+    char sub_buf[64];
+    if (cmd->ui_command) {
+        const char *space = strchr(cmd->ui_command, ' ');
+        if (space) {
+            const char *s = space + 1;
+            const char *end = strchr(s, ' ');
+            size_t len = end ? (size_t)(end - s) : strlen(s);
+            if (len >= sizeof(sub_buf)) len = sizeof(sub_buf) - 1;
+            memcpy(sub_buf, s, len);
+            sub_buf[len] = '\0';
+            sub = sub_buf;
+        }
+    }
+
+    int n = snprintf(line + off, sizeof(line) - off, "R %s\t%s",
+                     cmd->name, sub);
+    if (n < 0 || (size_t)n >= sizeof(line) - off) return;
+    off += (size_t)n;
+
+    for (int i = 0; i < cmd->num_ui_fields; i++) {
+        const kerchunk_ui_field_t *f = &cmd->ui_fields[i];
+        n = snprintf(line + off, sizeof(line) - off, "\t%s:%s:%s",
+                     f->name ? f->name : "",
+                     f->type ? f->type : "text",
+                     f->options ? f->options : "");
+        if (n < 0 || (size_t)n >= sizeof(line) - off) break;
+        off += (size_t)n;
+    }
+
+    if (off + 2 < sizeof(line)) {
+        line[off++] = '\n';
+        line[off] = '\0';
+    } else {
+        line[sizeof(line) - 2] = '\n';
+        line[sizeof(line) - 1] = '\0';
+        off = sizeof(line) - 1;
+    }
+
+    write_all(c->fd, line, off);
+}
+
+/* If cmd->subcommands is set (P2), emit one row per subcommand name with
+ * empty field list. Skips entries that already have a ui_command (those are
+ * emitted by emit_completion_row directly with their fields). */
+static void emit_subcommand_rows(client_slot_t *c, const kerchunk_cli_cmd_t *cmd)
+{
+    if (!cmd->subcommands || !cmd->subcommands[0]) return;
+
+    const char *p = cmd->subcommands;
+    while (*p) {
+        while (*p == ' ' || *p == ',') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != ',' && *p != ' ') p++;
+        size_t len = (size_t)(p - start);
+
+        char line[256];
+        int n = snprintf(line, sizeof(line), "R %s\t%.*s\n",
+                         cmd->name, (int)len, start);
+        if (n > 0) write_all(c->fd, line, (size_t)n);
+    }
+}
+
+static void completions_iter_cb(const kerchunk_cli_cmd_t *cmd, void *ud)
+{
+    client_slot_t *c = (client_slot_t *)ud;
+    emit_completion_row(c, cmd);
+    emit_subcommand_rows(c, cmd);
+}
+
+static void handle_meta_completions(client_slot_t *c)
+{
+    begin_response(c);
+
+    for (int i = 0; i < g_num_core_cmds; i++) {
+        emit_completion_row(c, &g_core_cmds[i]);
+        emit_subcommand_rows(c, &g_core_cmds[i]);
+    }
+
+    kerchunk_module_iter_cli_commands(completions_iter_cb, c);
+    end_response(c);
+}
+
+/* __USERS__ — newline-separated usernames for tab completion */
+static void handle_meta_users(client_slot_t *c)
+{
+    begin_response(c);
+    int n = kerchunk_user_count();
+    for (int i = 0; i < n; i++) {
+        const kerchunk_user_t *u = kerchunk_user_get(i);
+        if (!u || !u->username[0]) continue;
+        char line[64];
+        int len = snprintf(line, sizeof(line), "R %s\n", u->username);
+        write_all(c->fd, line, (size_t)len);
+    }
+    end_response(c);
+}
+
+/* __MODULES__ — newline-separated loaded module names for tab completion */
+static void handle_meta_modules(client_slot_t *c)
+{
+    begin_response(c);
+    int n = kerchunk_module_count();
+    for (int i = 0; i < n; i++) {
+        const kerchunk_module_def_t *m = kerchunk_module_get(i);
+        if (!m || !m->name) continue;
+        /* Strip "mod_" prefix to match the names users type */
+        const char *name = m->name;
+        if (strncmp(name, "mod_", 4) == 0) name += 4;
+        char line[64];
+        int len = snprintf(line, sizeof(line), "R %s\n", name);
+        write_all(c->fd, line, (size_t)len);
+    }
+    end_response(c);
+}
+
+/* __SOUNDS__ — walk one level into sounds_dir, emit <subdir>/<basename>
+ * (without .wav extension) for tab completion. */
+static void handle_meta_sounds(client_slot_t *c)
+{
+    begin_response(c);
+    if (!g_sounds_dir[0]) { end_response(c); return; }
+
+    DIR *d = opendir(g_sounds_dir);
+    if (!d) { end_response(c); return; }
+
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+
+        char subpath[512];
+        snprintf(subpath, sizeof(subpath), "%s/%s", g_sounds_dir, de->d_name);
+
+        struct stat st;
+        if (stat(subpath, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            /* Walk one level deep */
+            DIR *sd = opendir(subpath);
+            if (!sd) continue;
+            struct dirent *fe;
+            while ((fe = readdir(sd)) != NULL) {
+                if (fe->d_name[0] == '.') continue;
+                /* Strip .wav suffix */
+                size_t flen = strlen(fe->d_name);
+                if (flen <= 4 || strcmp(fe->d_name + flen - 4, ".wav") != 0)
+                    continue;
+                char line[256];
+                int len = snprintf(line, sizeof(line), "R %s/%.*s\n",
+                                   de->d_name, (int)(flen - 4), fe->d_name);
+                write_all(c->fd, line, (size_t)len);
+            }
+            closedir(sd);
+        } else if (S_ISREG(st.st_mode)) {
+            /* Top-level .wav file */
+            size_t flen = strlen(de->d_name);
+            if (flen <= 4 || strcmp(de->d_name + flen - 4, ".wav") != 0)
+                continue;
+            char line[256];
+            int len = snprintf(line, sizeof(line), "R %.*s\n",
+                               (int)(flen - 4), de->d_name);
+            write_all(c->fd, line, (size_t)len);
+        }
+    }
+    closedir(d);
     end_response(c);
 }
 
@@ -251,8 +474,24 @@ static void handle_meta_unsubscribe(client_slot_t *c)
 
 static void handle_command(client_slot_t *c, char *line)
 {
-    if (strncmp(line, "__COMMANDS__", 11) == 0) {
+    if (strncmp(line, "__COMMANDS__", 12) == 0) {
         handle_meta_commands(c);
+        return;
+    }
+    if (strncmp(line, "__COMPLETIONS__", 15) == 0) {
+        handle_meta_completions(c);
+        return;
+    }
+    if (strncmp(line, "__USERS__", 9) == 0) {
+        handle_meta_users(c);
+        return;
+    }
+    if (strncmp(line, "__MODULES__", 11) == 0) {
+        handle_meta_modules(c);
+        return;
+    }
+    if (strncmp(line, "__SOUNDS__", 10) == 0) {
+        handle_meta_sounds(c);
         return;
     }
     if (strncmp(line, "__SUBSCRIBE__", 13) == 0) {
@@ -472,6 +711,14 @@ void kerchunk_socket_set_core_commands(const kerchunk_cli_cmd_t *cmds, int count
 {
     g_core_cmds     = cmds;
     g_num_core_cmds = count;
+}
+
+void kerchunk_socket_set_sounds_dir(const char *path)
+{
+    if (path)
+        snprintf(g_sounds_dir, sizeof(g_sounds_dir), "%s", path);
+    else
+        g_sounds_dir[0] = '\0';
 }
 
 void kerchunk_socket_iter_core_commands(

@@ -485,7 +485,8 @@ usage:
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
     { .name = "webhook", .usage = "webhook [test]",
-      .description = "Webhook status or send test payload", .handler = cli_webhook, .category = "Control" },
+      .description = "Webhook status or send test payload", .handler = cli_webhook, .category = "Control",
+      .subcommands = "test" },
 };
 
 static kerchunk_module_def_t mod_webhook = {

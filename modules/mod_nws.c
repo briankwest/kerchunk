@@ -753,7 +753,8 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
     { .name = "nws", .usage = "nws [check|announce]", .description = "NWS alert status, poll, or announce",
       .handler = cli_nws,
       .category = "Announcements", .ui_label = "NWS Alerts", .ui_type = CLI_UI_BUTTON,
-      .ui_command = "nws announce" },
+      .ui_command = "nws announce",
+      .subcommands = "check,announce" },
 };
 
 static kerchunk_module_def_t mod_nws = {

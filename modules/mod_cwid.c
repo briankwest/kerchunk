@@ -634,7 +634,8 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
     { .name = "cwid", .usage = "cwid [now]", .description = "CW ID status or send now",
       .handler = cli_cwid,
       .category = "Identification", .ui_label = "CW ID Now", .ui_type = CLI_UI_BUTTON,
-      .ui_command = "cwid now" },
+      .ui_command = "cwid now",
+      .subcommands = "now" },
 };
 
 static kerchunk_module_def_t mod_cwid = {
