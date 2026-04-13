@@ -140,9 +140,12 @@ static char               g_tools_json[16384];  /* pre-built tools array for req
 static ai_conversation_t  g_convs[AI_MAX_CONVERSATIONS];
 static pthread_mutex_t    g_convs_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* DTMF-armed caller — next transmission from this caller goes to AI
- * even without a wake phrase. Set by *99#, cleared after first use. */
-static int                g_dtmf_armed_caller;
+/* DTMF-armed state — next transmission goes to AI even without a wake
+ * phrase. Set by *99#, cleared after first use. We need both a bool
+ * flag and the caller id because an anonymous caller (id=0) would
+ * otherwise be indistinguishable from "no arm active". */
+static int                g_dtmf_armed;          /* 0/1 */
+static int                g_dtmf_armed_caller;   /* caller id that dialed *99# (may be 0) */
 
 /* Request queue (producer: on_announcement handler; consumer: worker) */
 static ai_request_t       g_req_queue[AI_REQUEST_QUEUE_SIZE];
@@ -1237,14 +1240,23 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
 
     int caller_id = g_current_caller_id;
     const char *to_send = transcript;
-    int armed_hit = 0;
 
     if (g_trigger == AI_TRIGGER_ALWAYS) {
         /* every transcript goes through */
-    } else if (g_dtmf_armed_caller != 0 &&
-               (caller_id == g_dtmf_armed_caller || caller_id == 0)) {
-        g_dtmf_armed_caller = 0;  /* consume */
-        armed_hit = 1;
+    } else if (g_dtmf_armed) {
+        /* *99# was dialed — consume the arm regardless of caller.
+         * If the arm was caller-specific (both non-zero) enforce that
+         * only the arming caller's next TX triggers the AI; otherwise
+         * any transcript (including anonymous) consumes the arm. */
+        if (g_dtmf_armed_caller != 0 && caller_id != 0 &&
+            g_dtmf_armed_caller != caller_id) {
+            /* Different caller while we were armed — ignore their TX,
+             * keep the arm for the original caller */
+        } else {
+            g_dtmf_armed = 0;
+            g_dtmf_armed_caller = 0;
+            goto process;
+        }
     } else {
         /* Wake phrase check */
         const char *after = strip_wake_phrase(transcript);
@@ -1271,15 +1283,16 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
             if (!existing) return;  /* not for us */
         }
     }
-    (void)armed_hit;
 
+process:
     enqueue_request(to_send, caller_id);
 }
 
-/* DTMF *99# (CUSTOM+16 by convention; registered in load) */
+/* DTMF *99# — arm the AI for this caller's next transmission. */
 static void on_dtmf_ai_arm(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
+    g_dtmf_armed        = 1;
     g_dtmf_armed_caller = g_current_caller_id;
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "AI armed for next TX (caller=%d)", g_dtmf_armed_caller);
