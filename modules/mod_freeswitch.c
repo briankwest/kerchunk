@@ -817,14 +817,26 @@ static void autopatch_dial(const char *digits)
     snprintf(g_call_digits, sizeof(g_call_digits), "%s", digits);
     g_call_uuid[0] = '\0';
 
+    /* Only prepend the configured dial prefix if the number doesn't
+     * already start with it. Callers can type either 10-digit or 11-
+     * digit NANPA numbers and get the same result — no more double
+     * country-code bug. */
+    const char *effective_prefix = g_dial_prefix;
+    if (g_dial_prefix[0] != '\0') {
+        size_t plen = strlen(g_dial_prefix);
+        if (strncmp(digits, g_dial_prefix, plen) == 0)
+            effective_prefix = "";
+    }
+
     /* Build originate command */
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
              "originate {ignore_early_media=false}sofia/gateway/%s/%s%s &park()",
-             g_sip_gateway, g_dial_prefix, digits);
+             g_sip_gateway, effective_prefix, digits);
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                 "dialing %s%s via %s (cmd: %s)", g_dial_prefix, digits, g_sip_gateway, cmd);
+                 "dialing %s%s via %s (cmd: %s)",
+                 effective_prefix, digits, g_sip_gateway, cmd);
 
     if (esl_bgapi(cmd) < 0) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "ESL bgapi failed");
