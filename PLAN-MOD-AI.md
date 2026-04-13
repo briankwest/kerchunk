@@ -480,7 +480,8 @@ system_prompt_file = /etc/kerchunk/system_prompt.md
 
 trigger = wake_phrase           ; wake_phrase | dtmf | always
 wake_phrase = kerchunk          ; wake phrase to listen for
-dtmf_code = 99                 ; DTMF code for *99# activation
+; DTMF activation pattern is registered as "99" by default; override via
+; [dtmf] dtmf_ai = <pattern> if you need a different digit sequence.
 conversation_timeout = 5m      ; reset conversation after idle
 max_tool_rounds = 3            ; max tool call → response rounds per request
 

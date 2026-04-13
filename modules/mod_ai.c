@@ -1291,7 +1291,11 @@ static void on_dtmf_ai_arm(const kerchevt_t *evt, void *ud)
  *  Module lifecycle
  * ════════════════════════════════════════════════════════════════════ */
 
-#define DTMF_AI_OFFSET 16   /* KERCHEVT_CUSTOM + 16 */
+/* Custom-event offsets. Must not collide with other modules:
+ *   16 = mod_scrambler (*97#)
+ *   17 = mod_freeswitch autopatch (*0<digits>#)
+ * 18 is the first free slot. */
+#define DTMF_AI_OFFSET 18   /* KERCHEVT_CUSTOM + 18 — *99# arm */
 
 static int ai_load(kerchunk_core_t *core)
 {

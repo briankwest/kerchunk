@@ -276,6 +276,7 @@ cor_gate_ms = 200                ; Suppress DTMF during squelch transients (ms, 
 ; otp_auth = 68
 ; scrambler_toggle = 97
 ; autopatch = 0
+; dtmf_ai = 99                   ; Arm AI assistant for next TX
 
 ; ----------------------------------------------------------------------------
 ; GPIO relay control
@@ -700,11 +701,11 @@ group = 2
 
 ; Trigger mode — what causes a transcript to go to the AI:
 ;   wake_phrase  (default) First word(s) of transcript match wake_phrase
-;   dtmf                    Caller must dial *99# before transmitting
+;   dtmf                    Caller must dial *99# before transmitting (see
+;                           [dtmf] dtmf_ai to change the pattern)
 ;   always                  Every transcript goes to AI (dedicated AI channel)
 ; trigger = wake_phrase
 ; wake_phrase = kerchunk
-; dtmf_code = 99
 
 ; conversation_timeout = 5m       ; idle → conversation resets
 ; max_tool_rounds = 3             ; max tool_call → response loops per request

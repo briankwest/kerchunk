@@ -99,6 +99,9 @@ static const char *custom_event_name(int offset)
     case 13: return "PARROT";
     case 14: return "NWS";
     case 15: return "OTP_AUTH";
+    case 16: return "SCRAMBLER";
+    case 17: return "AUTOPATCH";
+    case 18: return "AI_ARM";
     default: return NULL;
     }
 }
