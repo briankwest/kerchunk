@@ -27,6 +27,18 @@ static sub_list_t     g_subs[KERCHEVT_MAX_TYPES];
 static int            g_initialized;
 static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* Per-thread event dispatch depth. Synchronous event dispatch means a
+ * handler can fire another event, which dispatches more handlers on the
+ * same thread's stack. Without a ceiling, a buggy fire→handler→fire
+ * chain runs until the stack is exhausted — which looks like a system
+ * hang, not a crash, because the thread is busy recursing.
+ *
+ * We cap at KERCHEVT_MAX_DEPTH. Over the limit, we log and drop the fire.
+ * This breaks the loop and leaves a loud breadcrumb in the log so the
+ * actual cycle can be identified. */
+#define KERCHEVT_MAX_DEPTH 16
+static __thread int   g_fire_depth;
+
 static int evt_index(kerchevt_type_t type)
 {
     if (type < KERCHEVT_BUILTIN_COUNT)
@@ -123,6 +135,14 @@ void kerchevt_fire(const kerchevt_t *evt)
             (uint64_t)ts.tv_sec * 1000000 + (uint64_t)ts.tv_nsec / 1000;
     }
 
+    /* Recursion ceiling: break cycles before they hang the thread */
+    if (g_fire_depth >= KERCHEVT_MAX_DEPTH) {
+        KERCHUNK_LOG_E(LOG_MOD,
+            "event recursion limit (%d) hit firing type=%d — dropping to break cycle",
+            KERCHEVT_MAX_DEPTH, (int)evt->type);
+        return;
+    }
+
     pthread_mutex_lock(&g_mutex);
     if (!g_initialized) { pthread_mutex_unlock(&g_mutex); return; }
 
@@ -138,8 +158,10 @@ void kerchevt_fire(const kerchevt_t *evt)
         snapshot[i] = sl->subs[i];
     pthread_mutex_unlock(&g_mutex);
 
+    g_fire_depth++;
     for (int i = 0; i < count; i++)
         snapshot[i].handler(evt, snapshot[i].userdata);
+    g_fire_depth--;
 }
 
 int kerchevt_subscriber_count(kerchevt_type_t type)
