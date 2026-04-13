@@ -696,8 +696,20 @@ group = 2
 ; reload. Contents are sent verbatim as the LLM "system" message.
 ; system_prompt_file = /etc/kerchunk/system_prompt.md
 
-; max_tokens = 200                ; keep responses short for voice
+; max_tokens = 500                ; response budget. Reasoning models
+;                                 ; (qwen3, deepseek-r1, …) burn tokens
+;                                 ; on a private scratchpad before they
+;                                 ; produce the answer — bump to 1000-
+;                                 ; 1500 if responses come back empty
+;                                 ; with finish_reason=length.
 ; temperature = 0.3               ; low temp for factual answers
+
+; disable_reasoning
+;   Append " /no_think" to each user message. qwen3.x interprets this
+;   as "skip chain-of-thought, put everything in content". Frees the
+;   entire token budget for the actual answer. Harmless on non-
+;   reasoning models (they treat it as ordinary text).
+; disable_reasoning = off
 
 ; Trigger mode — what causes a transcript to go to the AI:
 ;   wake_phrase  (default) First word(s) of transcript match wake_phrase

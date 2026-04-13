@@ -107,6 +107,12 @@ static double g_temperature     = 0.3;
 static char  g_prompt_path[256] = "/etc/kerchunk/system_prompt.md";
 static char *g_system_prompt;            /* heap, loaded from file */
 
+/* Disable chain-of-thought "reasoning" in models that support it
+ * (qwen3.x family). Appends "/no_think" to each user message so all
+ * tokens go to content instead of a scratchpad the user never hears.
+ * Harmless on non-reasoning models (they treat it as text). */
+static int   g_disable_reasoning;
+
 typedef enum {
     AI_TRIGGER_WAKE_PHRASE,
     AI_TRIGGER_DTMF,
@@ -297,7 +303,24 @@ static void conv_append(ai_conversation_t *c, const char *role,
     ai_message_t *m = &c->messages[c->count++];
     memset(m, 0, sizeof(*m));
     snprintf(m->role, sizeof(m->role), "%s", role);
-    if (content) m->content = strdup(content);
+    if (content) {
+        /* Append " /no_think" to user messages when reasoning is
+         * disabled. qwen3.x interprets this marker to skip chain-of-
+         * thought and put everything into content. Non-reasoning
+         * models treat it as ordinary trailing text and ignore it. */
+        if (g_disable_reasoning && role && strcmp(role, "user") == 0) {
+            size_t need = strlen(content) + 11;  /* " /no_think" + NUL */
+            char *buf = malloc(need);
+            if (buf) {
+                snprintf(buf, need, "%s /no_think", content);
+                m->content = buf;
+            } else {
+                m->content = strdup(content);
+            }
+        } else {
+            m->content = strdup(content);
+        }
+    }
     if (tool_calls_json) m->tool_calls_json = strdup(tool_calls_json);
     if (tool_call_id) snprintf(m->tool_call_id, sizeof(m->tool_call_id), "%s", tool_call_id);
     c->last_active = time(NULL);
@@ -1351,6 +1374,9 @@ static int ai_configure(const kerchunk_config_t *cfg)
         v = kerchunk_config_get(cfg, "ai", "temperature");
         if (v) g_temperature = atof(v);
     }
+
+    v = kerchunk_config_get(cfg, "ai", "disable_reasoning");
+    g_disable_reasoning = (v && strcmp(v, "on") == 0);
 
     v = kerchunk_config_get(cfg, "ai", "system_prompt_file");
     if (v) snprintf(g_prompt_path, sizeof(g_prompt_path), "%s", v);
