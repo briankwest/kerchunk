@@ -42,7 +42,12 @@
 #define MAX_RESP_LEN  4096
 #define MAX_CLIENTS   8
 #define EVT_RING_SIZE 64
-#define EVT_LINE_MAX  520
+/* Log broadcast buffer. Must be larger than the max formatted log
+ * line (1024-byte msg + 32-byte timestamp + ~20 bytes of format
+ * overhead) or CLI subscribers will see truncated lines — notably
+ * the TTS normalizer's "TN: ... -> ..." output which can run 600+
+ * chars after normalization. */
+#define EVT_LINE_MAX  1152
 
 /* Core commands — uses kerchunk_cli_cmd_t directly (from kerchunk_module.h) */
 
