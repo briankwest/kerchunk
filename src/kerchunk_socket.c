@@ -527,8 +527,13 @@ static void handle_command(client_slot_t *c, char *line)
         line += 9;
     }
 
-    const char *argv[32];
-    int argc = parse_cmd(line, argv, 32);
+    /* 256 tokens covers any realistic command. The original 32 was
+     * too small for commands like `tts say <long text>` where each
+     * word becomes its own argv slot — anything past ~30 words got
+     * silently dropped, then the receiving handler reassembled a
+     * truncated message. */
+    const char *argv[256];
+    int argc = parse_cmd(line, argv, 256);
     if (argc == 0)
         return;
 
