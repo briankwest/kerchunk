@@ -471,9 +471,13 @@ llm_verify_tls = on            ; verify cert when llm_url is https://
 
 max_tokens = 200               ; keep responses short for voice
 temperature = 0.3              ; low temperature for factual responses
-system_prompt = You are a radio repeater assistant for station WRDP519. \
-                Respond concisely — your output will be spoken over radio. \
-                Keep responses under 3 sentences. Use tools for real-time data.
+
+; System prompt is loaded from a markdown file so personality can be
+; iterated without restarting the daemon. Edited on the fly, re-read on
+; `config reload`. Markdown syntax is just text to the LLM — headers,
+; lists, bold all work as prompt structure.
+system_prompt_file = /etc/kerchunk/system_prompt.md
+
 trigger = wake_phrase           ; wake_phrase | dtmf | always
 wake_phrase = kerchunk          ; wake phrase to listen for
 dtmf_code = 99                 ; DTMF code for *99# activation

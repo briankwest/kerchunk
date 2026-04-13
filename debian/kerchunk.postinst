@@ -35,6 +35,16 @@ case "$1" in
             chmod 0640 /etc/kerchunk/kerchunk.conf
         fi
 
+        # Install default AI system prompt if none exists. The file is
+        # owned by the kerchunk user so the operator (or the web UI)
+        # can edit it in place; mod_ai re-reads it on config reload.
+        if [ ! -f /etc/kerchunk/system_prompt.md ] && \
+           [ -f /etc/kerchunk/system_prompt.md.example ]; then
+            cp /etc/kerchunk/system_prompt.md.example /etc/kerchunk/system_prompt.md
+            chown kerchunk:kerchunk /etc/kerchunk/system_prompt.md
+            chmod 0644 /etc/kerchunk/system_prompt.md
+        fi
+
         # Ensure config directory is writable for users.conf updates from web UI
         chown kerchunk:kerchunk /etc/kerchunk
         chmod 0755 /etc/kerchunk

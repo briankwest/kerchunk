@@ -105,6 +105,13 @@ if test "x$have_nemo" = "xyes"; then
   AC_DEFINE([HAVE_NEMO_NORMALIZE], [1], [Have libnemo_normalize])
 fi
 
+# Optional: libcjson (used by mod_ai to parse OpenAI-compatible LLM responses)
+PKG_CHECK_MODULES([CJSON], [libcjson], [have_cjson=yes], [have_cjson=no])
+AM_CONDITIONAL([HAVE_CJSON], [test "x$have_cjson" = "xyes"])
+if test "x$have_cjson" = "xyes"; then
+  AC_DEFINE([HAVE_CJSON], [1], [Have libcjson])
+fi
+
 # Install paths
 kerchunkmoddir='${prefix}/lib/kerchunk'
 AC_SUBST([kerchunkmoddir])
@@ -122,5 +129,6 @@ AC_MSG_NOTICE([  libpocsag:        $have_libpocsag])
 AC_MSG_NOTICE([  libflex:          $have_libflex])
 AC_MSG_NOTICE([  libwyoming:       $have_libwyoming])
 AC_MSG_NOTICE([  libnemo_normalize: $have_nemo])
+AC_MSG_NOTICE([  libcjson:         $have_cjson])
 AC_MSG_NOTICE([  module dir:       $kerchunkmoddir])
 AC_MSG_NOTICE([])

@@ -287,6 +287,16 @@ modules_mod_poc_la_LDFLAGS       = $(MOD_LDFLAGS)
 modules_mod_poc_la_LIBADD        = $(LIBPOC_LIBS)
 endif
 
+# --- AI module (conditional on libcjson) ---
+
+if HAVE_CJSON
+kerchunkmod_LTLIBRARIES += modules/mod_ai.la
+modules_mod_ai_la_SOURCES        = modules/mod_ai.c
+modules_mod_ai_la_CFLAGS         = $(MOD_CFLAGS) $(CURL_CFLAGS) $(CJSON_CFLAGS)
+modules_mod_ai_la_LDFLAGS        = $(MOD_LDFLAGS)
+modules_mod_ai_la_LIBADD         = $(PLCODE_LIBS) $(CURL_LIBS) $(CJSON_LIBS)
+endif
+
 # ---------- tests ----------
 
 check_PROGRAMS = test_kerchunk test_web_acl
@@ -375,7 +385,7 @@ kerchunkwebadmin_DATA = \
 
 # Config examples
 kerchunkconfdir = $(sysconfdir)/kerchunk
-kerchunkconf_DATA = kerchunk.conf.example users.conf.example
+kerchunkconf_DATA = kerchunk.conf.example users.conf.example system_prompt.md.example
 
 # Systemd service
 systemddir = $(prefix)/lib/systemd/system
@@ -411,6 +421,7 @@ EXTRA_DIST = \
 	m4/ax_check_compile_flag.m4 \
 	kerchunk.conf.example \
 	users.conf.example \
+	system_prompt.md.example \
 	kerchunkd.service \
 	README.md \
 	ARCHITECTURE.md \

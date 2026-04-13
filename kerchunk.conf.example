@@ -664,3 +664,69 @@ group = 2
 ; poc_to_rf = on                 ; Forward PoC client audio to RF TX
 ; priority = 3                   ; TX queue priority for PoC→RF audio
 ; virtual_user_id = 999          ; Sender ID for RF audio in PoC network
+
+; ----------------------------------------------------------------------------
+; AI voice assistant (mod_ai) — LLM-driven on-air assistant
+;
+; Callers key up, speak a question (optionally prefixed with a wake
+; phrase), and mod_ai runs the transcript through an OpenAI-compatible
+; /v1/chat/completions endpoint (Ollama, llama.cpp, vLLM, etc). The LLM
+; can call structured tools (get_weather, get_time, get_stats, …) and
+; the final response is spoken over the air via mod_tts.
+;
+; All LLM work happens on a dedicated worker thread — never blocks
+; the audio thread or main loop.
+;
+; Requires: mod_asr (transcripts), mod_tts (voice output), libcurl,
+;           libcjson, reachable OpenAI-compatible endpoint.
+; CLI: ai status, ai tools, ai history, ai ask <text>, ai reset
+; DTMF: *99# arms the AI for the next transmission from that caller
+; ----------------------------------------------------------------------------
+[ai]
+; enabled = on                    ; on | off — master switch
+; llm_url = http://192.168.86.54:11434/v1/chat/completions
+; llm_model = qwen3.5:0.8b        ; model tag (required for Ollama)
+; llm_api_key =                   ; optional Bearer token for auth proxies
+; llm_timeout_s = 30              ; HTTP timeout for inference
+; llm_verify_tls = on             ; verify cert when llm_url is https://
+
+; System prompt is read from a separate markdown file so personality
+; can be iterated without restarting the daemon. Re-read on config
+; reload. Contents are sent verbatim as the LLM "system" message.
+; system_prompt_file = /etc/kerchunk/system_prompt.md
+
+; max_tokens = 200                ; keep responses short for voice
+; temperature = 0.3               ; low temp for factual answers
+
+; Trigger mode — what causes a transcript to go to the AI:
+;   wake_phrase  (default) First word(s) of transcript match wake_phrase
+;   dtmf                    Caller must dial *99# before transmitting
+;   always                  Every transcript goes to AI (dedicated AI channel)
+; trigger = wake_phrase
+; wake_phrase = kerchunk
+; dtmf_code = 99
+
+; conversation_timeout = 5m       ; idle → conversation resets
+; max_tool_rounds = 3             ; max tool_call → response loops per request
+
+; UX during inference — voice gap on RF feels dead. If the LLM call
+; exceeds standby_delay_ms the worker queues a standby cue so the
+; channel has some audio.
+;   sound  plays standby_sound.wav
+;   tts    speaks standby_text via tts_speak
+;   none   silence
+; standby_delay_ms = 2000
+; standby_cue = sound
+; standby_sound = system/standby
+; standby_text = stand by
+
+; Fallback prompts (short pre-recorded WAVs in sounds_dir) for when the
+; LLM is unreachable / errors / times out.
+; sound_offline = system/ai_offline
+; sound_error   = system/ai_error
+; sound_timeout = system/ai_timeout
+
+; Persistent-failure circuit breaker: after N consecutive failures,
+; disable AI for disable_after_fail_s seconds.
+; max_consecutive_failures = 5
+; disable_after_fail_s = 300
