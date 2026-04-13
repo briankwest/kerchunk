@@ -1240,51 +1240,57 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
 
     int caller_id = g_current_caller_id;
     const char *to_send = transcript;
+    int trigger_hit = 0;
 
+    /* 1) Always mode — every transcript goes through */
     if (g_trigger == AI_TRIGGER_ALWAYS) {
-        /* every transcript goes through */
-    } else if (g_dtmf_armed) {
-        /* *99# was dialed — consume the arm regardless of caller.
-         * If the arm was caller-specific (both non-zero) enforce that
-         * only the arming caller's next TX triggers the AI; otherwise
-         * any transcript (including anonymous) consumes the arm. */
-        if (g_dtmf_armed_caller != 0 && caller_id != 0 &&
-            g_dtmf_armed_caller != caller_id) {
-            /* Different caller while we were armed — ignore their TX,
-             * keep the arm for the original caller */
-        } else {
+        trigger_hit = 1;
+    }
+
+    /* 2) DTMF *99# arm — consume if it matches this caller. A
+     * caller-specific arm (armed_caller != 0) only fires for that
+     * caller's next TX; an anonymous arm (armed_caller == 0) consumes
+     * on the next TX from anyone. Mismatched callers leave the arm
+     * in place and fall through to the wake-phrase check. */
+    if (!trigger_hit && g_dtmf_armed) {
+        int match = (g_dtmf_armed_caller == 0) ||
+                    (caller_id != 0 && g_dtmf_armed_caller == caller_id);
+        if (match) {
             g_dtmf_armed = 0;
             g_dtmf_armed_caller = 0;
-            goto process;
+            trigger_hit = 1;
         }
-    } else {
-        /* Wake phrase check */
+    }
+
+    /* 3) Wake phrase + conversation continuation */
+    if (!trigger_hit) {
         const char *after = strip_wake_phrase(transcript);
         if (after && *after) {
             to_send = after;
+            trigger_hit = 1;
         } else if (after && !*after) {
-            /* Wake phrase with nothing after — acknowledge but nothing to do */
+            /* Wake phrase with nothing after — acknowledge, nothing to do */
             if (g_core->tts_speak)
                 g_core->tts_speak("Ready.", KERCHUNK_PRI_NORMAL);
             return;
         } else {
-            /* No wake phrase. Check for active conversation. */
+            /* No wake phrase — pass through only if this caller has
+             * an active conversation from a prior turn. */
             pthread_mutex_lock(&g_convs_mutex);
             conv_cleanup_expired();
-            ai_conversation_t *existing = NULL;
             for (int i = 0; i < AI_MAX_CONVERSATIONS; i++) {
                 if (g_convs[i].caller_id == caller_id &&
                     g_convs[i].count > 0) {
-                    existing = &g_convs[i];
+                    trigger_hit = 1;
                     break;
                 }
             }
             pthread_mutex_unlock(&g_convs_mutex);
-            if (!existing) return;  /* not for us */
         }
     }
 
-process:
+    if (!trigger_hit) return;  /* not for us */
+
     enqueue_request(to_send, caller_id);
 }
 
