@@ -6,7 +6,7 @@
 
 A custom repeater controller for the Retevis RT97L repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 or AIOC (All-In-One-Cable) USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode). Supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) operation.
 
-**29 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs / Wyoming), ASR (Wyoming speech recognition), parrot/echo, CDR, statistics, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry, PoC radio bridge.
+**30 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs / Wyoming), ASR (Wyoming speech recognition), **AI voice assistant (OpenAI-compatible LLM with tool calling)**, parrot/echo, CDR, statistics, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry, PoC radio bridge.
 
 **288 tests** — unit + integration test coverage with mock core vtable.
 
@@ -24,7 +24,7 @@ A custom repeater controller for the Retevis RT97L repeater, built in C11 for Ra
 
 **Heartbeat event** — 5-second keepalive for SSE/WebSocket clients.
 
-**19 core CLI commands, 25+ module CLI commands** with full inline help and tab completion.
+**19 core CLI commands, 30+ module CLI commands** (including `ai`, `ai tools`, `ai history`, `ai ask <text>`, `ai reset`) with full inline help and tab completion.
 
 ## Table of Contents
 
@@ -61,13 +61,17 @@ A custom repeater controller for the Retevis RT97L repeater, built in C11 for Ra
   - [mod_otp — TOTP Authentication](#mod_otp--totp-authentication)
   - [mod_parrot — Echo/Parrot](#mod_parrot--echoparrot)
   - [mod_cdr — Call Detail Records](#mod_cdr--call-detail-records)
-  - [mod_tts — Text-to-Speech (ElevenLabs)](#mod_tts--text-to-speech-elevenlabs)
+  - [mod_tts — Text-to-Speech (ElevenLabs / Wyoming)](#mod_tts--text-to-speech-elevenlabs--wyoming)
+  - [mod_asr — Automatic Speech Recognition](#mod_asr--automatic-speech-recognition)
+  - [mod_ai — AI Voice Assistant](#mod_ai--ai-voice-assistant)
   - [mod_nws — NWS Weather Alert Monitor](#mod_nws--nws-weather-alert-monitor)
   - [mod_stats — Statistics and Metrics](#mod_stats--statistics-and-metrics)
   - [mod_web — Web Dashboard](#mod_web--web-dashboard)
   - [mod_webhook — Webhook Notifications](#mod_webhook--webhook-notifications)
   - [mod_scrambler — Voice Scrambler (Part 90 only)](#mod_scrambler--voice-scrambler-part-90-only)
   - [mod_sdr — SDR Channel Monitor](#mod_sdr--sdr-channel-monitor)
+  - [mod_freeswitch — FreeSWITCH AutoPatch](#mod_freeswitch--freeswitch-autopatch)
+  - [mod_poc — PoC Radio Bridge](#mod_poc--poc-radio-bridge)
   - [mod_gpio — GPIO Relay Control](#mod_gpio--gpio-relay-control)
   - [mod_logger — Event Logger](#mod_logger--event-logger)
   - [mod_pocsag — POCSAG Paging](#mod_pocsag--pocsag-paging)
@@ -115,6 +119,8 @@ kerchunkd supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (
 | POCSAG paging | Y | Y | Y | Brief data transmission |
 | FLEX paging | Y | Y | Y | Brief data transmission |
 | APRS position/telemetry | Y | Y | Y | Brief data transmission, COR gated |
+| **Speech recognition (ASR)** | Y | Y | Y | Wyoming ASR — transcribes inbound RF, no outbound TX |
+| **AI voice assistant** | Y | Y | Y | LLM + tool calling; user keys up with wake phrase or `*99#`, AI responds via TTS |
 
 ### Regulatory Notes
 
@@ -202,7 +208,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  └──────────┘  └──────────┘  └──────────┘                     │
 │                                                               │
 │  ┌──────────────────────────────────────────────────────────┐ │
-│  │                  Loaded Modules (27)                     │ │
+│  │                  Loaded Modules (30)                     │ │
 │  │                                                          │ │
 │  │  mod_repeater   RX state machine (IDLE/RECV/TAIL/HANG)   │ │
 │  │  mod_cwid       Morse CW ID + voice ID via TTS           │ │
@@ -222,6 +228,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_cdr        Call detail records (daily CSV)          │ │
 │  │  mod_tts        Text-to-speech (ElevenLabs / Wyoming)    │ │
 │  │  mod_asr        Speech recognition (Wyoming ASR)         │ │
+│  │  mod_ai         AI voice assistant (LLM + tool calling)  │ │
 │  │  mod_poc        PoC radio server bridge (libpoc)         │ │
 │  │  mod_nws        NWS weather alert monitor                │ │
 │  │  mod_stats      Statistics, metrics, persistence         │ │
@@ -452,14 +459,14 @@ cd kerchunk
 autoreconf -fi
 ./configure
 make
-make check       # Run test suite (234 tests)
+make check       # Run test suite (288 tests)
 sudo make install
 ```
 
 Build outputs:
 - `kerchunkd` — the daemon
 - `kerchunk` — interactive CLI
-- `modules/*.so` — 29 loadable modules
+- `modules/*.so` — up to 30 loadable modules (optional ones skipped if deps are missing)
 - `test_kerchunk` — test suite
 
 ### Linux Setup
@@ -605,8 +612,13 @@ kerchunk> sim tx sounds/test.wav   # Queue a WAV file
 | `*97#` | Toggle scrambler on/off | mod_scrambler |
 | `*970#` | Disable scrambler | mod_scrambler |
 | `*971#`-`*978#` | Set scrambler code 1-8 | mod_scrambler |
-| `*98#` | Force immediate APRS beacon | mod_aprs |
-| `*980#` | APRS status report | mod_aprs |
+| `*0<digits>#` | AutoPatch dial | mod_freeswitch |
+| `*0#` | AutoPatch hangup | mod_freeswitch |
+| `*99#` | Arm AI voice assistant for next TX | mod_ai |
+
+> **Note:** APRS beacon and status (`aprs beacon` / `aprs status`) are CLI-only commands; there is no dialable DTMF pattern for them.
+>
+> **Overrides:** Every pattern above can be remapped via `[dtmf] <config_key> = <pattern>` in `kerchunk.conf`. The `config_key` is the third argument each module passes to `dtmf_register` (e.g., `scrambler_toggle`, `autopatch`, `dtmf_ai`). See the `[dtmf]` section in `kerchunk.conf.example` for the full list.
 
 ## Modules
 
@@ -815,6 +827,54 @@ Transcribes all inbound RF transmissions via a Wyoming ASR server ([libwyoming](
 | `min_duration` | duration | `500` | Min duration to transcribe (skip kerchunks) |
 
 Config section: `[asr]`
+
+### mod_ai — AI Voice Assistant
+
+LLM-driven on-air assistant. Transcripts from mod_asr go through an OpenAI-compatible `/v1/chat/completions` endpoint (Ollama, llama.cpp, vLLM, LM Studio, or any hosted OpenAI-API-compatible backend), the LLM calls structured tools to fetch real-time data, and the final response is spoken via mod_tts. All work runs on a dedicated worker thread — the audio path and main loop are never blocked.
+
+**Trigger modes:**
+- `wake_phrase` (default) — transcripts prefixed with `[ai] wake_phrase` (default `kerchunk`) go to the AI. Rest is ignored.
+- `dtmf` — caller dials `*99#` before transmitting. One-shot; consumed after the next TX.
+- `always` — every transcript goes through (dedicated AI channel).
+
+**Multi-turn conversations** — after a response, the same caller can follow up within `conversation_timeout` (default 5 min) without repeating the wake phrase.
+
+**Built-in tools** (10): `get_time`, `get_weather`, `get_forecast`, `get_repeater_status`, `get_stats`, `get_nws_alerts`, `get_user_info`, `get_asr_history`, `set_emergency` (admin), `send_page` (admin). CLI-backed tools dispatch via `kerchunk_dispatch_command`. Admin-gated tools check `kerchunk_core_get_otp_elevated` or `user.access >= KERCHUNK_ACCESS_ADMIN`.
+
+**System prompt** is loaded from a standalone markdown file (default `/etc/kerchunk/system_prompt.md`) so personality can be iterated without restarting the daemon — re-read on `config reload`. A sensible default is shipped as `system_prompt.md.example` and seeded on first install.
+
+**Failure modes** handled cleanly: connect refused, HTTP errors, auth failures, model-not-found, timeouts, empty responses. A circuit breaker disables the AI after `max_consecutive_failures` (default 5) for `disable_after_fail_s` (default 300s).
+
+**Reasoning models** (qwen3.x, deepseek-r1) are supported via `disable_reasoning = on` (default), which passes `"think": false` to Ollama — skips chain-of-thought so the full token budget becomes content. Harmless on non-reasoning models.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | on/off | `off` | Master switch |
+| `llm_url` | string | | OpenAI-compatible endpoint, e.g. `http://ollama.lan:11434/v1/chat/completions` |
+| `llm_model` | string | | Model tag (required for Ollama) |
+| `llm_api_key` | string | | Optional Bearer token for auth proxies |
+| `llm_timeout_s` | int | `30` | HTTP timeout for inference |
+| `llm_verify_tls` | on/off | `on` | Verify cert when `llm_url` is `https://` |
+| `system_prompt_file` | path | `/etc/kerchunk/system_prompt.md` | Markdown file read verbatim as the system prompt |
+| `max_tokens` | int | `500` | Response budget. Reasoning models may need 1000-1500 |
+| `temperature` | float | `0.3` | LLM sampling temperature |
+| `disable_reasoning` | on/off | `on` | Pass `think:false` — skips chain-of-thought in qwen3/r1 |
+| `trigger` | string | `wake_phrase` | `wake_phrase` \| `dtmf` \| `always` |
+| `wake_phrase` | string | `kerchunk` | First word(s) that arm the AI |
+| `conversation_timeout` | duration | `5m` | Idle before conversation resets |
+| `max_tool_rounds` | int | `3` | Max tool_call → response loops per request |
+| `standby_delay_ms` | ms | `2000` | Queue a standby cue if the LLM takes longer than this |
+| `standby_cue` | string | `sound` | `sound` \| `tts` \| `none` |
+| `standby_sound` | path | `system/standby` | WAV played when `standby_cue = sound` |
+| `sound_offline` | path | `system/ai_offline` | Fallback when LLM unreachable |
+| `sound_error` | path | `system/ai_error` | Fallback on HTTP error |
+| `sound_timeout` | path | `system/ai_timeout` | Fallback on HTTP timeout |
+| `max_consecutive_failures` | int | `5` | Circuit breaker threshold |
+| `disable_after_fail_s` | s | `300` | Circuit breaker cooldown |
+
+Config section: `[ai]`. Dependencies: `libcurl`, `libcjson`, mod_asr, mod_tts, a reachable OpenAI-compatible endpoint. DTMF: `*99#` arms the AI (offset 18, override via `[dtmf] dtmf_ai = <pattern>`). CLI: `ai`, `ai tools`, `ai history`, `ai ask <text>`, `ai reset`.
+
+**Model choice matters.** Models below ~7B parameters can struggle with reliable tool call emission. Plan doc (`PLAN-MOD-AI.md`) recommends `qwen2.5:7b`, `llama3.1:8b`, or `mistral-nemo` on Ollama. qwen3.5:0.8b works but lives at the edge of the capability cliff.
 
 ### mod_poc — PoC Radio Bridge
 
@@ -1088,8 +1148,10 @@ The public dashboard (`index.html`) includes a GMRS coverage map. The full cover
 
 | Event | Fired when |
 |-------|-----------|
-| `COR_ASSERT` | Carrier detected |
-| `COR_DROP` | Carrier lost |
+| `COR_ASSERT` | Carrier detected (hardware COR via HID) |
+| `COR_DROP` | Carrier lost (after `cor_drop_hold` debounce) |
+| `VCOR_ASSERT` | Virtual carrier — web PTT / PoC / phone keyed up |
+| `VCOR_DROP` | Virtual carrier — network caller released |
 | `PTT_ASSERT` | Transmitter keyed |
 | `PTT_DROP` | Transmitter unkeyed |
 | `STATE_CHANGE` | RX state transition |
@@ -1104,11 +1166,18 @@ The public dashboard (`index.html`) includes a GMRS coverage map. The full cover
 | `DTMF_END` | DTMF digit released |
 | `QUEUE_DRAIN` | TX queue playback started |
 | `QUEUE_COMPLETE` | TX queue empty, tail starts |
+| `QUEUE_PREEMPTED` | Active queue drain interrupted by incoming COR |
 | `RECORDING_SAVED` | Recording WAV saved |
+| `ANNOUNCEMENT` | Module-generated announcement (courtesy, ASR transcript, AI response, CWID, pager) |
 | `CONFIG_RELOAD` | Config file reloaded |
 | `SHUTDOWN` | Daemon shutting down |
+| `HEARTBEAT` | 5-second keepalive for SSE/WebSocket clients |
 | `TICK` | Main loop tick (20ms) |
 | `AUDIO_FRAME` | 20ms audio frame captured |
+
+**Custom events** (`KERCHEVT_CUSTOM + N`) are used by `mod_dtmfcmd` to dispatch DTMF commands to their subscriber modules. See the DTMF table above for the assigned offsets.
+
+**Event dispatch recursion cap** — `kerchevt_fire()` enforces `KERCHEVT_MAX_DEPTH = 16` per-thread to break `fire → handler → fire` cycles. Over the limit, the fire is dropped with a loud error log naming the event type.
 
 ## FCC Compliance
 
@@ -1132,11 +1201,13 @@ The public dashboard (`index.html`) includes a GMRS coverage map. The full cover
 ## Testing
 
 ```bash
-make test    # 234 tests
+make check    # 288 tests across 2 binaries (test_kerchunk + test_web_acl)
 ```
 
-- **Unit tests** (63): event bus, config parser, queue, repeater state events, CW ID encoding, response system
-- **Integration tests** (151): repeater state machine (incl. closed repeater), DTMF dispatch, caller identification, voicemail, timers, user database (incl. username lookup, auto-derive, group TX), time, DSP decoders, recorder, TX encoder, emergency, parrot, CDR, CW ID module, stats (incl. persistence), OTP authentication, voice scrambler (self-inverse, DTMF control, bypass)
+- **Unit tests**: event bus, config parser, queue, repeater state events, CW ID encoding, response system, admin ACL, scheduler, recursion cap
+- **Integration tests**: repeater state machine (including closed repeater), DTMF dispatch, caller identification, voicemail, timers, user database, DSP decoders, recorder, TX encoder, emergency, parrot, CDR, CWID, stats (including persistence), OTP authentication, voice scrambler, FreeSWITCH bridge, admin IP restriction
+
+Tests use a mock core vtable (`test_integ_mock.h`) that records every call for white-box assertions. Module `.c` files are included directly into the integration tests after redefining `KERCHUNK_MODULE_DEFINE`, giving tests access to static globals for full introspection.
 
 ## License
 

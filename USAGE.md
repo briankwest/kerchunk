@@ -14,6 +14,8 @@ A complete guide for radio users and administrators of a kerchunkd-powered repea
   - [Voicemail](#voicemail)
   - [Emergency Mode](#emergency-mode)
   - [OTP Authentication](#otp-authentication)
+  - [AutoPatch (FreeSWITCH)](#autopatch-freeswitch)
+  - [AI Voice Assistant](#ai-voice-assistant)
   - [What You Will Hear](#what-you-will-hear)
 - [Part 2: For Administrators](#part-2-for-administrators)
   - [Prerequisites](#prerequisites)
@@ -47,8 +49,9 @@ kerchunkd is the software that controls this repeater. Compared to a basic repea
 - **Audio echo test** -- hear what your signal sounds like
 - **Emergency mode** -- extended transmit for emergencies
 - **Two-factor authentication** -- secure access for privileged functions
+- **AI voice assistant** (optional) -- ask questions over the air and get a spoken response
 
-All of these features are accessed by pressing DTMF keys on your radio while transmitting.
+Most of these features are accessed by pressing DTMF keys on your radio while transmitting. The AI voice assistant is triggered either by a wake phrase in your speech or by dialing `*99#`.
 
 ### Programming Your Radio
 
@@ -134,13 +137,12 @@ Here is the complete list of DTMF commands:
 | `*41`_pin_`#` | Turn on a GPIO device (e.g., `*4117#` turns on pin 17) |
 | `*40`_pin_`#` | Turn off a GPIO device (e.g., `*4017#` turns off pin 17) |
 | `*68`_code_`#` | OTP authentication (e.g., `*68123456#` for code 123456) |
-| `*97#` | Toggle voice scrambler on/off |
+| `*97#` | Toggle voice scrambler on/off (Part 90 only) |
 | `*970#` | Disable voice scrambler |
 | `*971#`-`*978#` | Set scrambler code 1-8 |
 | `*0`_digits_`#` | AutoPatch -- dial a phone number (e.g., `*05551234567#`) |
 | `*0#` | AutoPatch -- hang up current call |
-| `*98#` | Force immediate APRS beacon |
-| `*980#` | APRS status report |
+| `*99#` | Arm AI voice assistant for your next transmission (no wake phrase needed on that one TX) |
 
 ### Weather and Time
 
@@ -235,6 +237,57 @@ AutoPatch lets you make and receive phone calls through the repeater using a Fre
 
 **Access control:** The administrator may restrict autopatch to authenticated users only (`admin_only = true`), require a dial prefix, or limit dialing to a whitelist of allowed numbers.
 
+### AI Voice Assistant
+
+Some repeaters run an optional on-air AI assistant. You can ask it questions over the radio and it will answer with a spoken response. The assistant is tied to real-time tools — it can give you accurate weather, forecasts, time, repeater activity, NWS alerts, and more by calling those tools directly rather than guessing.
+
+**Availability:** Only works if the administrator has enabled `mod_ai`, loaded a speech-recognition (ASR) backend, and configured a language model endpoint. If the assistant is not configured on this repeater, your question will simply be ignored.
+
+**Two ways to trigger the assistant:**
+
+**1. Wake phrase (the usual way).** Start your transmission with the wake phrase the administrator configured (default: `kerchunk`), then say your question.
+
+1. Key up
+2. Say `"kerchunk, what's the weather?"`
+3. Release PTT
+4. Within a second or two the assistant speaks its answer over the air
+
+If you don't say the wake phrase, your transmission is ignored by the AI and passes through the repeater normally.
+
+**2. DTMF arm (`*99#`).** If you don't want to say the wake phrase — or you're on a channel with a different configured phrase — you can dial `*99#` once, then transmit your question normally on your next key-up:
+
+1. Key up, dial `*99#`, release PTT. You'll hear "Assistant ready."
+2. Key up again and say `"what's the weather?"` (no wake phrase this time)
+3. Release PTT
+4. The assistant responds
+
+The `*99#` arm is **one-shot** — it's consumed by your very next transmission, after which the assistant goes back to wake-phrase mode.
+
+**Follow-up questions.** After the assistant answers, it remembers the conversation for about 5 minutes. During that window the same caller can ask follow-up questions **without the wake phrase**:
+
+```
+You:  "kerchunk, what's the weather?"
+  AI: "Currently overcast, 72 degrees, wind from the south at 8."
+You:  "and the forecast?"                    [same caller, no wake phrase]
+  AI: "Today's high is 86, low of 66, no rain expected."
+You:  "what time is it?"                     [conversation still alive]
+  AI: "Eleven forty-two A.M. central."
+```
+
+If you're silent for 5 minutes the conversation expires and the next transmission needs the wake phrase again.
+
+**Voice rules.** The assistant is configured to:
+- Keep responses under three sentences (to leave the channel clear for others)
+- Speak in plain prose — no asterisks, bullets, or markdown
+- Read numbers naturally ("seventy two degrees" not "72 degrees")
+- Say "I don't have that information" rather than guess
+
+**Privileged commands.** Some tools (emergency mode, pager send, arbitrary control commands) require the caller to be **admin-authenticated** — either through OTP (`*68<code>#`) or a user account with admin access level. If you ask the assistant to do something administrative without authentication, it refuses politely.
+
+**What the assistant cannot do:** it's not a general-purpose chat bot. It's optimized for repeater operation questions and the tools it has access to. Asking it to write poetry, tell jokes, or discuss philosophy will get you short "I don't have that information" responses.
+
+**Inference takes a moment.** Small, local language models are fast (often under a second); larger models or remote endpoints may take 1–3 seconds. If the backend takes too long, the repeater plays a brief "stand by" cue so the channel doesn't feel dead.
+
 ### What You Will Hear
 
 The repeater produces several sounds you should be aware of:
@@ -285,15 +338,15 @@ git clone https://github.com/briankwest/kerchunk.git
 cd kerchunk
 autoreconf -fi
 ./configure
-make            # Builds daemon, CLI, and all 27 modules
+make            # Builds daemon, CLI, and all 30 modules (optional modules skipped if deps missing)
 make check      # Runs the test suite (all must pass)
 ```
 
 Build outputs:
 - `kerchunkd` -- the daemon
 - `kerchunk` -- the CLI tool
-- `modules/*.so` -- 27 loadable modules
-- `test_kerchunk` -- test binary
+- `modules/*.so` -- up to 30 loadable modules (subject to which optional libraries are installed)
+- `test_kerchunk` -- test binary (288 tests)
 
 ### Linux Setup
 
@@ -393,12 +446,15 @@ The recommended module load order is:
 ```
 mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,
 mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,
-mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_nws,mod_stats,
-mod_web,mod_webhook,mod_scrambler,mod_sdr,mod_freeswitch,
-mod_pocsag,mod_flex,mod_aprs
+mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_asr,mod_ai,
+mod_nws,mod_stats,mod_web,mod_webhook,mod_scrambler,mod_sdr,
+mod_freeswitch,mod_pocsag,mod_flex,mod_aprs,mod_poc
 ```
 
-Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert announcements.
+Order matters for dependencies:
+- `mod_tts` before `mod_nws` — TTS must be available for weather alert announcements
+- `mod_tts` and `mod_asr` before `mod_ai` — the AI consumes ASR transcripts and speaks via TTS
+- `mod_dtmfcmd` before any module that calls `core->dtmf_register` (voicemail, gpio, weather, time, emergency, parrot, nws, otp, scrambler, freeswitch, ai)
 
 #### `[audio]` -- Audio Device
 
@@ -498,15 +554,82 @@ Load `mod_tts` before `mod_nws` so text-to-speech is available for weather alert
 |-----|---------|-------------|
 | `timeout` | `1800000` | Auto-deactivate timeout (30 min), in ms |
 
-#### `[tts]` -- Text-to-Speech (ElevenLabs)
+#### `[tts]` -- Text-to-Speech (ElevenLabs / Wyoming)
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `api_key` | (none) | ElevenLabs API key (required) |
+| `engine` | `elevenlabs` | `elevenlabs` (cloud API) or `wyoming` (local/network Piper) |
+| `api_key` | (none) | ElevenLabs API key (required when engine is `elevenlabs`) |
 | `voice_id` | `21m00Tcm4TlvDq8ikWAM` | ElevenLabs voice ID |
 | `model` | `eleven_turbo_v2_5` | ElevenLabs model |
+| `wyoming_host` | `127.0.0.1` | Wyoming server host |
+| `wyoming_port` | `10200` | Wyoming server port |
+| `wyoming_voice` | (none) | Voice name (empty = server default) |
+| `normalize_far_dir` | (none) | Path to NeMo FAR grammars for text normalization (optional) |
 
-TTS responses are cached as WAV files. Use `tts cache-clear` via the CLI to flush the cache.
+TTS responses are cached as WAV files keyed by text hash. Use `tts cache-clear` via the CLI to flush the cache.
+
+#### `[asr]` -- Automatic Speech Recognition
+
+Transcribes inbound RF transmissions via a Wyoming ASR server (wyoming-asr-server with Sherpa-ONNX, or wyoming-faster-whisper). Transcripts are logged and available via `asr history`, and feed the AI assistant when `mod_ai` is loaded.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `off` | Enable ASR |
+| `mode` | `batch` | `batch` (Whisper, accurate, ~1s after COR drop) or `streaming` (Zipformer, instant on COR drop) |
+| `wyoming_host` | `127.0.0.1` | Wyoming ASR server host |
+| `wyoming_port` | `10200` | Wyoming ASR server port |
+| `language` | `en` | Language code |
+| `max_capture` | `30` | Max seconds to capture per transmission |
+| `min_duration` | `500` | Minimum duration (ms) to transcribe — shorter is skipped (kerchunk filter) |
+
+#### `[ai]` -- AI Voice Assistant
+
+LLM-driven assistant. User keys up, speaks a question (optionally prefixed with a wake phrase, or armed by `*99#`), and the AI runs the transcript through an OpenAI-compatible endpoint, calls tools for real-time data, and speaks the response via TTS. Requires `mod_asr`, `mod_tts`, libcurl, libcjson, and a reachable OpenAI-compatible backend.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `off` | Master switch |
+| `llm_url` | (none) | OpenAI-compatible endpoint, e.g. `http://ollama.lan:11434/v1/chat/completions` |
+| `llm_model` | (none) | Model tag (required for Ollama) — see model recommendations below |
+| `llm_api_key` | (none) | Optional Bearer token for auth proxies |
+| `llm_timeout_s` | `30` | HTTP timeout for inference |
+| `llm_verify_tls` | `on` | Verify TLS cert when `llm_url` is `https://` |
+| `system_prompt_file` | `/etc/kerchunk/system_prompt.md` | Markdown file, contents sent verbatim as the LLM system message. Re-read on config reload |
+| `max_tokens` | `500` | Response budget. Reasoning models need 1000-1500 |
+| `temperature` | `0.3` | LLM sampling temperature |
+| `disable_reasoning` | `on` | Send `think:false` to Ollama — skips chain-of-thought so the full budget is content |
+| `trigger` | `wake_phrase` | `wake_phrase` \| `dtmf` \| `always` |
+| `wake_phrase` | `kerchunk` | First word(s) that arm the AI |
+| `conversation_timeout` | `5m` | Idle before conversation resets |
+| `max_tool_rounds` | `3` | Max tool_call → response loops per request |
+| `standby_delay_ms` | `2000` | Queue a standby cue if the LLM takes longer than this |
+| `standby_cue` | `sound` | `sound` \| `tts` \| `none` |
+| `standby_sound` | `system/standby` | WAV played when `standby_cue = sound` |
+| `sound_offline` | `system/ai_offline` | Fallback when LLM unreachable |
+| `sound_error` | `system/ai_error` | Fallback on HTTP error |
+| `sound_timeout` | `system/ai_timeout` | Fallback on HTTP timeout |
+| `max_consecutive_failures` | `5` | Circuit breaker threshold |
+| `disable_after_fail_s` | `300` | Circuit breaker cooldown in seconds |
+
+**System prompt file.** The daemon seeds `/etc/kerchunk/system_prompt.md` from `system_prompt.md.example` on first install. Edit in place; `mod_ai` re-reads it on `config reload`. Markdown is sent verbatim to the LLM (headers, lists, bold all work as prompt structure). Tailor the persona for your repeater and users.
+
+**Model recommendations.** The LLM must support OpenAI-style function calling. On Ollama:
+
+| Model | Tag | VRAM (Q4) | Tool calling | Notes |
+|---|---|---|---|---|
+| Llama 3.1 8B | `llama3.1:8b` | ~5 GB | Excellent | Best general-purpose |
+| Qwen 2.5 7B | `qwen2.5:7b` | ~5 GB | Excellent | Strong multilingual |
+| Qwen 2.5 14B | `qwen2.5:14b` | ~9 GB | Excellent | Recommended if GPU has the VRAM |
+| Mistral Nemo 12B | `mistral-nemo` | ~7 GB | Excellent | Long-context, reliable tools |
+
+Avoid models smaller than ~7B for production — they can emit structurally-valid tool calls but struggle to consume tool results reliably.
+
+**Built-in tools** (10): `get_time`, `get_weather`, `get_forecast`, `get_repeater_status`, `get_stats`, `get_nws_alerts`, `get_user_info`, `get_asr_history`, `set_emergency` (admin), `send_page` (admin). Admin-gated tools refuse for un-authenticated callers.
+
+**DTMF arm.** `*99#` arms the AI for the caller's next transmission. Override via `[dtmf] dtmf_ai = <pattern>`.
+
+**CLI:** `ai` (status), `ai tools` (list registered tools), `ai history` (recent Q/A), `ai ask <text>` (manual trigger bypassing wake phrase), `ai reset` (clear all conversation state).
 
 #### `[otp]` -- OTP Authentication
 
@@ -957,6 +1080,12 @@ kerchunk> otp                      # OTP session status
 kerchunk> voicemail status         # Voicemail status
 kerchunk> cwid now                 # Send CW ID immediately
 kerchunk> dtmfcmd                  # Show DTMF command table
+kerchunk> asr history              # Recent speech-to-text transcripts
+kerchunk> ai                       # AI assistant status, LLM endpoint, counters
+kerchunk> ai tools                 # List registered AI tools
+kerchunk> ai history               # Recent AI queries and responses
+kerchunk> ai ask what time is it   # Manually trigger AI (bypasses wake phrase)
+kerchunk> ai reset                 # Clear all AI conversation state
 kerchunk> pocsag send 1234 "Test"  # Send POCSAG page
 kerchunk> flex send 1234 "Test"    # Send FLEX page
 kerchunk> aprs beacon              # Force APRS beacon
