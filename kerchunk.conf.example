@@ -709,7 +709,9 @@ group = 2
 ;   as "skip chain-of-thought, put everything in content". Frees the
 ;   entire token budget for the actual answer. Harmless on non-
 ;   reasoning models (they treat it as ordinary text).
-; disable_reasoning = off
+;   Default: on — voice-over-radio never benefits from chain-of-thought
+;   and reasoning models otherwise blow the token budget on thinking.
+; disable_reasoning = on
 
 ; Trigger mode — what causes a transcript to go to the AI:
 ;   wake_phrase  (default) First word(s) of transcript match wake_phrase
