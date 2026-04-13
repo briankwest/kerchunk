@@ -110,8 +110,10 @@ static char *g_system_prompt;            /* heap, loaded from file */
 /* Disable chain-of-thought "reasoning" in models that support it
  * (qwen3.x family). Appends "/no_think" to each user message so all
  * tokens go to content instead of a scratchpad the user never hears.
- * Harmless on non-reasoning models (they treat it as text). */
-static int   g_disable_reasoning;
+ * Harmless on non-reasoning models (they treat it as text).
+ * Default ON — voice-over-radio never benefits from chain-of-thought,
+ * and reasoning models otherwise blow the token budget on thinking. */
+static int   g_disable_reasoning = 1;
 
 typedef enum {
     AI_TRIGGER_WAKE_PHRASE,
@@ -303,24 +305,7 @@ static void conv_append(ai_conversation_t *c, const char *role,
     ai_message_t *m = &c->messages[c->count++];
     memset(m, 0, sizeof(*m));
     snprintf(m->role, sizeof(m->role), "%s", role);
-    if (content) {
-        /* Append " /no_think" to user messages when reasoning is
-         * disabled. qwen3.x interprets this marker to skip chain-of-
-         * thought and put everything into content. Non-reasoning
-         * models treat it as ordinary trailing text and ignore it. */
-        if (g_disable_reasoning && role && strcmp(role, "user") == 0) {
-            size_t need = strlen(content) + 11;  /* " /no_think" + NUL */
-            char *buf = malloc(need);
-            if (buf) {
-                snprintf(buf, need, "%s /no_think", content);
-                m->content = buf;
-            } else {
-                m->content = strdup(content);
-            }
-        } else {
-            m->content = strdup(content);
-        }
-    }
+    if (content) m->content = strdup(content);
     if (tool_calls_json) m->tool_calls_json = strdup(tool_calls_json);
     if (tool_call_id) snprintf(m->tool_call_id, sizeof(m->tool_call_id), "%s", tool_call_id);
     c->last_active = time(NULL);
@@ -652,9 +637,15 @@ static size_t build_request_json(const ai_conversation_t *c,
 {
     size_t j = 0;
 
+    /* Ollama honors the top-level "think" field on both /api/chat and
+     * /v1/chat/completions — setting it false tells qwen3.x and other
+     * reasoning models to skip chain-of-thought and put every token
+     * into content. OpenAI and non-reasoning backends ignore the
+     * unknown field. */
     j += (size_t)snprintf(buf + j, max - j,
-        "{\"model\":\"%s\",\"max_tokens\":%d,\"temperature\":%.2f,\"messages\":[",
-        g_model, g_max_tokens, g_temperature);
+        "{\"model\":\"%s\",\"max_tokens\":%d,\"temperature\":%.2f%s,\"messages\":[",
+        g_model, g_max_tokens, g_temperature,
+        g_disable_reasoning ? ",\"think\":false" : "");
 
     /* System message */
     {
@@ -1375,8 +1366,9 @@ static int ai_configure(const kerchunk_config_t *cfg)
         if (v) g_temperature = atof(v);
     }
 
+    /* disable_reasoning — default on. Only "off" disables it. */
     v = kerchunk_config_get(cfg, "ai", "disable_reasoning");
-    g_disable_reasoning = (v && strcmp(v, "on") == 0);
+    g_disable_reasoning = (!v || strcmp(v, "off") != 0);
 
     v = kerchunk_config_get(cfg, "ai", "system_prompt_file");
     if (v) snprintf(g_prompt_path, sizeof(g_prompt_path), "%s", v);
