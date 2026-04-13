@@ -1308,16 +1308,71 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
     enqueue_request(to_send, caller_id);
 }
 
-/* DTMF *99# — arm the AI for this caller's next transmission. */
-static void on_dtmf_ai_arm(const kerchevt_t *evt, void *ud)
+/* DTMF *99<arg># — single registration, dispatch on the trailing arg:
+ *
+ *   *99#    (arg empty) → arm AI for this caller's next transmission
+ *   *990#   (arg "0")   → stop AI: cancel arm + clear this caller's
+ *                          conversation. Per-caller stop, not a global
+ *                          kill switch — the [ai] enabled flag is
+ *                          untouched.
+ *
+ * Follows the same single-registration pattern as mod_scrambler's *97#
+ * family. Registering both "99" and "990" would break because
+ * mod_dtmfcmd does first-match dispatch — "99" would intercept every
+ * *990# before the "990" handler got a chance. */
+static void on_dtmf_ai(const kerchevt_t *evt, void *ud)
 {
-    (void)evt; (void)ud;
-    g_dtmf_armed        = 1;
-    g_dtmf_armed_caller = g_current_caller_id;
-    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "AI armed for next TX (caller=%d)", g_dtmf_armed_caller);
-    if (g_core->tts_speak)
-        g_core->tts_speak("Assistant ready.", KERCHUNK_PRI_NORMAL);
+    (void)ud;
+
+    /* Extract the trailing digits (everything after the "99" prefix). */
+    char arg[8] = "";
+    if (evt->custom.data && evt->custom.len > 0) {
+        size_t n = evt->custom.len > 7 ? 7 : evt->custom.len;
+        memcpy(arg, evt->custom.data, n);
+        arg[n] = '\0';
+    }
+
+    if (arg[0] == '\0') {
+        /* *99# — arm */
+        g_dtmf_armed        = 1;
+        g_dtmf_armed_caller = g_current_caller_id;
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "AI armed for next TX (caller=%d)", g_dtmf_armed_caller);
+        if (g_core->tts_speak)
+            g_core->tts_speak("Assistant ready.", KERCHUNK_PRI_NORMAL);
+        return;
+    }
+
+    if (strcmp(arg, "0") == 0) {
+        /* *990# — stop */
+        int caller_id = g_current_caller_id;
+        int had_arm   = g_dtmf_armed;
+        int cleared_convs = 0;
+
+        g_dtmf_armed        = 0;
+        g_dtmf_armed_caller = 0;
+
+        pthread_mutex_lock(&g_convs_mutex);
+        for (int i = 0; i < AI_MAX_CONVERSATIONS; i++) {
+            if (g_convs[i].caller_id == caller_id && g_convs[i].count > 0) {
+                conv_reset(&g_convs[i]);
+                cleared_convs++;
+            }
+        }
+        pthread_mutex_unlock(&g_convs_mutex);
+
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "AI stopped (caller=%d, had_arm=%d, cleared_convs=%d)",
+                    caller_id, had_arm, cleared_convs);
+
+        if (g_core->tts_speak)
+            g_core->tts_speak("Assistant stopped.", KERCHUNK_PRI_NORMAL);
+        return;
+    }
+
+    /* Unknown *99<arg># — ignore with a debug log */
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                "ignoring unknown *99%s# arg", arg);
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -1327,8 +1382,9 @@ static void on_dtmf_ai_arm(const kerchevt_t *evt, void *ud)
 /* Custom-event offsets. Must not collide with other modules:
  *   16 = mod_scrambler (*97#)
  *   17 = mod_freeswitch autopatch (*0<digits>#)
- * 18 is the first free slot. */
-#define DTMF_AI_OFFSET 18   /* KERCHEVT_CUSTOM + 18 — *99# arm */
+ * 18 is mod_ai's slot. The *99# and *990# pair ships as a single
+ * registration — the handler parses the trailing argument. */
+#define DTMF_AI_OFFSET 18   /* KERCHEVT_CUSTOM + 18 — *99 prefix */
 
 static int ai_load(kerchunk_core_t *core)
 {
@@ -1431,18 +1487,21 @@ static int ai_configure(const kerchunk_config_t *cfg)
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
     g_core->unsubscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared);
     g_core->unsubscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + DTMF_AI_OFFSET),
-                         on_dtmf_ai_arm);
+                         on_dtmf_ai);
 
     g_core->subscribe(KERCHEVT_ANNOUNCEMENT, on_announcement, NULL);
     g_core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
     g_core->subscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared, NULL);
 
-    /* Register *99# DTMF command — picked up by mod_dtmfcmd if loaded */
+    /* Register *99<arg># — single pattern, the handler dispatches on
+     * the trailing arg: empty = arm, "0" = stop. Same approach as
+     * mod_scrambler's *97<arg># family. */
     if (g_core->dtmf_register) {
         g_core->dtmf_register("99", DTMF_AI_OFFSET,
-                              "Arm AI assistant for next TX", "dtmf_ai");
+                              "AI assistant (*99# arm, *990# stop)",
+                              "dtmf_ai");
         g_core->subscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + DTMF_AI_OFFSET),
-                           on_dtmf_ai_arm, NULL);
+                           on_dtmf_ai, NULL);
     }
 
     /* Start worker thread if not already running */
@@ -1479,7 +1538,7 @@ static void ai_unload(void)
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
     g_core->unsubscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared);
     g_core->unsubscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + DTMF_AI_OFFSET),
-                         on_dtmf_ai_arm);
+                         on_dtmf_ai);
 
     pthread_mutex_lock(&g_convs_mutex);
     for (int i = 0; i < AI_MAX_CONVERSATIONS; i++)

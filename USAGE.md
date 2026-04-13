@@ -143,6 +143,7 @@ Here is the complete list of DTMF commands:
 | `*0`_digits_`#` | AutoPatch -- dial a phone number (e.g., `*05551234567#`) |
 | `*0#` | AutoPatch -- hang up current call |
 | `*99#` | Arm AI voice assistant for your next transmission (no wake phrase needed on that one TX) |
+| `*990#` | Stop AI -- cancel a pending `*99#` arm and clear your active conversation so the next question needs the wake phrase again |
 
 ### Weather and Time
 
@@ -275,6 +276,8 @@ You:  "what time is it?"                     [conversation still alive]
 ```
 
 If you're silent for 5 minutes the conversation expires and the next transmission needs the wake phrase again.
+
+**Stopping the assistant (`*990#`).** If you want to end your conversation immediately without waiting out the 5-minute timer — or cancel a `*99#` arm you dialed by mistake — key up and dial `*990#`. The assistant says "Assistant stopped" and clears any pending arm plus your active conversation. Your next transmission will need the wake phrase again. This only affects your own session; it does not disable the assistant for other callers.
 
 **Voice rules.** The assistant is configured to:
 - Keep responses under three sentences (to leave the channel clear for others)

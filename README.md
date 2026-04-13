@@ -615,6 +615,7 @@ kerchunk> sim tx sounds/test.wav   # Queue a WAV file
 | `*0<digits>#` | AutoPatch dial | mod_freeswitch |
 | `*0#` | AutoPatch hangup | mod_freeswitch |
 | `*99#` | Arm AI voice assistant for next TX | mod_ai |
+| `*990#` | Stop AI: cancel arm and clear this caller's conversation | mod_ai |
 
 > **Note:** APRS beacon and status (`aprs beacon` / `aprs status`) are CLI-only commands; there is no dialable DTMF pattern for them.
 >

@@ -101,7 +101,7 @@ static const char *custom_event_name(int offset)
     case 15: return "OTP_AUTH";
     case 16: return "SCRAMBLER";
     case 17: return "AUTOPATCH";
-    case 18: return "AI_ARM";
+    case 18: return "AI_CMD";
     default: return NULL;
     }
 }

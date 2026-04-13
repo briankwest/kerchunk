@@ -276,7 +276,7 @@ cor_gate_ms = 200                ; Suppress DTMF during squelch transients (ms, 
 ; otp_auth = 68
 ; scrambler_toggle = 97
 ; autopatch = 0
-; dtmf_ai = 99                   ; Arm AI assistant for next TX
+; dtmf_ai = 99                   ; *99# arm AI for next TX, *990# stop AI
 
 ; ----------------------------------------------------------------------------
 ; GPIO relay control
