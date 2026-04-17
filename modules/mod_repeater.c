@@ -153,6 +153,16 @@ static void tot_expired(void *ud)
     (void)ud;
     g_tot_timer = -1;
 
+    /* start_receiving() skips the TOT timer when emergency is active, but
+     * if emergency was declared AFTER the timer was armed, the timer
+     * still fires. Suppress it here so emergency traffic isn't cut off
+     * by a TOT warning tone. */
+    if (kerchunk_core_get_emergency()) {
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "TOT suppressed — emergency mode active");
+        return;
+    }
+
     g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "TOT fired!");
     g_core->queue_tone(g_tot_warn_hz, 1000, 8000, KERCHUNK_PRI_CRITICAL);
 
@@ -341,6 +351,16 @@ static void repeater_unload(void)
     if (g_hang_timer >= 0)      g_core->timer_cancel(g_hang_timer);
     if (g_tot_timer >= 0)       g_core->timer_cancel(g_tot_timer);
     if (g_debounce_timer >= 0)  g_core->timer_cancel(g_debounce_timer);
+
+    /* Release PTT if we hold it. start_receiving() asserts PTT on COR
+     * and it's normally released on the transition back to IDLE. If
+     * the module is unloaded mid-session, PTT would otherwise remain
+     * asserted — the transmitter would stay keyed (FCC problem). */
+    if (g_software_relay &&
+        (g_state == RPT_RECEIVING ||
+         g_state == RPT_TAIL_WAIT ||
+         g_state == RPT_HANG_WAIT))
+        g_core->release_ptt("repeater");
 }
 
 /* CLI */

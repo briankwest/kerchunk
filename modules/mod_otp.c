@@ -48,6 +48,14 @@ static struct {
     time_t last_failure;
 } g_otp_lockout[32];
 
+/* Replay guard: remember the highest TOTP counter we've already accepted
+ * for each user, so a captured code isn't usable a second time within
+ * its own validity window (or within the +/- skew grace we permit). */
+static struct {
+    int      user_id;
+    uint64_t last_counter;
+} g_otp_last_counter[32];
+
 /* Session table */
 typedef struct {
     int user_id;
@@ -195,7 +203,7 @@ static int totp_generate(const uint8_t *secret, size_t secret_len,
 }
 
 static int totp_verify_at(const char *base32_secret, const char *code_str,
-                           uint64_t now, int skew)
+                           uint64_t now, int skew, uint64_t *matched_counter)
 {
     uint8_t secret[64];
     int secret_len = base32_decode(base32_secret, secret, sizeof(secret));
@@ -206,14 +214,19 @@ static int totp_verify_at(const char *base32_secret, const char *code_str,
     for (int i = -skew; i <= skew; i++) {
         uint64_t t = now + (int64_t)i * 30;
         int expected = totp_generate(secret, (size_t)secret_len, t, 30, 6);
-        if (code == expected) return 1;
+        if (code == expected) {
+            if (matched_counter) *matched_counter = t / 30;
+            return 1;
+        }
     }
     return 0;
 }
 
-static int totp_verify(const char *base32_secret, const char *code_str, int skew)
+static int totp_verify(const char *base32_secret, const char *code_str, int skew,
+                        uint64_t *matched_counter)
 {
-    return totp_verify_at(base32_secret, code_str, (uint64_t)time(NULL), skew);
+    return totp_verify_at(base32_secret, code_str, (uint64_t)time(NULL),
+                           skew, matched_counter);
 }
 
 /* ── Session management ── */
@@ -360,7 +373,42 @@ static void on_otp_command(const kerchevt_t *evt, void *ud)
         }
     }
 
-    if (totp_verify(u->totp_secret, code, g_time_skew)) {
+    uint64_t matched_counter = 0;
+    if (totp_verify(u->totp_secret, code, g_time_skew, &matched_counter)) {
+        /* Replay guard: refuse a code whose counter we've already accepted.
+         * Without this, a captured code is usable again for the rest of its
+         * 30-second window (and up to +/- g_time_skew windows of grace). */
+        int replay_slot = -1;
+        int replay = 0;
+        for (int i = 0; i < 32; i++) {
+            if (g_otp_last_counter[i].user_id == caller_id) {
+                replay_slot = i;
+                if (matched_counter <= g_otp_last_counter[i].last_counter)
+                    replay = 1;
+                break;
+            }
+            if (replay_slot < 0 && g_otp_last_counter[i].user_id == 0)
+                replay_slot = i;
+        }
+        if (replay) {
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "OTP replay rejected for %s (id=%d, counter=%llu)",
+                        u->name, u->id,
+                        (unsigned long long)matched_counter);
+            if (g_core->tts_speak)
+                g_core->tts_speak("Authentication failed.", KERCHUNK_PRI_ELEVATED);
+            g_core->queue_tone(400, 500, 4000, KERCHUNK_PRI_ELEVATED);
+            kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
+                .announcement = { .source = "otp", .description = "replay rejected" } };
+            kerchevt_fire(&ae);
+            return;
+        }
+        /* Record the counter so future replays within the skew window fail. */
+        if (replay_slot >= 0) {
+            g_otp_last_counter[replay_slot].user_id      = caller_id;
+            g_otp_last_counter[replay_slot].last_counter = matched_counter;
+        }
+
         /* Clear lockout on success */
         for (int i = 0; i < 32; i++) {
             if (g_otp_lockout[i].user_id == caller_id) {
@@ -426,6 +474,11 @@ static int otp_load(kerchunk_core_t *core)
     memset(g_sessions, 0, sizeof(g_sessions));
     for (int i = 0; i < MAX_OTP_SESSIONS; i++)
         g_sessions[i].timer_id = -1;
+    /* Reset runtime-only state (lockout counters, replay guard) on load.
+     * Both are in-memory and wouldn't survive a daemon restart anyway —
+     * a module reload is equivalent from the operator's perspective. */
+    memset(g_otp_lockout, 0, sizeof(g_otp_lockout));
+    memset(g_otp_last_counter, 0, sizeof(g_otp_last_counter));
 
     if (core->dtmf_register)
         core->dtmf_register("68", 15, "OTP authenticate", "otp_auth");

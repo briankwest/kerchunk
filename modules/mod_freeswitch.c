@@ -101,6 +101,14 @@ static char g_esl_buf[ESL_BUF_SIZE];
 static int  g_esl_buf_len         = 0;
 static int  g_esl_reconnect_ms    = 1000;
 
+/* Reconnect circuit breaker — bound how many times we'll try to reach
+ * a missing FreeSWITCH before giving up. Without a cap, mod_freeswitch
+ * spent every reconnect window attempting connect() on a host that
+ * doesn't have FreeSWITCH installed. Reset on a successful auth. */
+#define ESL_MAX_RECONNECT_ATTEMPTS 10
+static int  g_esl_consec_failures   = 0;
+static int  g_esl_circuit_open      = 0;  /* 1 = stop trying */
+
 /* UDP audio sockets */
 static int  g_udp_rx_fd           = -1;   /* receive phone audio */
 static int  g_udp_tx_fd           = -1;   /* send radio audio to phone */
@@ -346,6 +354,8 @@ static void esl_handle_event(const char *block)
             g_esl_authed = 1;
             g_esl_connected = 1;
             g_esl_reconnect_ms = 1000;
+            g_esl_consec_failures = 0;   /* reset circuit breaker */
+            g_esl_circuit_open    = 0;
             g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "ESL authenticated");
 
             /* Subscribe to events */
@@ -463,6 +473,7 @@ static void esl_poll(void)
     if (g_esl_fd < 0) {
         /* Not connected — attempt reconnect */
         if (!g_enabled) return;
+        if (g_esl_circuit_open) return;  /* gave up after N failures */
         /* Use static counter for backoff instead of a timer */
         static int backoff_ticks = 0;
         if (backoff_ticks > 0) {
@@ -470,7 +481,24 @@ static void esl_poll(void)
             return;
         }
         if (esl_connect() < 0) {
-            /* Exponential backoff: 1s, 2s, 4s, ... up to 30s */
+            g_esl_consec_failures++;
+            int next_ms = g_esl_reconnect_ms;
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                "ESL connect to %s:%d failed (attempt %d/%d), "
+                "next try in %d ms",
+                g_fs_host, g_fs_esl_port,
+                g_esl_consec_failures, ESL_MAX_RECONNECT_ATTEMPTS,
+                next_ms);
+            if (g_esl_consec_failures >= ESL_MAX_RECONNECT_ATTEMPTS) {
+                g_esl_circuit_open = 1;
+                g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "ESL: %d consecutive connect failures — giving up. "
+                    "Autopatch disabled until module is reloaded "
+                    "(`module reload mod_freeswitch`) or daemon restart.",
+                    ESL_MAX_RECONNECT_ATTEMPTS);
+                return;
+            }
+            /* Exponential backoff: 1s, 2s, 4s, 8s, 16s, then cap at 30s */
             backoff_ticks = g_esl_reconnect_ms / KERCHUNK_FRAME_MS;
             g_esl_reconnect_ms *= 2;
             if (g_esl_reconnect_ms > 30000) g_esl_reconnect_ms = 30000;
@@ -1244,6 +1272,13 @@ static int freeswitch_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "freeswitch", "enabled");
     g_enabled = (v && strcmp(v, "on") == 0);
 
+    /* Reset reconnect circuit breaker on (re)configure so a config
+     * reload or `module reload mod_freeswitch` re-arms the connect
+     * attempts after a previous "gave up" state. */
+    g_esl_consec_failures = 0;
+    g_esl_circuit_open    = 0;
+    g_esl_reconnect_ms    = 1000;
+
     v = kerchunk_config_get(cfg, "freeswitch", "freeswitch_host");
     if (v) snprintf(g_fs_host, sizeof(g_fs_host), "%s", v);
 
@@ -1343,6 +1378,8 @@ static int cli_freeswitch(int argc, const char **argv, kerchunk_resp_t *r)
     resp_bool(r, "enabled", g_enabled);
     resp_bool(r, "esl_connected", g_esl_connected);
     resp_bool(r, "esl_authed", g_esl_authed);
+    resp_int(r, "esl_consec_failures", g_esl_consec_failures);
+    resp_bool(r, "esl_circuit_open", g_esl_circuit_open);
     resp_str(r, "host", g_fs_host);
     resp_int(r, "esl_port", g_fs_esl_port);
     resp_str(r, "gateway", g_sip_gateway);

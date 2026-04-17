@@ -36,7 +36,7 @@ static atomic_int g_rx_active;
 static int16_t *g_rx_buf;
 static size_t   g_rx_len;
 static size_t   g_rx_cap;
-static char     g_rx_start_time[20];   /* YYYYMMDD_HHMMSS */
+static char     g_rx_start_time[24];   /* YYYYMMDD_HHMMSS_mmm */
 static int      g_rx_caller_id;
 
 /* TX recording state (g_tx_active read by audio thread tap) */
@@ -50,12 +50,21 @@ static char     g_tx_start_time[32];
 
 static void fmt_timestamp(char *buf, size_t max)
 {
-    time_t now = time(NULL);
+    /* Include millisecond resolution so two transmissions starting in the
+     * same wall-clock second produce distinct filenames (otherwise the
+     * second write overwrites the first, corrupting the FCC 95.1705
+     * cooperative-use activity log). */
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tbuf;
-    struct tm *t = localtime_r(&now, &tbuf);
-    snprintf(buf, max, "%04d%02d%02d_%02d%02d%02d",
-             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-             t->tm_hour, t->tm_min, t->tm_sec);
+    struct tm *t = localtime_r(&ts.tv_sec, &tbuf);
+    unsigned ms = (unsigned)(ts.tv_nsec / 1000000L);
+    if (ms > 999) ms = 999;
+    /* strftime gives a compile-time bounded date/time string; append
+     * milliseconds separately. ("YYYYMMDD_HHMMSS" = 15 + '_mmm' = 4 + NUL). */
+    char date[16];
+    strftime(date, sizeof(date), "%Y%m%d_%H%M%S", t);
+    snprintf(buf, max, "%s_%03u", date, ms);
 }
 
 static void sanitize_name(char *out, size_t max, const char *name)

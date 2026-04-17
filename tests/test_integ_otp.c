@@ -108,14 +108,14 @@ void test_integ_otp(void)
     /* ── TOTP verification ── */
     test_begin("otp: verify correct code at known time");
     {
-        int ok = totp_verify_at(TEST_SECRET_B32, "287082", 59, 0);
+        int ok = totp_verify_at(TEST_SECRET_B32, "287082", 59, 0, NULL);
         test_assert(ok == 1, "should verify");
     }
     test_end();
 
     test_begin("otp: reject wrong code");
     {
-        int ok = totp_verify_at(TEST_SECRET_B32, "000000", 59, 0);
+        int ok = totp_verify_at(TEST_SECRET_B32, "000000", 59, 0, NULL);
         test_assert(ok == 0, "should reject");
     }
     test_end();
@@ -123,7 +123,7 @@ void test_integ_otp(void)
     test_begin("otp: verify with time skew +1");
     {
         /* Code valid at T=59 (step 1), verify at T=89 (step 2) with skew=1 */
-        int ok = totp_verify_at(TEST_SECRET_B32, "287082", 89, 1);
+        int ok = totp_verify_at(TEST_SECRET_B32, "287082", 89, 1, NULL);
         test_assert(ok == 1, "should verify with skew");
     }
     test_end();
@@ -131,7 +131,7 @@ void test_integ_otp(void)
     test_begin("otp: reject beyond skew window");
     {
         /* Code valid at T=59 (step 1), verify at T=120 (step 4) with skew=1 */
-        int ok = totp_verify_at(TEST_SECRET_B32, "287082", 120, 1);
+        int ok = totp_verify_at(TEST_SECRET_B32, "287082", 120, 1, NULL);
         test_assert(ok == 0, "should reject beyond skew");
     }
     test_end();
