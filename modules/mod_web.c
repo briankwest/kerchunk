@@ -28,6 +28,8 @@
 #include <stdatomic.h>
 #include <fcntl.h>
 #include <strings.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include <time.h>
 #include <ctype.h>
 
@@ -85,6 +87,10 @@ static int  g_tls_active    = 0;
 
 /* Registration config */
 static int g_registration_enabled = 0;
+
+/* Bulletin config — small markdown file shown on the public page. */
+static char g_bulletin_path[256]  = "/var/lib/kerchunk/bulletin.md";
+static int  g_bulletin_max_size   = 16384;  /* 16 KB default */
 
 /* Admin ACL — CIDR list for admin access.  Clients not matching
  * get a plain 404 with no hint that /admin/ exists. */
@@ -1479,6 +1485,115 @@ static struct {
 } g_reg_rate[REG_RATE_LIMIT_SIZE];
 static int g_reg_rate_idx = 0;
 
+/* ── Bulletin ── */
+
+/* Append src to dst as a JSON string body (no surrounding quotes) — escapes
+ * the minimum required by RFC 8259. Caller must reserve 1 byte for NUL. */
+static void json_escape_append(char *dst, size_t max, const char *src, size_t n)
+{
+    size_t len = strlen(dst);
+    for (size_t i = 0; i < n && len + 8 < max; i++) {
+        unsigned char ch = (unsigned char)src[i];
+        if (ch == '"' || ch == '\\') {
+            dst[len++] = '\\'; dst[len++] = (char)ch;
+        } else if (ch == '\n') {
+            dst[len++] = '\\'; dst[len++] = 'n';
+        } else if (ch == '\r') {
+            dst[len++] = '\\'; dst[len++] = 'r';
+        } else if (ch == '\t') {
+            dst[len++] = '\\'; dst[len++] = 't';
+        } else if (ch < 0x20) {
+            len += snprintf(dst + len, max - len, "\\u%04x", ch);
+        } else {
+            dst[len++] = (char)ch;
+        }
+    }
+    dst[len] = '\0';
+}
+
+static void handle_api_bulletin_get(struct mg_connection *c)
+{
+    FILE *fp = fopen(g_bulletin_path, "r");
+    if (!fp) {
+        /* No bulletin yet — empty payload is fine, not an error. */
+        mg_http_reply(c, 200, API_HEADERS,
+                      "{\"text\":\"\",\"updated_at\":0,\"empty\":true}");
+        return;
+    }
+
+    /* Read at most max_size + 1 so we can detect oversize files written
+     * out-of-band. Anything past max_size is truncated. */
+    size_t cap = (size_t)g_bulletin_max_size;
+    char *buf = malloc(cap + 1);
+    if (!buf) { fclose(fp); mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"oom\"}"); return; }
+    size_t n = fread(buf, 1, cap, fp);
+    fclose(fp);
+    buf[n] = '\0';
+
+    struct stat st;
+    long mtime = 0;
+    if (stat(g_bulletin_path, &st) == 0) mtime = (long)st.st_mtime;
+
+    /* Build JSON: {"text":"<escaped>","updated_at":<mtime>,"empty":<bool>} */
+    size_t jsz = n * 6 + 128;  /* worst-case: every char escaped */
+    char *json = malloc(jsz);
+    if (!json) { free(buf); mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"oom\"}"); return; }
+    snprintf(json, jsz, "{\"text\":\"");
+    json_escape_append(json, jsz, buf, n);
+    size_t l = strlen(json);
+    snprintf(json + l, jsz - l, "\",\"updated_at\":%ld,\"empty\":%s}",
+             mtime, n == 0 ? "true" : "false");
+
+    mg_http_reply(c, 200, API_HEADERS, "%s", json);
+    free(json);
+    free(buf);
+}
+
+static void handle_api_bulletin_put(struct mg_connection *c,
+                                     struct mg_http_message *hm)
+{
+    size_t n = hm->body.len;
+    if (n > (size_t)g_bulletin_max_size) {
+        mg_http_reply(c, 413, API_HEADERS,
+                      "{\"error\":\"bulletin too large\"}");
+        return;
+    }
+
+    /* Atomic write via tmpfile + rename so a concurrent GET never sees a
+     * half-written file. */
+    char tmp_path[300];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", g_bulletin_path);
+    FILE *fp = fopen(tmp_path, "w");
+    if (!fp) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "bulletin: cannot open %s: %s", tmp_path, strerror(errno));
+        mg_http_reply(c, 500, API_HEADERS,
+                      "{\"error\":\"cannot open bulletin file\"}");
+        return;
+    }
+    if (n > 0 && fwrite(hm->body.buf, 1, n, fp) != n) {
+        fclose(fp);
+        unlink(tmp_path);
+        mg_http_reply(c, 500, API_HEADERS,
+                      "{\"error\":\"write failed\"}");
+        return;
+    }
+    fclose(fp);
+    if (rename(tmp_path, g_bulletin_path) != 0) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "bulletin: rename failed: %s", strerror(errno));
+        unlink(tmp_path);
+        mg_http_reply(c, 500, API_HEADERS,
+                      "{\"error\":\"rename failed\"}");
+        return;
+    }
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "bulletin updated (%zu bytes)", n);
+    mg_http_reply(c, 200, API_HEADERS,
+                  "{\"ok\":true,\"bytes\":%zu}", n);
+}
+
 static void handle_api_register(struct mg_connection *c,
                                  struct mg_http_message *hm)
 {
@@ -1731,6 +1846,18 @@ static void handle_admin_api(struct mg_connection *c,
         return;
     }
 
+    /* /admin/api/bulletin — GET current text, PUT replaces it */
+    if (mg_match(hm->uri, mg_str("/admin/api/bulletin"), NULL)) {
+        if (mg_match(hm->method, mg_str("GET"), NULL))
+            handle_api_bulletin_get(c);
+        else if (mg_match(hm->method, mg_str("PUT"), NULL))
+            handle_api_bulletin_put(c, hm);
+        else
+            mg_http_reply(c, 405, API_HEADERS,
+                          "{\"error\":\"Method not allowed\"}");
+        return;
+    }
+
     /* /admin/api/cmd */
     if (mg_match(hm->method, mg_str("POST"), NULL) &&
         mg_match(hm->uri, mg_str("/admin/api/cmd"), NULL)) {
@@ -1943,6 +2070,13 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             /* WebSocket audio stream — public (listen-only, no PTT commands) */
             if (mg_match(hm->uri, mg_str("/api/audio"), NULL)) {
                 mg_ws_upgrade(c, hm, NULL);
+                return;
+            }
+
+            /* /api/bulletin — public GET (markdown text) */
+            if (mg_match(hm->uri, mg_str("/api/bulletin"), NULL) &&
+                mg_match(hm->method, mg_str("GET"), NULL)) {
+                handle_api_bulletin_get(c);
                 return;
             }
 
@@ -2263,6 +2397,13 @@ static int web_configure(const kerchunk_config_t *cfg)
 
     g_ptt_max_duration_s = kerchunk_config_get_duration_s(cfg, "web", "ptt_max_duration", 30);
     g_ptt_priority = kerchunk_config_get_int(cfg, "web", "ptt_priority", KERCHUNK_PRI_NORMAL);
+
+    v = kerchunk_config_get(cfg, "bulletin", "path");
+    if (v && *v) snprintf(g_bulletin_path, sizeof(g_bulletin_path), "%s", v);
+    g_bulletin_max_size = kerchunk_config_get_int(cfg, "bulletin", "max_size",
+                                                   g_bulletin_max_size);
+    if (g_bulletin_max_size < 256) g_bulletin_max_size = 256;
+    if (g_bulletin_max_size > (1 << 20)) g_bulletin_max_size = 1 << 20;
 
     /* Redirect mongoose logs through our logger */
     mg_log_set_fn(mg_log_cb, NULL);

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
+<title>Kerchunk — Bulletin</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px;
+       max-width: 1200px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+header nav { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; width: 100%; }
+header nav .btn { text-decoration: none; white-space: nowrap; flex: 1; text-align: center;
+                  padding: 5px 10px; }
+header .sub { color: var(--dim); font-size: 14px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px;
+           margin-bottom: 10px; }
+.btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
+       text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-primary { border-color: var(--accent); color: var(--accent); }
+.btn-primary:hover { background: rgba(88,166,255,0.12); }
+.status { font-size: 12px; color: var(--dim); margin-left: 8px; }
+.status.ok { color: var(--green); }
+.status.err { color: var(--red); }
+
+.editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 900px) { .editor-grid { grid-template-columns: 1fr; } }
+
+#bulletin-text {
+  width: 100%;
+  min-height: 400px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px;
+  resize: vertical;
+}
+#bulletin-text:focus { outline: none; border-color: var(--accent); }
+
+#preview {
+  min-height: 400px;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-y: auto;
+  max-height: 600px;
+}
+#preview h1 { font-size: 20px; margin: 12px 0 8px; }
+#preview h2 { font-size: 18px; margin: 12px 0 8px; }
+#preview h3 { font-size: 16px; margin: 10px 0 6px; }
+#preview h4, #preview h5, #preview h6 { font-size: 14px; margin: 10px 0 6px; }
+#preview p { margin: 8px 0; }
+#preview ul { margin: 8px 0 8px 24px; }
+#preview a { color: var(--accent); }
+#preview code { background: var(--border); padding: 1px 5px; border-radius: 3px;
+                font-family: ui-monospace, monospace; font-size: 12px; }
+#preview blockquote { border-left: 3px solid var(--border); padding: 4px 10px;
+                      color: var(--dim); margin: 8px 0; }
+.empty { color: var(--dim); font-style: italic; }
+
+.toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.hint { font-size: 11px; color: var(--dim); margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Bulletin</h1>
+  <span class="sub">Public announcements shown on the home page</span>
+  <nav>
+    <a href="/admin/" class="btn">Admin</a>
+    <a href="/admin/users.html" class="btn">Users</a>
+    <a href="/admin/config.html" class="btn">Config</a>
+    <a href="/admin/coverage.html" class="btn">Coverage</a>
+    <a href="/admin/ptt.html" class="btn">PTT</a>
+    <a href="/admin/bulletin.html" class="btn" style="border-color:var(--accent);color:var(--accent)">Bulletin</a>
+  </nav>
+</header>
+
+<div class="card">
+  <div class="toolbar">
+    <button class="btn btn-primary" id="save-btn" onclick="saveBulletin()">Save</button>
+    <button class="btn" onclick="clearBulletin()">Clear</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <div class="editor-grid">
+    <div>
+      <h2>Markdown</h2>
+      <textarea id="bulletin-text" placeholder="# Upcoming Net
+
+Every Tuesday at 19:30 local on this repeater. All welcome.
+
+- Check-ins at the top of the hour
+- Traffic after check-ins
+- NCS rotates weekly
+
+More info: [club website](https://example.com)"
+                oninput="onEdit()"></textarea>
+      <div class="hint">
+        Supports <code>#</code>–<code>######</code> headings, <code>**bold**</code>,
+        <code>*italic*</code>, <code>`code`</code>, <code>[text](url)</code>,
+        <code>- list items</code>, and <code>&gt; quotes</code>.
+        Leave blank to hide the card from the public page.
+      </div>
+    </div>
+
+    <div>
+      <h2>Preview</h2>
+      <div id="preview"><span class="empty">(empty)</span></div>
+    </div>
+  </div>
+</div>
+
+<script src="/md.js"></script>
+<script>
+(function() {
+'use strict';
+
+var textEl    = document.getElementById('bulletin-text');
+var previewEl = document.getElementById('preview');
+var statusEl  = document.getElementById('status');
+var loaded    = '';
+
+function setStatus(msg, kind) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+function updatePreview() {
+  var html = renderMarkdown(textEl.value);
+  previewEl.innerHTML = html || '<span class="empty">(empty)</span>';
+}
+
+window.onEdit = function() {
+  updatePreview();
+  if (textEl.value !== loaded) setStatus('Unsaved changes');
+  else setStatus('');
+};
+
+window.saveBulletin = async function() {
+  try {
+    setStatus('Saving…');
+    var res = await fetch('/admin/api/bulletin', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/markdown' },
+      body: textEl.value
+    });
+    if (!res.ok) {
+      var err = await res.json().catch(function() { return {}; });
+      setStatus('Error: ' + (err.error || res.statusText), 'err');
+      return;
+    }
+    loaded = textEl.value;
+    setStatus('Saved.', 'ok');
+  } catch(e) {
+    setStatus('Error: ' + e.message, 'err');
+  }
+};
+
+window.clearBulletin = function() {
+  if (!confirm('Clear the bulletin? This will hide the card from the public page.')) return;
+  textEl.value = '';
+  updatePreview();
+  window.saveBulletin();
+};
+
+(async function load() {
+  try {
+    var res  = await fetch('/admin/api/bulletin');
+    var data = await res.json();
+    loaded = data.text || '';
+    textEl.value = loaded;
+    updatePreview();
+    setStatus(data.empty ? 'No bulletin yet.' : '');
+  } catch(e) {
+    setStatus('Could not load: ' + e.message, 'err');
+  }
+})();
+
+/* Ctrl/Cmd-S to save */
+document.addEventListener('keydown', function(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    window.saveBulletin();
+  }
+});
+})();
+</script>
+</body>
+</html>

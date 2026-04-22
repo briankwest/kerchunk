@@ -55,7 +55,7 @@ module_path = /usr/lib/kerchunk   ; Directory containing .so module files
 ;   mod_aprs   — requires libaprs
 ;   mod_poc    — requires libpoc (PoC radio bridge)
 ;   mod_asr    — requires libwyoming (speech recognition)
-load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_asr,mod_nws,mod_stats,mod_webhook,mod_scrambler,mod_sdr,mod_web,mod_pocsag,mod_flex,mod_aprs,mod_poc
+load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_asr,mod_nws,mod_stats,mod_sysstats,mod_webhook,mod_scrambler,mod_sdr,mod_web,mod_pocsag,mod_flex,mod_aprs,mod_poc
 
 ; ----------------------------------------------------------------------------
 ; Audio device (PortAudio)
@@ -200,6 +200,18 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; registration_enabled = off     ; Enable public user self-registration
 
 ; ----------------------------------------------------------------------------
+; Bulletin (admin-editable announcement card on the public page)
+;
+; Admins edit the text at /admin/bulletin.html; the public page shows it as
+; a card at the top when non-empty. Subset-markdown is supported (headings,
+; lists, bold/italic, links, blockquotes). Stored as a plain file you can
+; edit by hand too.
+; ----------------------------------------------------------------------------
+[bulletin]
+; path = /var/lib/kerchunk/bulletin.md   ; storage file
+; max_size = 16384                        ; max bytes (256 .. 1048576)
+
+; ----------------------------------------------------------------------------
 ; Statistics (RRDtool round-robin database)
 ;
 ; Tracks RX/TX counts, duty cycle, and other metrics in a compact RRD file.
@@ -207,6 +219,18 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; ----------------------------------------------------------------------------
 [stats]
 ; rrd_file = /var/lib/kerchunk/stats.rrd  ; RRD database file (created if missing)
+
+; ----------------------------------------------------------------------------
+; System metrics (CPU, memory, temperature, network)
+;
+; Samples /proc and /sys periodically so the admin dashboard can show
+; host health alongside repeater stats. Available at `sys` on the CLI
+; and /admin/api/sys over HTTP.
+; ----------------------------------------------------------------------------
+[sysstats]
+; enabled = on                      ; on (default) | off
+; interval = 5s                     ; sample interval (min 1s)
+; iface = eth0                      ; network interface to watch (default: auto)
 
 ; ----------------------------------------------------------------------------
 ; Courtesy tone (short beep after user unkeys)

@@ -61,7 +61,21 @@ input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: va
 input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px;
                                              background: var(--accent); border-radius: 50%;
                                              margin-top: -9px; }
+
+/* Bulletin card */
+#bulletin-body h1 { font-size: 18px; margin: 8px 0 6px; }
+#bulletin-body h2 { font-size: 16px; margin: 8px 0 6px; }
+#bulletin-body h3 { font-size: 14px; margin: 8px 0 6px; }
+#bulletin-body h4, #bulletin-body h5, #bulletin-body h6 { font-size: 13px; margin: 6px 0 4px; }
+#bulletin-body p { margin: 6px 0; }
+#bulletin-body ul { margin: 6px 0 6px 22px; }
+#bulletin-body a { color: var(--accent); }
+#bulletin-body code { background: var(--border); padding: 1px 5px; border-radius: 3px;
+                       font-family: ui-monospace, monospace; font-size: 12px; }
+#bulletin-body blockquote { border-left: 3px solid var(--border); padding: 4px 10px;
+                             color: var(--dim); margin: 6px 0; }
 </style>
+<script src="/md.js"></script>
 </head>
 <body>
 <header>
@@ -72,6 +86,12 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
     <a href="register.html" class="btn" id="register-link" style="display:none">Register</a>
   </nav>
 </header>
+
+<!-- Bulletin (hidden when empty) -->
+<div class="card" id="bulletin-card" style="display:none;margin-bottom:12px">
+  <h2 id="bulletin-heading">Announcements</h2>
+  <div id="bulletin-body" style="font-size:14px;line-height:1.5"></div>
+</div>
 
 <div class="grid">
   <!-- Repeater Info -->
@@ -363,15 +383,33 @@ window.setAudioVolume = function(v) {
   if (audioGain) audioGain.gain.value = v / 100;
 };
 
+/* ── Bulletin ── */
+async function refreshBulletin() {
+  try {
+    const d = await (await fetch('/api/bulletin')).json();
+    const card = document.getElementById('bulletin-card');
+    const body = document.getElementById('bulletin-body');
+    if (!d.text || d.empty) {
+      card.style.display = 'none';
+      return;
+    }
+    body.innerHTML = window.renderMarkdown(d.text);
+    card.style.display = '';
+  } catch(e) {}
+}
+
 /* ── Init ── */
 refreshStation();
 refreshStatus();
 refreshWeather();
 refreshAlerts();
+refreshBulletin();
 connectSSE();
 setInterval(refreshStatus, 5000);
 setInterval(refreshWeather, 60000);
 setInterval(refreshAlerts, 60000);
+/* Refresh bulletin every 5 min — it's rarely updated so no need to hammer. */
+setInterval(refreshBulletin, 300000);
 
 window.openCoverageOverlay = function() {
   document.getElementById('coverage-overlay-img').src=document.getElementById('coverage-img').src;

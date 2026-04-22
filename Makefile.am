@@ -97,6 +97,7 @@ kerchunkmod_LTLIBRARIES = \
 	modules/mod_asr.la \
 	modules/mod_nws.la \
 	modules/mod_stats.la \
+	modules/mod_sysstats.la \
 	modules/mod_web.la \
 	modules/mod_otp.la \
 	modules/mod_webhook.la \
@@ -182,6 +183,11 @@ modules_mod_stats_la_SOURCES     = modules/mod_stats.c
 modules_mod_stats_la_CFLAGS      = $(MOD_CFLAGS)
 modules_mod_stats_la_LDFLAGS     = $(MOD_LDFLAGS)
 modules_mod_stats_la_LIBADD      = $(PLCODE_LIBS)
+
+modules_mod_sysstats_la_SOURCES  = modules/mod_sysstats.c
+modules_mod_sysstats_la_CFLAGS   = $(MOD_CFLAGS)
+modules_mod_sysstats_la_LDFLAGS  = $(MOD_LDFLAGS)
+modules_mod_sysstats_la_LIBADD   = $(PLCODE_LIBS)
 
 modules_mod_otp_la_SOURCES       = modules/mod_otp.c
 modules_mod_otp_la_CFLAGS        = $(MOD_CFLAGS)
@@ -369,6 +375,7 @@ kerchunkweb_DATA = \
 	web/register.html \
 	web/stream-processor.js \
 	web/capture-processor.js \
+	web/md.js \
 	web/sw.js \
 	web/manifest.json \
 	web/favicon.ico \
@@ -381,6 +388,7 @@ kerchunkwebadmin_DATA = \
 	web/admin/users.html \
 	web/admin/config.html \
 	web/admin/coverage.html \
+	web/admin/bulletin.html \
 	web/admin/ptt.html
 
 # Config examples
