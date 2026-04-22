@@ -977,8 +977,18 @@ static void *audio_thread_fn(void *arg)
          * bursts. */
         #define RX_CATCHUP_MAX 8  /* 160ms max catchup per tick */
         size_t cap_pending = kerchunk_audio_capture_pending();
-        int rx_frames = 1 + (int)(cap_pending / (size_t)g_frame_samples);
-        if (rx_frames > RX_CATCHUP_MAX) rx_frames = RX_CATCHUP_MAX;
+        int rx_frames = 1;
+        /* Only burst when backlog exceeds one full frame. In steady state
+         * cap_pending fluctuates between ~0 and ~frame_samples (PA callback
+         * having just deposited a frame), which rounds up to 1 frame of
+         * catchup every tick — and since kerchunk_audio_capture zero-pads
+         * a partial read up to frame_samples, that spurious extra iteration
+         * feeds silent frames into the DTMF decoder and corrupts detection.
+         * Drift only matters once we're a full frame behind. */
+        if (cap_pending >= 2u * (size_t)g_frame_samples) {
+            rx_frames = (int)(cap_pending / (size_t)g_frame_samples);
+            if (rx_frames > RX_CATCHUP_MAX) rx_frames = RX_CATCHUP_MAX;
+        }
 
         int relay_active = kerchunk_core_get()->is_receiving();
 
