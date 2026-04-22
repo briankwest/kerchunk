@@ -533,6 +533,7 @@ int kerchunk_audio_playback(const int16_t *buf, size_t n)
 
 size_t kerchunk_audio_playback_writable(void) { return ring_writable(&g_play_ring); }
 size_t kerchunk_audio_playback_pending(void)  { return ring_readable(&g_play_ring); }
+size_t kerchunk_audio_capture_pending(void)   { return ring_readable(&g_cap_ring); }
 
 int kerchunk_audio_available(void) { return g_available; }
 

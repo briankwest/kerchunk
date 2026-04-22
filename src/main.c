@@ -958,15 +958,40 @@ static void *audio_thread_fn(void *arg)
 
         uint64_t t0 = now_us();
 
-        /* ── Capture one frame from ring buffer ── */
-        int16_t frame[KERCHUNK_MAX_FRAME_SAMPLES];
-        int nread = kerchunk_audio_capture(frame, g_frame_samples);
-        if (nread <= 0) {
-            memset(frame, 0, g_frame_samples * sizeof(int16_t));
-            nread = g_frame_samples;
-        }
+        /* ── Capture frames from ring buffer ──
+         *
+         * Normally one frame per 20ms tick = real-time. But the PortAudio
+         * capture callback runs on the sound-card clock, while this loop
+         * is paced by CLOCK_MONOTONIC. Over long uptime they drift, and
+         * missed ticks (scheduler jitter) also back up samples in the ring
+         * — a frame not read on schedule stays queued forever since the
+         * deadline only ever advances by one tick. The result is growing
+         * RX audio latency: the tap sees samples captured seconds ago,
+         * so recordings start with stale kerchunks from before COR_ASSERT
+         * and get truncated at COR_DROP before the real tail arrives.
+         *
+         * Fix: if the capture ring holds more than one frame of pending
+         * samples, drain the extra frames in this tick (up to a cap) so
+         * ring occupancy stays near zero. TX/queue/PTT processing below
+         * still runs exactly once per tick — only RX frame processing
+         * bursts. */
+        #define RX_CATCHUP_MAX 8  /* 160ms max catchup per tick */
+        size_t cap_pending = kerchunk_audio_capture_pending();
+        int rx_frames = 1 + (int)(cap_pending / (size_t)g_frame_samples);
+        if (rx_frames > RX_CATCHUP_MAX) rx_frames = RX_CATCHUP_MAX;
 
         int relay_active = kerchunk_core_get()->is_receiving();
+
+        int16_t frame[KERCHUNK_MAX_FRAME_SAMPLES];
+        int nread = 0;
+
+        for (int rxi = 0; rxi < rx_frames; rxi++) {
+            nread = kerchunk_audio_capture(frame, g_frame_samples);
+            if (nread <= 0) {
+                if (rxi > 0) break;  /* catchup: nothing left to drain */
+                memset(frame, 0, g_frame_samples * sizeof(int16_t));
+                nread = g_frame_samples;
+            }
 
         /* ── RX descrambler: process frame in-place before DTMF decode
          * and before events/taps. DTMF tones are in the voice band and
@@ -1091,6 +1116,7 @@ static void *audio_thread_fn(void *arg)
                 }
             }
         }
+        }  /* end RX per-frame catchup loop */
 
         /* ── Drain queue → playback ring buffer ──
          *

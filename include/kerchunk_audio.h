@@ -49,6 +49,11 @@ size_t kerchunk_audio_playback_writable(void);
 /* Number of samples in playback ring not yet consumed by hardware. */
 size_t kerchunk_audio_playback_pending(void);
 
+/* Number of samples buffered in the capture ring waiting to be read.
+ * Nonzero steady-state values indicate clock drift between the sound-card
+ * and the consumer; the audio thread uses this to drain the backlog. */
+size_t kerchunk_audio_capture_pending(void);
+
 /* 1 if audio hardware is open and streaming. */
 int  kerchunk_audio_available(void);
 
