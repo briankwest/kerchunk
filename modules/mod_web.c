@@ -237,6 +237,13 @@ static void ws_tx_playback_tap(const kerchevt_t *evt, void *ud)
         return;
     if (!g_core->is_transmitting())
         return;
+    /* During an active key-up the software relay also holds PTT, so this
+     * tap fires on the same audio the RX tap is already streaming (labeled
+     * dir=RX). Two directions for one signal flickers the listener's badge
+     * — let the RX tap own the stream until COR drops. Queue-only TX
+     * (announcements, CW ID, courtesy tones) still passes through. */
+    if (g_core->is_receiving())
+        return;
 
     int fs = g_core->frame_samples;
     const int16_t *src = evt->audio.samples;
@@ -1909,6 +1916,11 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                     const char *argv[2] = { "status", NULL };
                     kerchunk_dispatch_command(1, argv, &resp);
                     resp_bool(&resp, "registration_enabled", g_registration_enabled);
+                    /* Audio stream info — useful for the public live-audio card */
+                    int sr = g_core ? g_core->sample_rate : 0;
+                    resp_int(&resp, "audio_listeners", atomic_load(&g_ws_audio_count));
+                    resp_int(&resp, "audio_sample_rate", sr);
+                    resp_int(&resp, "audio_bitrate_kbps", sr * 16 / 1000);
                     resp_finish(&resp);
                     mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
                     return;
@@ -1931,6 +1943,20 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             /* WebSocket audio stream — public (listen-only, no PTT commands) */
             if (mg_match(hm->uri, mg_str("/api/audio"), NULL)) {
                 mg_ws_upgrade(c, hm, NULL);
+                return;
+            }
+
+            /* /api/events — public SSE (state transitions only, no PII) */
+            if (mg_match(hm->uri, mg_str("/api/events"), NULL)) {
+                mg_printf(c,
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: text/event-stream\r\n"
+                    "Cache-Control: no-cache\r\n"
+                    "Connection: keep-alive\r\n"
+                    "Access-Control-Allow-Origin: *\r\n"
+                    "\r\n");
+                c->data[0] = 'P';  /* Mark as public SSE client */
+                atomic_fetch_add(&g_sse_count, 1);
                 return;
             }
 
@@ -2017,18 +2043,24 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
         if (data->len == 1 && data->buf[0] == 'A') {
             /* Audio flush requested by audio_ws_thread */
             ws_flush_ring();
-        } else if (data->len > 0) {
-            /* SSE event broadcast */
+        } else if (data->len > 1) {
+            /* SSE event broadcast. First byte is audience scope:
+             *   'P' → send to both public ('P') and admin ('E') clients
+             *   'E' → admin ('E') only */
+            char scope = data->buf[0];
+            const char *payload = data->buf + 1;
+            int plen = (int)(data->len - 1);
             for (struct mg_connection *t = c->mgr->conns; t != NULL; t = t->next) {
-                if (t->data[0] == 'E')
-                    mg_printf(t, "data: %.*s\n\n", (int)data->len, data->buf);
+                char tag = t->data[0];
+                if (tag == 'E' || (tag == 'P' && scope == 'P'))
+                    mg_printf(t, "data: %.*s\n\n", plen, payload);
             }
         }
     }
 
     /* Track client disconnections */
     if (ev == MG_EV_CLOSE) {
-        if (c->data[0] == 'E') {
+        if (c->data[0] == 'E' || c->data[0] == 'P') {
             atomic_fetch_sub(&g_sse_count, 1);
         } else {
             ws_conn_state_t *st = ws_get_state(c);
@@ -2059,6 +2091,33 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
 
 /* ── Event handler for SSE broadcast ── */
 
+/* Events safe to broadcast to unauthenticated public SSE clients.
+ * Anything carrying PII (caller IDs, DTMF digits, recording paths) or
+ * internal-only state (config reloads, queue preemption details) stays
+ * on the admin-only channel. */
+static int is_public_safe_event(kerchevt_type_t t)
+{
+    switch (t) {
+    case KERCHEVT_COR_ASSERT:
+    case KERCHEVT_COR_DROP:
+    case KERCHEVT_VCOR_ASSERT:
+    case KERCHEVT_VCOR_DROP:
+    case KERCHEVT_PTT_ASSERT:
+    case KERCHEVT_PTT_DROP:
+    case KERCHEVT_STATE_CHANGE:
+    case KERCHEVT_TAIL_START:
+    case KERCHEVT_TAIL_EXPIRE:
+    case KERCHEVT_TIMEOUT:
+    case KERCHEVT_QUEUE_DRAIN:
+    case KERCHEVT_QUEUE_COMPLETE:
+    case KERCHEVT_ANNOUNCEMENT:
+    case KERCHEVT_SHUTDOWN:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static void web_event_handler(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
@@ -2068,10 +2127,15 @@ static void web_event_handler(const kerchevt_t *evt, void *ud)
     if (atomic_load(&g_sse_count) <= 0)
         return;
 
-    char json[512];
-    int jlen = kerchevt_to_json(evt, json, sizeof(json));
+    /* First byte of wakeup payload is the audience scope:
+     *   'P' — broadcast to both public ('P') and admin ('E') SSE clients
+     *   'E' — admin-only
+     * Audio flush uses a 1-byte "A" message and is disambiguated by length. */
+    char buf[520];
+    buf[0] = is_public_safe_event(evt->type) ? 'P' : 'E';
+    int jlen = kerchevt_to_json(evt, buf + 1, sizeof(buf) - 1);
     if (jlen > 0)
-        mg_wakeup(&g_mgr, g_listener_id, json, (size_t)jlen);
+        mg_wakeup(&g_mgr, g_listener_id, buf, (size_t)jlen + 1);
 }
 
 /* ── Server threads ── */

@@ -95,6 +95,9 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
       <input type="range" id="audio-vol" min="0" max="100" value="80"
              style="flex:1" oninput="setAudioVolume(this.value)">
     </div>
+    <table id="stream-table" style="margin-top:10px">
+      <tr><td colspan="2" style="color:var(--dim)">No data</td></tr>
+    </table>
   </div>
 
   <!-- Weather -->
@@ -140,6 +143,14 @@ function updateState(state) {
   const b = document.getElementById('state-badge');
   b.textContent = state;
   b.className = 'badge ' + (state==='IDLE' ? 'badge-idle' : state==='RECEIVING' ? 'badge-rx' : 'badge-tx');
+  /* When the repeater is fully idle, audio frames have stopped — clear the
+   * direction tag on the Live Audio card so the last value (RX/TX) from
+   * the previous transmission doesn't linger next to "Playing". */
+  if (state === 'IDLE') {
+    audioLastDir = -1;
+    const dir = document.getElementById('audio-dir');
+    if (dir) dir.style.display = 'none';
+  }
 }
 
 /* ── Station info ── */
@@ -165,11 +176,40 @@ async function refreshStation() {
 }
 
 /* ── Status polling (state updates) ── */
+let streamServerStats = {};
 async function refreshStatus() {
   try {
     const d = await (await fetch('/api/status')).json();
     if (d.rx_state) updateState(d.rx_state);
+    streamServerStats = {
+      listeners:   d.audio_listeners,
+      sampleRate:  d.audio_sample_rate,
+      bitrateKbps: d.audio_bitrate_kbps
+    };
+    renderStreamTable();
   } catch(e) {}
+}
+
+/* ── Stream card ── */
+let streamWorkerStats = null;  /* set only while playing */
+function renderStreamTable() {
+  const t = document.getElementById('stream-table');
+  const s = streamServerStats;
+  let h = '';
+  if (s.listeners !== undefined)
+    h += tr('Listeners', s.listeners);
+  if (s.sampleRate)
+    h += tr('Sample rate', s.sampleRate + ' Hz');
+  if (s.bitrateKbps)
+    h += tr('Bitrate', s.bitrateKbps + ' kbps');
+  if (streamWorkerStats) {
+    const w = streamWorkerStats;
+    const bufMs = Math.round(w.avail / s.sampleRate * 1000) || 0;
+    h += tr('Buffer', bufMs + ' ms' + (w.primed ? '' : ' (priming)'));
+    if (w.underruns > 0)
+      h += tr('Underruns', w.underruns);
+  }
+  t.innerHTML = h || '<tr><td colspan="2" style="color:var(--dim)">No data</td></tr>';
 }
 
 /* ── Weather ── */
@@ -214,6 +254,38 @@ async function refreshAlerts() {
 let audioCtx = null, audioGain = null, audioNode = null;
 let audioWs = null, audioLastDir = -1;
 
+/* ── Live state via SSE ──
+ * The /api/events stream pushes state-transition events (COR, PTT, queue,
+ * announcements) the moment they fire on the daemon — no 5s poll lag. */
+let sseEvents = null;
+function connectSSE() {
+  try {
+    sseEvents = new EventSource('/api/events');
+    sseEvents.onmessage = function(ev) {
+      let e; try { e = JSON.parse(ev.data); } catch(_) { return; }
+      switch (e.type) {
+        case 'cor_assert':
+        case 'vcor_assert':
+          updateState('RECEIVING'); break;
+        case 'queue_drain':
+        case 'ptt_assert':
+          updateState('TRANSMITTING'); break;
+        case 'cor_drop':
+        case 'vcor_drop':
+        case 'ptt_drop':
+        case 'queue_complete':
+        case 'tail_expire':
+          /* Let refreshStatus settle the final state — avoids a flash of
+           * IDLE during the repeater's tail/hang window. */
+          refreshStatus(); break;
+      }
+    };
+    sseEvents.onerror = function() {
+      /* Browser auto-reconnects; nothing to do. */
+    };
+  } catch(_) {}
+}
+
 window.toggleAudio = function() {
   if (audioWs) { stopAudio(); return; }
   startAudio();
@@ -235,14 +307,10 @@ async function startAudio() {
     audioNode.connect(audioGain);
     audioNode.port.onmessage = function(e) {
       if (e.data && e.data.type === 'stats') {
-        var s = e.data;
-        var pct = ((s.avail / s.ringSize) * 100).toFixed(1);
+        streamWorkerStats = e.data;
         document.getElementById('audio-status').textContent =
-          (s.primed ? 'Playing' : 'Buffering') +
-          ' | ring=' + s.avail + '/' + s.ringSize + ' (' + pct + '%)' +
-          ' | in=' + s.framesIn + '/s' +
-          ' | underruns=' + s.underruns +
-          ' | rate=' + s.step.toFixed(4);
+          streamWorkerStats.primed ? 'Playing' : 'Buffering';
+        renderStreamTable();
       }
     };
 
@@ -284,6 +352,8 @@ function stopAudio() {
   if (audioNode) { audioNode.disconnect(); audioNode = null; }
   if (audioCtx) { audioCtx.close(); audioCtx = null; }
   audioGain = null; audioLastDir = -1;
+  streamWorkerStats = null;
+  renderStreamTable();
   document.getElementById('audio-btn').textContent = 'Listen';
   document.getElementById('audio-status').textContent = 'Stopped';
   document.getElementById('audio-dir').style.display = 'none';
@@ -298,6 +368,7 @@ refreshStation();
 refreshStatus();
 refreshWeather();
 refreshAlerts();
+connectSSE();
 setInterval(refreshStatus, 5000);
 setInterval(refreshWeather, 60000);
 setInterval(refreshAlerts, 60000);
