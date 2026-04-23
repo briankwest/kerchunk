@@ -19,8 +19,9 @@ Build-Depends: debhelper-compat (= 13),
                libpoc-dev,
                libpocsag-dev,
                libwyoming-dev,
+               libcjson-dev,
                libplcode-dev (>= 1.0.1),
-               libnemo-normalize (>= 1.0.1)
+               libnemo-normalize-dev (>= 1.0.1)
 Standards-Version: 4.6.2
 Homepage: https://github.com/briankwest/kerchunk
 Rules-Requires-Root: no
