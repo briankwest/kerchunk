@@ -118,8 +118,14 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 /* System card */
 .sys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
 @media (max-width: 700px) { .sys-grid { grid-template-columns: 1fr; } }
+/* min-width:0 lets the grid item shrink below its content's intrinsic
+ * min-width, which is what Chart.js needs to resize downward. Without
+ * this, CPU and Memory panels refuse to narrow when the window is
+ * resized smaller. */
+.sys-chart { min-width: 0; }
 .sys-chart h3 { font-size: 11px; color: var(--dim); text-transform: uppercase;
                 letter-spacing: 1px; margin: 0 0 6px; }
+.sys-chart .chart-box { position: relative; width: 100%; cursor: pointer; }
 .sys-range.active { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
@@ -215,23 +221,23 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
     <div class="sys-grid">
       <div class="sys-chart">
         <h3>CPU (%)</h3>
-        <div style="position:relative;height:120px"><canvas id="chart-sys-cpu"></canvas></div>
+        <div class="chart-box" style="height:120px"><canvas id="chart-sys-cpu"></canvas></div>
       </div>
       <div class="sys-chart">
         <h3>Memory (%)</h3>
-        <div style="position:relative;height:120px"><canvas id="chart-sys-mem"></canvas></div>
+        <div class="chart-box" style="height:120px"><canvas id="chart-sys-mem"></canvas></div>
       </div>
       <div class="sys-chart">
         <h3>Temperature (°F)</h3>
-        <div style="position:relative;height:120px"><canvas id="chart-sys-temp"></canvas></div>
+        <div class="chart-box" style="height:120px"><canvas id="chart-sys-temp"></canvas></div>
       </div>
       <div class="sys-chart">
         <h3>Load (1/5/15 min)</h3>
-        <div style="position:relative;height:120px"><canvas id="chart-sys-load"></canvas></div>
+        <div class="chart-box" style="height:120px"><canvas id="chart-sys-load"></canvas></div>
       </div>
       <div class="sys-chart" style="grid-column: 1 / -1">
         <h3>Network (RX ↓ / TX ↑)</h3>
-        <div style="position:relative;height:144px"><canvas id="chart-sys-net"></canvas></div>
+        <div class="chart-box" style="height:144px"><canvas id="chart-sys-net"></canvas></div>
       </div>
     </div>
   </div>
@@ -262,6 +268,9 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
       <input type="range" id="audio-vol" min="0" max="100" value="80"
              style="flex:1" oninput="setAudioVolume(this.value)">
     </div>
+    <table id="stream-table" style="margin-top:10px">
+      <tr><td colspan="2" style="color:var(--dim)">No data</td></tr>
+    </table>
   </div>
 
   <!-- Weather -->
@@ -502,6 +511,29 @@ function addDtmf(d) {
   dtmfTimer = setTimeout(()=>{ dtmfBuf=''; document.getElementById('dtmf-buf').textContent=''; }, 4000);
 }
 
+/* ── Stream card (Live Audio sub-table) ──
+ * Same shape as the public page's: listeners / sample rate / bitrate
+ * from the server (via /api/status), buffer depth + underruns from the
+ * AudioWorklet's own stats postMessage while playing. */
+let streamServerStats = {};
+let streamWorkerStats = null;
+function renderStreamTable() {
+  const t = document.getElementById('stream-table');
+  if (!t) return;
+  const s = streamServerStats;
+  let h = '';
+  if (s.listeners !== undefined) h += tr('Listeners', s.listeners);
+  if (s.sampleRate)              h += tr('Sample rate', s.sampleRate + ' Hz');
+  if (s.bitrateKbps)             h += tr('Bitrate',    s.bitrateKbps + ' kbps');
+  if (streamWorkerStats) {
+    const w = streamWorkerStats;
+    const bufMs = Math.round(w.avail / s.sampleRate * 1000) || 0;
+    h += tr('Buffer', bufMs + ' ms' + (w.primed ? '' : ' (priming)'));
+    if (w.underruns > 0) h += tr('Underruns', w.underruns);
+  }
+  t.innerHTML = h || '<tr><td colspan="2" style="color:var(--dim)">No data</td></tr>';
+}
+
 async function refreshStatus() {
   try {
     const d=await fetchJSON('/api/status');
@@ -516,6 +548,12 @@ async function refreshStatus() {
     } else {
       liveStats.corActive=false;
     }
+    streamServerStats = {
+      listeners:   d.audio_listeners,
+      sampleRate:  d.audio_sample_rate,
+      bitrateKbps: d.audio_bitrate_kbps
+    };
+    renderStreamTable();
   } catch(e) {}
 }
 
@@ -1198,14 +1236,10 @@ async function startAudio() {
     audioNode.connect(audioGain);
     audioNode.port.onmessage = (e) => {
       if (e.data && e.data.type === 'stats') {
-        const s = e.data;
-        const pct = ((s.avail / s.ringSize) * 100).toFixed(1);
+        streamWorkerStats = e.data;
         document.getElementById('audio-status').textContent =
-          (s.primed ? 'Playing' : 'Buffering') +
-          ' | ring=' + s.avail + '/' + s.ringSize + ' (' + pct + '%)' +
-          ' | in=' + s.framesIn + '/s' +
-          ' | underruns=' + s.underruns +
-          ' | rate=' + s.step.toFixed(4);
+          streamWorkerStats.primed ? 'Playing' : 'Buffering';
+        renderStreamTable();
       }
     };
 
@@ -1249,6 +1283,8 @@ function stopAudio() {
   if (audioNode) { audioNode.disconnect(); audioNode=null; }
   if (audioCtx) { audioCtx.close(); audioCtx=null; }
   audioGain=null; audioLastDir=-1;
+  streamWorkerStats = null;
+  renderStreamTable();
   document.getElementById('audio-btn').textContent='Listen';
   document.getElementById('audio-status').textContent='Stopped';
   document.getElementById('audio-dir').style.display='none';
