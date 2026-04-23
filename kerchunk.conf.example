@@ -198,6 +198,10 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; ptt_max_duration = 30s         ; Max PTT duration
 ; ptt_priority = 2               ; Queue priority for PTT audio
 ; registration_enabled = off     ; Enable public user self-registration
+; coverage_png_path = /var/lib/kerchunk/coverage.png  ; where the admin
+;                                ; coverage planner publishes the map
+;                                ; (served verbatim at GET /coverage.png)
+; coverage_png_max_size = 4194304 ; max upload size in bytes (default 4 MB)
 
 ; ----------------------------------------------------------------------------
 ; Bulletin (admin-editable announcement card on the public page)

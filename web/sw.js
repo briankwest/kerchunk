@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kerchunk-v3';
+const CACHE_NAME = 'kerchunk-v4';
 const CORE_ASSETS = [
   '/',
   'capture-processor.js',
@@ -36,6 +36,8 @@ self.addEventListener('activate', (e) => {
  *   - any request explicitly asking for event-stream
  *   - authenticated admin HTML (/admin/...) so a cached authed page
  *     can't later leak to an unauthenticated client on the same origin
+ *   - /coverage.png because the admin coverage planner republishes it
+ *     in-place; letting the SW cache would serve a stale map for hours
  */
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
@@ -43,10 +45,11 @@ self.addEventListener('fetch', (e) => {
 
   const isApi        = path.startsWith('/api/') || path.startsWith('/admin/api/');
   const isAdminPage  = path.startsWith('/admin/') && !path.startsWith('/admin/api/');
+  const isCoverage   = (path === '/coverage.png');
   const isWsUpgrade  = e.request.headers.get('upgrade') === 'websocket';
   const isSse        = (e.request.headers.get('accept') || '').includes('text/event-stream');
 
-  if (isApi || isAdminPage || isWsUpgrade || isSse) {
+  if (isApi || isAdminPage || isCoverage || isWsUpgrade || isSse) {
     return;  /* let the browser handle it normally — no SW caching */
   }
 

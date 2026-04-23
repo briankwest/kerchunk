@@ -92,6 +92,15 @@ static int g_registration_enabled = 0;
 static char g_bulletin_path[256]  = "/var/lib/kerchunk/bulletin.md";
 static int  g_bulletin_max_size   = 16384;  /* 16 KB default */
 
+/* Coverage-map image (PNG) publishable from the admin coverage planner.
+ * Defaults to a writable state-dir path so the kerchunk user can overwrite
+ * it without needing write access to the read-only static web dir. The
+ * file is also served verbatim at GET /coverage.png by a dedicated route,
+ * so the public page's <img src="coverage.png"> keeps working wherever
+ * the file lives. */
+static char g_coverage_png_path[256]   = "/var/lib/kerchunk/coverage.png";
+static int  g_coverage_png_max_size    = 4 * 1024 * 1024;  /* 4 MB */
+
 /* Admin ACL — CIDR list for admin access.  Clients not matching
  * get a plain 404 with no hint that /admin/ exists. */
 #define MAX_ACL_ENTRIES 16
@@ -1616,6 +1625,88 @@ static void handle_api_bulletin_put(struct mg_connection *c,
                   "{\"ok\":true,\"bytes\":%zu}", n);
 }
 
+/* ── Coverage map PNG publish/serve ──
+ *
+ * GET  /coverage.png          — public, serves the configured file
+ * PUT  /admin/api/coverage-png — admin, writes body (raw PNG bytes)
+ *
+ * The coverage planner (web/admin/coverage.html) composes a PNG blob
+ * client-side and POSTs it here. The public page's existing
+ * <img src="coverage.png"> on /api/index then picks up the update on
+ * the next reload. */
+
+static void handle_api_coverage_png_get(struct mg_connection *c,
+                                         struct mg_http_message *hm)
+{
+    struct mg_http_serve_opts opts = {
+        .mime_types    = "png=image/png",
+        /* Let the browser revalidate with If-Modified-Since on each
+         * load so a newly-published image is visible immediately.
+         * 304s keep it cheap when nothing changed. */
+        .extra_headers = "Cache-Control: no-cache\r\n",
+    };
+    mg_http_serve_file(c, hm, g_coverage_png_path, &opts);
+}
+
+static void handle_api_coverage_png_put(struct mg_connection *c,
+                                         struct mg_http_message *hm)
+{
+    size_t n = hm->body.len;
+    if (n == 0) {
+        mg_http_reply(c, 400, API_HEADERS,
+                      "{\"error\":\"empty body\"}");
+        return;
+    }
+    if (n > (size_t)g_coverage_png_max_size) {
+        mg_http_reply(c, 413, API_HEADERS,
+                      "{\"error\":\"coverage PNG too large\"}");
+        return;
+    }
+    /* Sanity-check the PNG magic so we don't write arbitrary data to
+     * a path the public site happily serves. */
+    if (n < 8 ||
+        (uint8_t)hm->body.buf[0] != 0x89 ||
+        hm->body.buf[1] != 'P' || hm->body.buf[2] != 'N' ||
+        hm->body.buf[3] != 'G') {
+        mg_http_reply(c, 400, API_HEADERS,
+                      "{\"error\":\"body is not a PNG\"}");
+        return;
+    }
+
+    char tmp_path[300];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", g_coverage_png_path);
+    FILE *fp = fopen(tmp_path, "wb");
+    if (!fp) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "coverage.png: cannot open %s: %s",
+                    tmp_path, strerror(errno));
+        mg_http_reply(c, 500, API_HEADERS,
+                      "{\"error\":\"cannot open coverage file\"}");
+        return;
+    }
+    if (fwrite(hm->body.buf, 1, n, fp) != n) {
+        fclose(fp);
+        unlink(tmp_path);
+        mg_http_reply(c, 500, API_HEADERS,
+                      "{\"error\":\"write failed\"}");
+        return;
+    }
+    fclose(fp);
+    if (rename(tmp_path, g_coverage_png_path) != 0) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "coverage.png: rename failed: %s", strerror(errno));
+        unlink(tmp_path);
+        mg_http_reply(c, 500, API_HEADERS,
+                      "{\"error\":\"rename failed\"}");
+        return;
+    }
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "coverage.png published (%zu bytes)", n);
+    mg_http_reply(c, 200, API_HEADERS,
+                  "{\"ok\":true,\"bytes\":%zu}", n);
+}
+
 static void handle_api_register(struct mg_connection *c,
                                  struct mg_http_message *hm)
 {
@@ -1897,6 +1988,16 @@ static void handle_admin_api(struct mg_connection *c,
         return;
     }
 
+    /* /admin/api/coverage-png — PUT the composed coverage map image */
+    if (mg_match(hm->uri, mg_str("/admin/api/coverage-png"), NULL)) {
+        if (mg_match(hm->method, mg_str("PUT"), NULL))
+            handle_api_coverage_png_put(c, hm);
+        else
+            mg_http_reply(c, 405, API_HEADERS,
+                          "{\"error\":\"Method not allowed\"}");
+        return;
+    }
+
     /* /admin/api/cmd */
     if (mg_match(hm->method, mg_str("POST"), NULL) &&
         mg_match(hm->uri, mg_str("/admin/api/cmd"), NULL)) {
@@ -2148,6 +2249,22 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             mg_http_reply(c, 404, API_HEADERS,
                           "{\"error\":\"Unknown API endpoint\"}");
             return;
+        }
+
+        /* /coverage.png — served from coverage_png_path (default
+         * /var/lib/kerchunk/coverage.png) so the admin planner can
+         * publish over it without needing write access to the
+         * static_dir. If the file isn't there yet, fall through to
+         * the static-dir serve below for backward compat with sites
+         * that keep a coverage.png alongside the other web assets. */
+        if (mg_match(hm->uri, mg_str("/coverage.png"), NULL) &&
+            mg_match(hm->method, mg_str("GET"), NULL)) {
+            struct stat st;
+            if (stat(g_coverage_png_path, &st) == 0 && S_ISREG(st.st_mode)) {
+                handle_api_coverage_png_get(c, hm);
+                return;
+            }
+            /* fall through to static serve */
         }
 
         /* ════════════════════════════════════════════════════════
@@ -2563,6 +2680,15 @@ static int web_configure(const kerchunk_config_t *cfg)
                                                    g_bulletin_max_size);
     if (g_bulletin_max_size < 256) g_bulletin_max_size = 256;
     if (g_bulletin_max_size > (1 << 20)) g_bulletin_max_size = 1 << 20;
+
+    v = kerchunk_config_get(cfg, "web", "coverage_png_path");
+    if (v && *v) snprintf(g_coverage_png_path, sizeof(g_coverage_png_path), "%s", v);
+    g_coverage_png_max_size = kerchunk_config_get_int(cfg, "web",
+                                                       "coverage_png_max_size",
+                                                       g_coverage_png_max_size);
+    if (g_coverage_png_max_size < 4096) g_coverage_png_max_size = 4096;
+    if (g_coverage_png_max_size > 32 * 1024 * 1024)
+        g_coverage_png_max_size = 32 * 1024 * 1024;
 
     /* Seed the SSE snapshot cache with whatever is on disk right now so
      * first-time visitors see the bulletin as soon as they connect —

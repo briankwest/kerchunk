@@ -462,7 +462,8 @@ button {
 
   <div class="section">
     <h2>Presets</h2>
-    <div style="font-size:11px;color:var(--dim);margin-bottom:6px;font-weight:500">TX Power</div>
+
+    <div style="font-size:11px;color:var(--dim);margin-bottom:6px;font-weight:500">Quick templates</div>
     <div class="preset-row">
       <button class="btn-preset" id="preset5">5W</button>
       <button class="btn-preset" id="preset10">10W</button>
@@ -471,10 +472,23 @@ button {
       <button class="btn-preset" id="preset25">25W</button>
       <button class="btn-preset" id="preset50">50W</button>
     </div>
-    <div style="font-size:11px;color:var(--dim);margin-bottom:6px;margin-top:8px;font-weight:500">Mobile Unit</div>
-    <div class="preset-row">
+    <div class="preset-row" style="margin-top:4px">
       <button class="btn-preset" id="presetMobHT">HT (5W)</button>
       <button class="btn-preset" id="presetMobMobile">Mobile (15W)</button>
+    </div>
+
+    <div style="font-size:11px;color:var(--dim);margin:12px 0 6px;font-weight:500">Saved configurations</div>
+    <div class="field">
+      <select id="savedPresetSelect" style="width:100%">
+        <option value="">— none —</option>
+      </select>
+      <div id="savedPresetMeta" style="font-size:10px;color:var(--dim);margin-top:4px;min-height:14px"></div>
+    </div>
+    <div class="preset-row" style="margin-top:4px">
+      <button class="btn-secondary" id="btnPresetLoad"   disabled>Load</button>
+      <button class="btn-secondary" id="btnPresetSave">Save as…</button>
+      <button class="btn-secondary" id="btnPresetRename" disabled>Rename</button>
+      <button class="btn-secondary" id="btnPresetDelete" disabled>Delete</button>
     </div>
   </div>
 
@@ -552,6 +566,7 @@ button {
       <button class="btn-primary" id="btnCalc" disabled>Calculate Coverage</button>
       <button class="btn-secondary" id="btnClear" disabled>Clear</button>
       <button class="btn-secondary" id="btnExport" disabled>Export Image</button>
+      <button class="btn-secondary" id="btnPublish" disabled title="Write this image as /coverage.png for the public page">Publish to Public</button>
     </div>
     <div class="progress-bar" id="progress"><div class="fill" id="progressFill"></div></div>
     <div id="status"></div>
@@ -1354,7 +1369,7 @@ async function calculate() {
   gCalculating = false;
   $('btnCalc').disabled = false;
   $('btnClear').disabled = false;
-  $('btnExport').disabled = false;
+  $('btnExport').disabled = false; $('btnPublish').disabled = false;
 }
 
 // ============================================================
@@ -1593,7 +1608,7 @@ function clearCoverage() {
   gVisibleBands = SIGNAL_BANDS.length;
   gInfoWindow && gInfoWindow.close();
   $('btnClear').disabled = true;
-  $('btnExport').disabled = true;
+  $('btnExport').disabled = true; $('btnPublish').disabled = true;
   setStatus('');
   document.querySelectorAll('.legend-item[data-band]').forEach(el => {
     el.classList.remove('hidden-band');
@@ -1603,8 +1618,9 @@ function clearCoverage() {
 // ============================================================
 // Export Coverage Image
 // ============================================================
-async function exportImage() {
+async function exportImage(mode) {
   if (!gLastRender) return setStatus('No coverage to export.', true);
+  const isPublish = (mode === 'publish');
 
   const { radials, txPos, maxRangeM, angStep } = gLastRender;
   const ch = getSelectedChannel();
@@ -1804,8 +1820,33 @@ async function exportImage() {
   ctx.textAlign = 'left';
   ctx.fillText('Generated ' + new Date().toLocaleString() + '  |  Kerchunk Coverage Planner', 12, HEADER + PX_H + 19);
 
-  // Download
-  canvas.toBlob(blob => {
+  canvas.toBlob(async blob => {
+    if (isPublish) {
+      /* PUT the raw PNG to mod_web, which writes it to the configured
+       * coverage_png_path and serves it from /coverage.png. No multipart
+       * boundary — simpler than FormData and the server just fwrites
+       * hm->body straight to disk via a tmpfile+rename dance. */
+      try {
+        const res = await fetch('/admin/api/coverage-png', {
+          method:  'PUT',
+          headers: { 'Content-Type': 'image/png' },
+          body:    blob
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setStatus('Publish failed: ' + (err.error || res.statusText), true);
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        const kb = data.bytes ? Math.round(data.bytes / 1024) + ' KB' : 'ok';
+        setStatus('Published to /coverage.png (' + kb + ').');
+      } catch (e) {
+        setStatus('Publish failed: ' + e.message, true);
+      }
+      return;
+    }
+
+    /* Download path — unchanged. */
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -1883,6 +1924,137 @@ function loadSettings() {
 }
 
 // ============================================================
+// Named presets (browser-local; no server storage)
+//
+// Each saved preset captures the full form state (everything in
+// PERSIST_FIELDS except the API key) plus the current transmitter
+// lat/lng so loading a preset places the marker exactly where it was
+// saved without geocoding again. Import/export is intentionally left
+// out — these are scoped to one admin's browser.
+// ============================================================
+const PRESETS_KEY   = 'kerchunkCoveragePresets';
+const PRESET_FIELDS = PERSIST_FIELDS.filter(id => id !== 'apiKey');
+
+function presetsLoad()     { try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || '{}'); } catch { return {}; } }
+function presetsSave(all)  { localStorage.setItem(PRESETS_KEY, JSON.stringify(all)); }
+
+function presetSnapshot() {
+  const p = { savedAt: new Date().toISOString() };
+  for (const id of PRESET_FIELDS) {
+    const el = $(id);
+    if (el) p[id] = el.value;
+  }
+  if (gMarker) {
+    const pos = gMarker.getPosition();
+    p.lat = pos.lat();
+    p.lng = pos.lng();
+  }
+  return p;
+}
+
+/* Apply a preset's values to the form, reposition the marker if we
+ * know where, and trigger a recalc so the map reflects the loaded
+ * config immediately (the user's explicit "redoing the analysis"
+ * ask). Fields missing from older presets are left at their current
+ * value instead of being cleared. */
+function presetApply(p) {
+  if (!p) return;
+  for (const id of PRESET_FIELDS) {
+    if (p[id] !== undefined && $(id)) $(id).value = p[id];
+  }
+  updateChannelInfo();
+  saveSettings();
+
+  if (typeof p.lat === 'number' && typeof p.lng === 'number' &&
+      typeof google !== 'undefined' && gMap) {
+    const ll = new google.maps.LatLng(p.lat, p.lng);
+    placeMarker(ll);
+    gMap.panTo(ll);
+  } else if (p.address) {
+    /* Fall back to geocoding if no lat/lng (shouldn't happen for
+     * presets written by this code, but robust for edge cases). */
+    geocode();
+    return;  /* geocode triggers its own flow */
+  }
+
+  if (!$('btnCalc').disabled) $('btnCalc').click();
+}
+
+function presetSelectedName() { return $('savedPresetSelect').value || ''; }
+
+function presetSelectRefresh(selectName) {
+  const sel = $('savedPresetSelect');
+  const all = presetsLoad();
+  const names = Object.keys(all).sort((a,b) => a.localeCompare(b));
+  sel.innerHTML = '<option value="">— none —</option>' +
+    names.map(n => '<option value="' + n.replace(/"/g,'&quot;') + '">' + n + '</option>').join('');
+  if (selectName && names.includes(selectName)) sel.value = selectName;
+  presetMetaRefresh();
+}
+
+function presetMetaRefresh() {
+  const name = presetSelectedName();
+  const meta = $('savedPresetMeta');
+  const has  = !!name;
+  $('btnPresetLoad').disabled   = !has;
+  $('btnPresetRename').disabled = !has;
+  $('btnPresetDelete').disabled = !has;
+  if (!has) { meta.textContent = ''; return; }
+  const p = presetsLoad()[name];
+  if (p && p.savedAt) {
+    const d = new Date(p.savedAt);
+    meta.textContent = 'Saved ' + d.toLocaleString();
+  } else {
+    meta.textContent = '';
+  }
+}
+
+function presetDoSave() {
+  const existing = presetsLoad();
+  const name = (prompt('Save preset as:', presetSelectedName()) || '').trim();
+  if (!name) return;
+  if (existing[name] && !confirm('Overwrite existing preset "' + name + '"?')) return;
+  existing[name] = presetSnapshot();
+  presetsSave(existing);
+  presetSelectRefresh(name);
+  setStatus('Preset "' + name + '" saved.');
+}
+
+function presetDoLoad() {
+  const name = presetSelectedName();
+  if (!name) return;
+  const p = presetsLoad()[name];
+  if (!p) return;
+  presetApply(p);
+  setStatus('Loaded preset "' + name + '".');
+}
+
+function presetDoRename() {
+  const old = presetSelectedName();
+  if (!old) return;
+  const name = (prompt('Rename preset:', old) || '').trim();
+  if (!name || name === old) return;
+  const all = presetsLoad();
+  if (all[name] && !confirm('Overwrite existing preset "' + name + '"?')) return;
+  all[name] = all[old];
+  delete all[old];
+  presetsSave(all);
+  presetSelectRefresh(name);
+  setStatus('Preset renamed to "' + name + '".');
+}
+
+function presetDoDelete() {
+  const name = presetSelectedName();
+  if (!name) return;
+  if (!confirm('Delete preset "' + name + '"?')) return;
+  const all = presetsLoad();
+  delete all[name];
+  presetsSave(all);
+  presetSelectRefresh();
+  setStatus('Preset "' + name + '" deleted.');
+}
+
+// ============================================================
 // Event Wiring
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {
@@ -1891,7 +2063,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('btnCalc').addEventListener('click', calculate);
   $('btnClear').addEventListener('click', clearCoverage);
-  $('btnExport').addEventListener('click', exportImage);
+  $('btnExport').addEventListener('click', () => exportImage('download'));
+  $('btnPublish').addEventListener('click', () => exportImage('publish'));
   $('btnGeocode').addEventListener('click', geocode);
   $('address').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); geocode(); } });
   $('btnDropMob').addEventListener('click', startMobilePlacement);
@@ -1912,6 +2085,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('presetMobHT').addEventListener('click',     () => applyPresetMob(5,  2.15, 5));
   $('presetMobMobile').addEventListener('click', () => applyPresetMob(15, 5,    6));
+
+  /* Saved-preset controls */
+  $('savedPresetSelect').addEventListener('change', presetMetaRefresh);
+  $('btnPresetLoad'  ).addEventListener('click', presetDoLoad);
+  $('btnPresetSave'  ).addEventListener('click', presetDoSave);
+  $('btnPresetRename').addEventListener('click', presetDoRename);
+  $('btnPresetDelete').addEventListener('click', presetDoDelete);
+  presetSelectRefresh();
 
   // Legend band toggles
   document.querySelectorAll('.legend-item[data-band]').forEach(el => {
