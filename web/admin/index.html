@@ -23,6 +23,8 @@ header .sub { color: var(--dim); font-size: 14px; }
 .badge-idle { background: var(--green); color: #000; }
 .badge-rx { background: var(--accent); color: #000; animation: pulse 1s infinite; }
 .badge-tx { background: var(--yellow); color: #000; }
+.badge-hang { background: var(--border); color: var(--text); }
+.badge-timeout { background: var(--red); color: #000; }
 .badge-off { background: var(--border); color: var(--dim); }
 @keyframes pulse { 50% { opacity: 0.7; } }
 .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
@@ -404,12 +406,25 @@ function fmtMs(ms) {
   return '0s';
 }
 
+function stateBadgeClass(state) {
+  /* One authoritative mapping shared with the public page. Any repeater
+   * state that isn't explicitly listed falls through to badge-tx so a
+   * newly added state doesn't accidentally look idle. */
+  return (
+    state === 'IDLE'       ? 'badge-idle'    :
+    state === 'RECEIVING'  ? 'badge-rx'      :
+    state === 'TAIL_WAIT'  ? 'badge-tx'      :
+    state === 'HANG_WAIT'  ? 'badge-hang'    :
+    state === 'TIMEOUT'    ? 'badge-timeout' :
+    'badge-tx');
+}
+
 function updateState(state) {
   document.querySelectorAll('[data-state]').forEach(el=>
     el.classList.toggle('active',el.dataset.state===state));
   const b=document.getElementById('state-badge');
   b.textContent=state;
-  b.className='badge '+(state==='IDLE'?'badge-idle':state==='RECEIVING'?'badge-rx':'badge-tx');
+  b.className='badge '+stateBadgeClass(state);
 }
 
 function updatePTT(on) {

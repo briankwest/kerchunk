@@ -23,6 +23,8 @@ header h1 { font-size: 20px; }
 .badge-idle { background: var(--green); color: #000; }
 .badge-rx { background: var(--accent); color: #000; animation: pulse 1s infinite; }
 .badge-tx { background: var(--yellow); color: #000; }
+.badge-hang { background: var(--border); color: var(--text); }
+.badge-timeout { background: var(--red); color: #000; }
 .badge-off { background: var(--border); color: var(--dim); }
 @keyframes pulse { 50% { opacity: 0.7; } }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -81,6 +83,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 <header>
   <h1 id="callsign">Repeater</h1>
   <span id="state-badge" class="badge badge-idle">IDLE</span>
+  <span id="ptt-badge" class="badge badge-off">PTT off</span>
   <nav style="margin-left:auto;display:flex;gap:8px">
     <a href="index.html" class="btn" style="border-color:var(--accent);color:var(--accent)">Public</a>
     <a href="register.html" class="btn" id="register-link" style="display:none">Register</a>
@@ -158,19 +161,43 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 
 function tr(k,v) { return '<tr><td>'+k+'</td><td>'+v+'</td></tr>'; }
 
-/* ── State badge ── */
+/* ── State + PTT badges ── */
+/* Map a repeater state name to a badge CSS class. Must stay in sync with
+ * admin/index.html's stateBadgeClass — five real states from mod_repeater:
+ *   IDLE       — green, reset and ready
+ *   RECEIVING  — pulsing blue, user keyed up
+ *   TAIL_WAIT  — yellow, PTT still held for the relay tail
+ *   HANG_WAIT  — grey, PTT released but hang timer counting
+ *   TIMEOUT    — red, TOT fault */
+function stateBadgeClass(state) {
+  return (
+    state === 'IDLE'       ? 'badge-idle'    :
+    state === 'RECEIVING'  ? 'badge-rx'      :
+    state === 'TAIL_WAIT'  ? 'badge-tx'      :
+    state === 'HANG_WAIT'  ? 'badge-hang'    :
+    state === 'TIMEOUT'    ? 'badge-timeout' :
+    'badge-tx');
+}
+
 function updateState(state) {
   const b = document.getElementById('state-badge');
   b.textContent = state;
-  b.className = 'badge ' + (state==='IDLE' ? 'badge-idle' : state==='RECEIVING' ? 'badge-rx' : 'badge-tx');
-  /* When the repeater is fully idle, audio frames have stopped — clear the
-   * direction tag on the Live Audio card so the last value (RX/TX) from
-   * the previous transmission doesn't linger next to "Playing". */
-  if (state === 'IDLE') {
+  b.className = 'badge ' + stateBadgeClass(state);
+  /* Audio frames only flow during RECEIVING (RX tap) and TAIL_WAIT (TX
+   * tap, relay tail). In IDLE / HANG_WAIT / TIMEOUT the stream is
+   * silent, so clear the stale RX/TX direction chip on the Live Audio
+   * card. */
+  if (state === 'IDLE' || state === 'HANG_WAIT' || state === 'TIMEOUT') {
     audioLastDir = -1;
     const dir = document.getElementById('audio-dir');
     if (dir) dir.style.display = 'none';
   }
+}
+
+function updatePTT(on) {
+  const b = document.getElementById('ptt-badge');
+  b.textContent = on ? 'PTT on' : 'PTT off';
+  b.className = 'badge ' + (on ? 'badge-tx' : 'badge-off');
 }
 
 /* ── Station info ── */
@@ -195,12 +222,16 @@ async function refreshStation() {
   } catch(e) {}
 }
 
-/* ── Status polling (state updates) ── */
+/* ── Status fetch (bootstrap + SSE resync only) ──
+ * This replaces the previous 5s poll. Live state is driven by the SSE
+ * stream; /api/status is only hit on page load and after an SSE
+ * disconnect so we resync against whatever transitions we missed. */
 let streamServerStats = {};
 async function refreshStatus() {
   try {
     const d = await (await fetch('/api/status')).json();
     if (d.rx_state) updateState(d.rx_state);
+    if (typeof d.ptt === 'boolean') updatePTT(d.ptt);
     streamServerStats = {
       listeners:   d.audio_listeners,
       sampleRate:  d.audio_sample_rate,
@@ -275,33 +306,47 @@ let audioCtx = null, audioGain = null, audioNode = null;
 let audioWs = null, audioLastDir = -1;
 
 /* ── Live state via SSE ──
- * The /api/events stream pushes state-transition events (COR, PTT, queue,
- * announcements) the moment they fire on the daemon — no 5s poll lag. */
+ * /api/events is the single source of truth for RX state and PTT. The
+ * server fires KERCHEVT_STATE_CHANGE on every mod_repeater transition
+ * so we mirror evt.new_state directly into the state badge — no
+ * guessing, no synthetic labels, no per-event refreshStatus. We only
+ * hit /api/status on (1) page bootstrap, (2) SSE open/reopen so we
+ * pick up any transitions that happened while we were disconnected. */
 let sseEvents = null;
+let sseConnected = false;
 function connectSSE() {
   try {
+    if (sseEvents) { try { sseEvents.close(); } catch(_) {} }
     sseEvents = new EventSource('/api/events');
+    sseEvents.onopen = function() {
+      /* Fresh stream — resync against current truth. Also covers the
+       * initial connect; subsequent onopen fires after auto-reconnect. */
+      sseConnected = true;
+      refreshStatus();
+    };
     sseEvents.onmessage = function(ev) {
       let e; try { e = JSON.parse(ev.data); } catch(_) { return; }
       switch (e.type) {
-        case 'cor_assert':
-        case 'vcor_assert':
-          updateState('RECEIVING'); break;
-        case 'queue_drain':
+        case 'state_change':
+          updateState(e.new_state);
+          break;
         case 'ptt_assert':
-          updateState('TRANSMITTING'); break;
-        case 'cor_drop':
-        case 'vcor_drop':
+          updatePTT(true);
+          break;
         case 'ptt_drop':
-        case 'queue_complete':
-        case 'tail_expire':
-          /* Let refreshStatus settle the final state — avoids a flash of
-           * IDLE during the repeater's tail/hang window. */
-          refreshStatus(); break;
+          updatePTT(false);
+          break;
+        case 'shutdown':
+          updateState('IDLE');
+          updatePTT(false);
+          break;
       }
     };
     sseEvents.onerror = function() {
-      /* Browser auto-reconnects; nothing to do. */
+      /* EventSource auto-reconnects with its own backoff. When it
+       * succeeds, onopen fires and resyncs via refreshStatus. Just
+       * mark as disconnected so we don't act on stale state. */
+      sseConnected = false;
     };
   } catch(_) {}
 }
@@ -400,12 +445,12 @@ async function refreshBulletin() {
 
 /* ── Init ── */
 refreshStation();
-refreshStatus();
 refreshWeather();
 refreshAlerts();
 refreshBulletin();
+/* connectSSE's onopen calls refreshStatus, so the initial bootstrap
+ * happens there — no need to call it here too. */
 connectSSE();
-setInterval(refreshStatus, 5000);
 setInterval(refreshWeather, 60000);
 setInterval(refreshAlerts, 60000);
 /* Refresh bulletin every 5 min — it's rarely updated so no need to hammer. */
