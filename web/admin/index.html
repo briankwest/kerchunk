@@ -114,6 +114,13 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 .cmd-form .btn { align-self: flex-end; margin-top: 14px; }
 .btn.active-form { background: var(--accent); color: #fff; border-color: var(--accent); }
 .toggle-on { border-color: var(--green); color: var(--green); }
+
+/* System card */
+.sys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+@media (max-width: 700px) { .sys-grid { grid-template-columns: 1fr; } }
+.sys-chart h3 { font-size: 11px; color: var(--dim); text-transform: uppercase;
+                letter-spacing: 1px; margin: 0 0 6px; }
+.sys-range.active { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
 <body>
@@ -195,9 +202,38 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
   </div>
 
   <!-- System -->
-  <div class="card">
-    <h2>System</h2>
+  <div class="card" style="grid-column: 1 / -1">
+    <h2 style="display:flex;align-items:center;justify-content:space-between">
+      <span>System</span>
+      <span class="sys-range-toggle" style="display:flex;gap:4px">
+        <button class="btn btn-sm sys-range active" data-range="minutely">60m</button>
+        <button class="btn btn-sm sys-range"         data-range="hourly">24h</button>
+        <button class="btn btn-sm sys-range"         data-range="daily">30d</button>
+      </span>
+    </h2>
     <table id="sys-table"><tr><td colspan="2" style="color:var(--dim)">Loading...</td></tr></table>
+    <div class="sys-grid">
+      <div class="sys-chart">
+        <h3>CPU (%)</h3>
+        <div style="position:relative;height:100px"><canvas id="chart-sys-cpu"></canvas></div>
+      </div>
+      <div class="sys-chart">
+        <h3>Memory (%)</h3>
+        <div style="position:relative;height:100px"><canvas id="chart-sys-mem"></canvas></div>
+      </div>
+      <div class="sys-chart">
+        <h3>Temperature (°F)</h3>
+        <div style="position:relative;height:100px"><canvas id="chart-sys-temp"></canvas></div>
+      </div>
+      <div class="sys-chart">
+        <h3>Load (1/5/15 min)</h3>
+        <div style="position:relative;height:100px"><canvas id="chart-sys-load"></canvas></div>
+      </div>
+      <div class="sys-chart" style="grid-column: 1 / -1">
+        <h3>Network (RX ↓ / TX ↑)</h3>
+        <div style="position:relative;height:120px"><canvas id="chart-sys-net"></canvas></div>
+      </div>
+    </div>
   </div>
 
   <!-- Dynamic Controls -->
@@ -523,6 +559,9 @@ let liveStats = {
 
 // Chart.js instances
 let chartMinute=null, chartHourly=null, chartDaily=null;
+let sysCharts = null;           /* {cpu, mem, temp, load, net} Chart instances */
+let sysHistory = null;          /* last sys_history_updated payload */
+let sysRange = 'minutely';      /* minutely | hourly | daily */
 const chartOpts = {
   responsive:true, maintainAspectRatio:false,
   animation:{duration:300},
@@ -609,6 +648,133 @@ function initCharts() {
     options:{...chartOpts,scales:{...chartOpts.scales,x:{...chartOpts.scales.x,stacked:true},y:{...chartOpts.scales.y,stacked:true}}}
   });
   document.getElementById('chart-daily').addEventListener('click', () => openZoom(chartDaily));
+
+  initSysCharts();
+}
+
+/* ── System-metrics history charts ──
+ * Five Chart.js line panels — CPU %, Memory %, Temp °F, Load
+ * (1m/5m/15m), Network (RX / TX bps). Fed by sys_history_updated SSE;
+ * the timeframe toggle swaps which of the three server arrays
+ * (minutely/hourly/daily) is bound to every chart. */
+function initSysCharts() {
+  if (typeof Chart === 'undefined') return;
+  if (sysCharts) {
+    Object.values(sysCharts).forEach(c => c && c.destroy());
+  }
+
+  const baseOpts = {
+    responsive:true, maintainAspectRatio:false,
+    animation:{duration:200},
+    interaction:{mode:'index',intersect:false},
+    plugins:{
+      legend:{display:false},
+      tooltip:{enabled:true,mode:'index',intersect:false,
+        backgroundColor:'rgba(30,30,30,0.95)',
+        titleFont:{size:11},bodyFont:{size:11},padding:8,cornerRadius:4}
+    },
+    scales:{
+      x:{grid:{display:false},ticks:{font:{size:9},maxRotation:0,autoSkip:true,maxTicksLimit:8}},
+      y:{beginAtZero:true,ticks:{font:{size:9}}}
+    }
+  };
+  const lineDS = (color, label) => ({
+    label, data:[], borderColor:color,
+    backgroundColor:color.replace('rgb(', 'rgba(').replace(')', ',0.15)'),
+    borderWidth:1.5, fill:true, tension:0.25, pointRadius:0,
+    pointHoverRadius:3, spanGaps:false
+  });
+
+  sysCharts = {
+    cpu: new Chart(document.getElementById('chart-sys-cpu'), {
+      type:'line',
+      data:{labels:[],datasets:[lineDS('rgb(88,166,255)','CPU')]},
+      options:{...baseOpts,scales:{...baseOpts.scales,y:{...baseOpts.scales.y,max:100}}}
+    }),
+    mem: new Chart(document.getElementById('chart-sys-mem'), {
+      type:'line',
+      data:{labels:[],datasets:[lineDS('rgb(63,185,80)','Memory')]},
+      options:{...baseOpts,scales:{...baseOpts.scales,y:{...baseOpts.scales.y,max:100}}}
+    }),
+    temp: new Chart(document.getElementById('chart-sys-temp'), {
+      type:'line',
+      data:{labels:[],datasets:[lineDS('rgb(248,81,73)','Temp')]},
+      options:{...baseOpts,scales:{...baseOpts.scales,y:{beginAtZero:false,ticks:{font:{size:9}}}}}
+    }),
+    load: new Chart(document.getElementById('chart-sys-load'), {
+      type:'line',
+      data:{labels:[],datasets:[
+        lineDS('rgb(88,166,255)','1m'),
+        lineDS('rgb(210,153,34)','5m'),
+        lineDS('rgb(139,148,158)','15m')
+      ]},
+      options:{...baseOpts,plugins:{...baseOpts.plugins,legend:{display:true,position:'bottom',labels:{boxWidth:8,font:{size:10}}}}}
+    }),
+    net: new Chart(document.getElementById('chart-sys-net'), {
+      type:'line',
+      data:{labels:[],datasets:[
+        {...lineDS('rgb(88,166,255)','RX'), fill:true},
+        {...lineDS('rgb(255,183,77)','TX'), fill:true}
+      ]},
+      options:{...baseOpts,plugins:{...baseOpts.plugins,legend:{display:true,position:'bottom',labels:{boxWidth:8,font:{size:10}}}},
+        scales:{...baseOpts.scales,y:{beginAtZero:true,ticks:{font:{size:9},callback:v=>fmtBps(v)}}}}
+    }),
+  };
+
+  /* Timeframe toggle */
+  document.querySelectorAll('.sys-range').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.sys-range').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      sysRange = btn.dataset.range;
+      renderSysCharts();
+    });
+  });
+}
+
+/* Format an x-axis label from a slot's epoch seconds, styled for the
+ * currently selected timeframe. */
+function sysLabel(t) {
+  if (!t) return '';
+  const d = new Date(t * 1000);
+  if (sysRange === 'daily') {
+    return (d.getMonth()+1) + '/' + d.getDate();
+  }
+  if (sysRange === 'hourly') {
+    return String(d.getHours()).padStart(2,'0') + ':00';
+  }
+  return String(d.getHours()).padStart(2,'0') + ':' +
+         String(d.getMinutes()).padStart(2,'0');
+}
+
+function renderSysCharts() {
+  if (!sysCharts || !sysHistory) return;
+  const arr = sysHistory[sysRange] || [];
+  /* Use empty string for absent labels so the x-axis auto-thins. */
+  const labels = arr.map(p => p ? sysLabel(p.t) : '');
+  const mapField = (key, tempToF) => arr.map(p => {
+    if (!p) return null;
+    const v = p[key];
+    if (v === undefined || v === null) return null;
+    return tempToF ? (v * 9/5 + 32) : v;
+  });
+
+  const assign = (chart, series) => {
+    chart.data.labels = labels;
+    series.forEach((data, i) => { chart.data.datasets[i].data = data; });
+    chart.update('none');
+  };
+
+  assign(sysCharts.cpu,  [mapField('cpu_pct')]);
+  assign(sysCharts.mem,  [mapField('mem_used_pct')]);
+  assign(sysCharts.temp, [mapField('temp_c', true)]);
+  assign(sysCharts.load, [mapField('load1'), mapField('load5'), mapField('load15')]);
+  assign(sysCharts.net,  [mapField('net_rx_bps'), mapField('net_tx_bps')]);
+}
+
+function applySysHistory(d) {
+  sysHistory = d;
+  renderSysCharts();
 }
 
 function updateCharts(d) {
@@ -948,6 +1114,11 @@ function connectSSE() {
            * replayed on (re)connect via the snapshot cache. Replaces the
            * former /admin/api/sys poll. */
           renderSys(evt.data);
+          break;
+        case 'sys_history_updated':
+          /* Minute-aligned historical dump (60m/24h/30d arrays) —
+           * feeds the System card's trend charts. */
+          applySysHistory(evt.data);
           break;
         case 'heartbeat':
           /* Reset reconnect backoff — server is alive */

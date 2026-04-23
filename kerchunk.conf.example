@@ -231,6 +231,7 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; enabled = on                      ; on (default) | off
 ; interval = 5s                     ; sample interval (min 1s)
 ; iface = eth0                      ; network interface to watch (default: auto)
+; rrd_file = /var/lib/kerchunk/sysstats.rrd  ; persistent trend history
 
 ; ----------------------------------------------------------------------------
 ; Courtesy tone (short beep after user unkeys)

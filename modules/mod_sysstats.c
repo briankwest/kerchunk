@@ -14,9 +14,69 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 
 #define LOG_MOD "sysstats"
 #define MAX_IFACE 32
+
+/* ───────────────────────── Historical RRD ─────────────────────────
+ * Continuous gauges (CPU%, mem%, temp, load, net bps) want averaging,
+ * not the counter-inc model kerchunk_rrd offers. This is a separate
+ * parallel file for sysstats with its own slot shape: one float per
+ * metric per slot, plus an epoch timestamp to distinguish "this slot
+ * was written for minute T" from "stale data from the previous
+ * ring-wrap". Ring indexing is wall-clock driven: minute slot i
+ * belongs to epoch minutes where (epoch/60) % 60 == i.
+ *
+ * 60 minute + 24 hour + 30 day slots = 114 * ~40 B ≈ 4.5 KB on disk.
+ */
+#define SYS_RRD_MAGIC   0x44525353u   /* 'SSRD' */
+#define SYS_RRD_VERSION 1u
+#define SYS_RRD_MINS    60
+#define SYS_RRD_HOURS   24
+#define SYS_RRD_DAYS    30
+
+typedef struct {
+    int64_t  t;              /* epoch seconds at slot start; 0 = never written */
+    float    cpu_pct;
+    float    mem_used_pct;
+    float    temp_c;
+    float    load1, load5, load15;
+    float    net_rx_bps;
+    float    net_tx_bps;
+} sys_slot_t;
+
+typedef struct {
+    uint32_t   magic;
+    uint32_t   version;
+    int64_t    start_time;
+    uint64_t   total_samples;
+    uint32_t   _reserved[10];
+    sys_slot_t minutes[SYS_RRD_MINS];
+    sys_slot_t hours[SYS_RRD_HOURS];
+    sys_slot_t days[SYS_RRD_DAYS];
+} sys_rrd_t;
+
+/* Running-average accumulators for each horizon. Each 5s sample feeds
+ * all three independently so day/hour/minute averages are each a true
+ * mean of their raw samples (not mean-of-means). */
+typedef struct {
+    double   sum_cpu, sum_mem, sum_temp;
+    double   sum_l1,  sum_l5,  sum_l15;
+    double   sum_rx,  sum_tx;
+    uint32_t count;
+} sys_acc_t;
+
+static sys_rrd_t *g_rrd;
+static int        g_rrd_fd   = -1;
+static char       g_rrd_path[256] = "/var/lib/kerchunk/sysstats.rrd";
+static sys_acc_t  g_min_acc, g_hour_acc, g_day_acc;
+static time_t     g_last_rollover_t;    /* wall-clock of previous sample */
+static int        g_history_sched = -1;
 
 static kerchunk_core_t *g_core;
 
@@ -174,6 +234,235 @@ static void read_network(void)
     g_have_prev_net = 1;
 }
 
+/* ───────────────────────── RRD open/close ───────────────────────── */
+
+static int rrd_open(const char *path)
+{
+    int fd = open(path, O_RDWR | O_CREAT, 0644);
+    if (fd < 0) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "cannot open %s: %s", path, strerror(errno));
+        return -1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return -1; }
+
+    int fresh = (st.st_size < (off_t)sizeof(sys_rrd_t));
+    if (fresh && ftruncate(fd, sizeof(sys_rrd_t)) != 0) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "ftruncate %s: %s", path, strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    void *mm = mmap(NULL, sizeof(sys_rrd_t),
+                    PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mm == MAP_FAILED) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+                    "mmap %s: %s", path, strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    g_rrd    = mm;
+    g_rrd_fd = fd;
+
+    /* Initialize or refuse stale magic/version — wipe and start over
+     * rather than try to migrate an old layout. Sysstats history is
+     * diagnostic; losing it on a version bump is acceptable. */
+    if (g_rrd->magic != SYS_RRD_MAGIC || g_rrd->version != SYS_RRD_VERSION) {
+        memset(g_rrd, 0, sizeof(*g_rrd));
+        g_rrd->magic      = SYS_RRD_MAGIC;
+        g_rrd->version    = SYS_RRD_VERSION;
+        g_rrd->start_time = (int64_t)time(NULL);
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "initialized sysstats RRD: %s", path);
+    } else {
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "opened sysstats RRD: %s (%llu samples)", path,
+                    (unsigned long long)g_rrd->total_samples);
+    }
+    return 0;
+}
+
+static void rrd_close(void)
+{
+    if (g_rrd && g_rrd != MAP_FAILED) {
+        msync(g_rrd, sizeof(*g_rrd), MS_SYNC);
+        munmap(g_rrd, sizeof(*g_rrd));
+    }
+    if (g_rrd_fd >= 0) close(g_rrd_fd);
+    g_rrd    = NULL;
+    g_rrd_fd = -1;
+}
+
+/* ───────────────────────── Accumulators ──────────────────────────── */
+
+static void acc_reset(sys_acc_t *a) { memset(a, 0, sizeof(*a)); }
+
+static void acc_feed_current(sys_acc_t *a)
+{
+    double mem_pct = 0;
+    if (g_mem_total_kb > 0)
+        mem_pct = 100.0 *
+                  (double)(g_mem_total_kb - g_mem_avail_kb) /
+                  (double)g_mem_total_kb;
+    a->sum_cpu  += g_cpu_pct;
+    a->sum_mem  += mem_pct;
+    a->sum_temp += g_temp_c;
+    a->sum_l1   += g_load1;
+    a->sum_l5   += g_load5;
+    a->sum_l15  += g_load15;
+    a->sum_rx   += (double)g_net_rx_bps;
+    a->sum_tx   += (double)g_net_tx_bps;
+    a->count++;
+}
+
+static void acc_to_slot(const sys_acc_t *a, sys_slot_t *s, time_t t)
+{
+    if (a->count == 0) { s->t = 0; return; }
+    double n = (double)a->count;
+    s->t            = (int64_t)t;
+    s->cpu_pct      = (float)(a->sum_cpu  / n);
+    s->mem_used_pct = (float)(a->sum_mem  / n);
+    s->temp_c       = (float)(a->sum_temp / n);
+    s->load1        = (float)(a->sum_l1   / n);
+    s->load5        = (float)(a->sum_l5   / n);
+    s->load15       = (float)(a->sum_l15  / n);
+    s->net_rx_bps   = (float)(a->sum_rx   / n);
+    s->net_tx_bps   = (float)(a->sum_tx   / n);
+}
+
+/* On every sample, compare wall clock to the previous sample. If we've
+ * crossed minute/hour/day boundaries, commit the corresponding
+ * accumulator into its RRD slot and reset. Slot index is derived
+ * directly from epoch — e.g. (minute_epoch/60) % 60 — so a daemon
+ * outage just leaves older ring entries with mismatched `t` which the
+ * publisher filters out on read. */
+static void handle_rollovers(time_t now)
+{
+    if (!g_rrd) return;
+    if (g_last_rollover_t == 0) { g_last_rollover_t = now; return; }
+
+    time_t last      = g_last_rollover_t;
+    time_t last_min  = last - (last % 60);
+    time_t cur_min   = now  - (now  % 60);
+    time_t last_hour = last - (last % 3600);
+    time_t cur_hour  = now  - (now  % 3600);
+    time_t last_day  = last - (last % 86400);
+    time_t cur_day   = now  - (now  % 86400);
+
+    if (cur_min > last_min) {
+        int idx = (int)((last_min / 60) % SYS_RRD_MINS);
+        acc_to_slot(&g_min_acc, &g_rrd->minutes[idx], last_min);
+        acc_reset(&g_min_acc);
+    }
+    if (cur_hour > last_hour) {
+        int idx = (int)((last_hour / 3600) % SYS_RRD_HOURS);
+        acc_to_slot(&g_hour_acc, &g_rrd->hours[idx], last_hour);
+        acc_reset(&g_hour_acc);
+    }
+    if (cur_day > last_day) {
+        int idx = (int)((last_day / 86400) % SYS_RRD_DAYS);
+        acc_to_slot(&g_day_acc, &g_rrd->days[idx], last_day);
+        acc_reset(&g_day_acc);
+    }
+
+    g_last_rollover_t = now;
+}
+
+/* ───────────────────── History publish (SSE) ─────────────────────── */
+
+/* Append one slot as JSON to dst; "null" if the slot's timestamp is
+ * missing or older than the ring's horizon (i.e. stale from a previous
+ * wrap-around). Caller already wrote any separator. */
+static int append_slot_json(char *dst, size_t cap, const sys_slot_t *s,
+                             time_t horizon_oldest)
+{
+    if (s->t <= 0 || s->t < (int64_t)horizon_oldest)
+        return snprintf(dst, cap, "null");
+    return snprintf(dst, cap,
+        "{\"t\":%lld,\"cpu_pct\":%.2f,\"mem_used_pct\":%.2f,"
+        "\"temp_c\":%.2f,\"load1\":%.3f,\"load5\":%.3f,\"load15\":%.3f,"
+        "\"net_rx_bps\":%.0f,\"net_tx_bps\":%.0f}",
+        (long long)s->t,
+        s->cpu_pct, s->mem_used_pct, s->temp_c,
+        s->load1, s->load5, s->load15,
+        s->net_rx_bps, s->net_tx_bps);
+}
+
+static void publish_sys_history(void)
+{
+    if (!g_core || !g_core->sse_publish || !g_rrd) return;
+
+    time_t now      = time(NULL);
+    time_t cur_min  = now - (now % 60);
+    time_t cur_hour = now - (now % 3600);
+    time_t cur_day  = now - (now % 86400);
+
+    /* 114 slots * ~220 B json each + separators + scaffolding ≈ 30 KB.
+     * Oversize to 48 KB so we never truncate. Freed right after send. */
+    size_t cap = 48 * 1024;
+    char  *buf = malloc(cap);
+    if (!buf) return;
+    size_t n = 0;
+
+    /* Small inline helper: append a literal to buf, bail out on overflow. */
+    #define APPEND_LIT(lit) do { \
+        size_t _len = sizeof(lit) - 1; \
+        if (n + _len >= cap) { free(buf); return; } \
+        memcpy(buf + n, lit, _len); n += _len; \
+    } while (0)
+
+    APPEND_LIT("{\"minutely\":[");
+    {
+        time_t horizon = cur_min - (time_t)(SYS_RRD_MINS - 1) * 60;
+        /* Emit oldest→newest across the 60-slot ring. */
+        for (int i = 0; i < SYS_RRD_MINS; i++) {
+            int idx = (int)(((cur_min / 60) + 1 + i) % SYS_RRD_MINS);
+            if (i) APPEND_LIT(",");
+            int w = append_slot_json(buf + n, cap - n,
+                                      &g_rrd->minutes[idx], horizon);
+            if (w < 0 || (size_t)w >= cap - n) { free(buf); return; }
+            n += (size_t)w;
+        }
+    }
+    APPEND_LIT("],\"hourly\":[");
+    {
+        time_t horizon = cur_hour - (time_t)(SYS_RRD_HOURS - 1) * 3600;
+        for (int i = 0; i < SYS_RRD_HOURS; i++) {
+            int idx = (int)(((cur_hour / 3600) + 1 + i) % SYS_RRD_HOURS);
+            if (i) APPEND_LIT(",");
+            int w = append_slot_json(buf + n, cap - n,
+                                      &g_rrd->hours[idx], horizon);
+            if (w < 0 || (size_t)w >= cap - n) { free(buf); return; }
+            n += (size_t)w;
+        }
+    }
+    APPEND_LIT("],\"daily\":[");
+    {
+        time_t horizon = cur_day - (time_t)(SYS_RRD_DAYS - 1) * 86400;
+        for (int i = 0; i < SYS_RRD_DAYS; i++) {
+            int idx = (int)(((cur_day / 86400) + 1 + i) % SYS_RRD_DAYS);
+            if (i) APPEND_LIT(",");
+            int w = append_slot_json(buf + n, cap - n,
+                                      &g_rrd->days[idx], horizon);
+            if (w < 0 || (size_t)w >= cap - n) { free(buf); return; }
+            n += (size_t)w;
+        }
+    }
+    APPEND_LIT("]}");
+    if (n < cap) buf[n] = '\0';
+
+    #undef APPEND_LIT
+
+    g_core->sse_publish("sys_history_updated", buf, /*admin_only=*/1);
+    free(buf);
+}
+
+static void publish_sys_history_cb(void *ud) { (void)ud; publish_sys_history(); }
+
 /* Populate a kerchunk_resp_t with the current sample. Used by both the
  * `sys` CLI handler and the periodic SSE publish after each sample. */
 static void render_sys_resp(kerchunk_resp_t *r)
@@ -209,6 +498,15 @@ static void sample_cb(void *ud)
     read_network();
     g_last_sample_time = time(NULL);
     g_have_sample = 1;
+
+    /* Feed the three independent horizon accumulators. Each 5s sample
+     * bumps all of them so minute / hour / day averages are each a
+     * true mean of raw samples, not a mean-of-means. */
+    acc_feed_current(&g_min_acc);
+    acc_feed_current(&g_hour_acc);
+    acc_feed_current(&g_day_acc);
+    handle_rollovers(g_last_sample_time);
+    if (g_rrd) g_rrd->total_samples++;
 
     /* Broadcast the fresh sample to admin SSE clients. Payload is the
      * same JSON the CLI would emit, so consumers see a consistent shape
@@ -276,28 +574,57 @@ static int sysstats_configure(const kerchunk_config_t *cfg)
     else if (!g_iface[0])
         autodetect_iface();
 
+    v = kerchunk_config_get(cfg, "sysstats", "rrd_file");
+    if (v && *v) snprintf(g_rrd_path, sizeof(g_rrd_path), "%s", v);
+
     /* First-sample CPU/net deltas need two consecutive reads — reset the
      * has-previous flags so a config reload doesn't produce a negative or
      * multi-hour spike from stale deltas. */
     g_have_prev_cpu = 0;
     g_have_prev_net = 0;
+    /* Reset in-flight accumulators too; the partial bucket from the
+     * previous configure isn't meaningful after a restart. */
+    acc_reset(&g_min_acc);
+    acc_reset(&g_hour_acc);
+    acc_reset(&g_day_acc);
+    g_last_rollover_t = 0;
+
+    /* Open the persistent history RRD. Diagnostic data — if we can't
+     * open it, sys_updated keeps working without history. */
+    if (g_rrd) rrd_close();
+    rrd_open(g_rrd_path);
 
     if (g_sched_id >= 0) {
         g_core->schedule_cancel(g_sched_id);
         g_sched_id = -1;
     }
+    if (g_history_sched >= 0) {
+        g_core->schedule_cancel(g_history_sched);
+        g_history_sched = -1;
+    }
+
     if (g_enabled) {
         g_sched_id = g_core->schedule_aligned(g_interval_ms, 0, 1,
                                               sample_cb, NULL);
         /* Prime a first read so the delta counters have a baseline; the
          * next scheduled tick produces the first real CPU%/net rate. */
         sample_cb(NULL);
+
+        /* Wall-clock-aligned 60s history publish — matches the RRD
+         * minute rotation so each push includes the slot that just
+         * completed. */
+        g_history_sched = g_core->schedule_aligned(60000, 0, 1,
+                                                    publish_sys_history_cb, NULL);
+        /* Seed snapshot cache so reconnecting pages get the current
+         * (mostly empty on first boot) history immediately. */
+        publish_sys_history();
     }
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "enabled=%d interval=%dms iface=%s",
+                "enabled=%d interval=%dms iface=%s rrd=%s",
                 g_enabled, g_interval_ms,
-                g_iface[0] ? g_iface : "(none)");
+                g_iface[0] ? g_iface : "(none)",
+                g_rrd ? g_rrd_path : "(unavailable)");
     return 0;
 }
 
@@ -307,6 +634,11 @@ static void sysstats_unload(void)
         g_core->schedule_cancel(g_sched_id);
         g_sched_id = -1;
     }
+    if (g_history_sched >= 0) {
+        g_core->schedule_cancel(g_history_sched);
+        g_history_sched = -1;
+    }
+    rrd_close();
 }
 
 static kerchunk_module_def_t mod_sysstats = {
