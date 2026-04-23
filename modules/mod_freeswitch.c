@@ -105,9 +105,10 @@ static int  g_esl_reconnect_ms    = 1000;
  * a missing FreeSWITCH before giving up. Without a cap, mod_freeswitch
  * spent every reconnect window attempting connect() on a host that
  * doesn't have FreeSWITCH installed. Reset on a successful auth. */
-#define ESL_MAX_RECONNECT_ATTEMPTS 10
+#define ESL_MAX_RECONNECT_ATTEMPTS 16
 static int  g_esl_consec_failures   = 0;
 static int  g_esl_circuit_open      = 0;  /* 1 = stop trying */
+static int  g_esl_backoff_ticks     = 0;  /* countdown ticks until next attempt */
 
 /* UDP audio sockets */
 static int  g_udp_rx_fd           = -1;   /* receive phone audio */
@@ -356,6 +357,7 @@ static void esl_handle_event(const char *block)
             g_esl_reconnect_ms = 1000;
             g_esl_consec_failures = 0;   /* reset circuit breaker */
             g_esl_circuit_open    = 0;
+            g_esl_backoff_ticks   = 0;
             g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "ESL authenticated");
 
             /* Subscribe to events */
@@ -466,6 +468,35 @@ static void esl_process_buffer(void)
 }
 
 /*
+ * Record an attempt that failed before auth completed. Advances the
+ * circuit breaker, logs once, and schedules the next exponential
+ * backoff window. Callers: sync connect() failure AND pre-auth recv
+ * error (EINPROGRESS connect that the peer later rejected).
+ */
+static void esl_record_connect_failure(const char *why)
+{
+    g_esl_consec_failures++;
+    int next_ms = g_esl_reconnect_ms;
+    g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+        "ESL connect to %s:%d failed: %s (attempt %d/%d, next try in %d ms)",
+        g_fs_host, g_fs_esl_port, why,
+        g_esl_consec_failures, ESL_MAX_RECONNECT_ATTEMPTS, next_ms);
+    if (g_esl_consec_failures >= ESL_MAX_RECONNECT_ATTEMPTS) {
+        g_esl_circuit_open = 1;
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
+            "ESL: %d consecutive connect failures — giving up. "
+            "Autopatch disabled until module is reloaded "
+            "(`module reload mod_freeswitch`) or daemon restart.",
+            ESL_MAX_RECONNECT_ATTEMPTS);
+        return;
+    }
+    /* Exponential backoff: 1s, 2s, 4s, 8s, 16s, then cap at 30s */
+    g_esl_backoff_ticks = g_esl_reconnect_ms / KERCHUNK_FRAME_MS;
+    g_esl_reconnect_ms *= 2;
+    if (g_esl_reconnect_ms > 30000) g_esl_reconnect_ms = 30000;
+}
+
+/*
  * Poll ESL socket — called from tick handler (20ms).
  */
 static void esl_poll(void)
@@ -474,41 +505,14 @@ static void esl_poll(void)
         /* Not connected — attempt reconnect */
         if (!g_enabled) return;
         if (g_esl_circuit_open) return;  /* gave up after N failures */
-        /* Use static counter for backoff instead of a timer */
-        static int backoff_ticks = 0;
-        if (backoff_ticks > 0) {
-            backoff_ticks--;
+        if (g_esl_backoff_ticks > 0) {
+            g_esl_backoff_ticks--;
             return;
         }
         if (esl_connect() < 0) {
-            g_esl_consec_failures++;
-            int next_ms = g_esl_reconnect_ms;
-            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                "ESL connect to %s:%d failed (attempt %d/%d), "
-                "next try in %d ms",
-                g_fs_host, g_fs_esl_port,
-                g_esl_consec_failures, ESL_MAX_RECONNECT_ATTEMPTS,
-                next_ms);
-            if (g_esl_consec_failures >= ESL_MAX_RECONNECT_ATTEMPTS) {
-                g_esl_circuit_open = 1;
-                g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
-                    "ESL: %d consecutive connect failures — giving up. "
-                    "Autopatch disabled until module is reloaded "
-                    "(`module reload mod_freeswitch`) or daemon restart.",
-                    ESL_MAX_RECONNECT_ATTEMPTS);
-                return;
-            }
-            /* Exponential backoff: 1s, 2s, 4s, 8s, 16s, then cap at 30s */
-            backoff_ticks = g_esl_reconnect_ms / KERCHUNK_FRAME_MS;
-            g_esl_reconnect_ms *= 2;
-            if (g_esl_reconnect_ms > 30000) g_esl_reconnect_ms = 30000;
+            esl_record_connect_failure(strerror(errno));
         }
         return;
-    }
-
-    /* Check if non-blocking connect completed */
-    if (!g_esl_connected && !g_esl_authed) {
-        /* Try reading — if connect succeeded, FS sends auth/request */
     }
 
     /* Receive data */
@@ -527,19 +531,26 @@ static void esl_poll(void)
             g_esl_buf_len = 0;
             g_esl_buf[0] = '\0';
         }
-    } else if (n == 0) {
-        /* Connection closed */
-        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "ESL connection closed");
+    } else if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+        /*
+         * Peer closed or recv error. If we never finished auth, this is
+         * really a failed connect (EINPROGRESS got a RST from a port
+         * with no listener). Feed the same backoff path as a sync
+         * connect failure so we don't spam at tick cadence.
+         */
+        int pre_auth = !g_esl_authed;
+        const char *why = (n == 0) ? "connection closed" : strerror(errno);
+        if (!pre_auth) {
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                "ESL %s: %s",
+                (n == 0) ? "connection closed" : "recv error",
+                (n == 0) ? "" : strerror(errno));
+        }
         esl_disconnect();
         if (g_call_state != CALL_IDLE)
             call_teardown();
-    } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-        /* Real error */
-        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
-                     "ESL recv error: %s", strerror(errno));
-        esl_disconnect();
-        if (g_call_state != CALL_IDLE)
-            call_teardown();
+        if (pre_auth)
+            esl_record_connect_failure(why);
     }
 }
 
@@ -1277,6 +1288,7 @@ static int freeswitch_configure(const kerchunk_config_t *cfg)
      * attempts after a previous "gave up" state. */
     g_esl_consec_failures = 0;
     g_esl_circuit_open    = 0;
+    g_esl_backoff_ticks   = 0;
     g_esl_reconnect_ms    = 1000;
 
     v = kerchunk_config_get(cfg, "freeswitch", "freeswitch_host");
