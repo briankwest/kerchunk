@@ -285,6 +285,7 @@ static kerchunk_core_t g_core = {
     .config_get_duration_ms = core_config_get_duration_ms,
     .log                    = core_log,
     .tts_speak          = NULL,  /* Set by mod_tts if loaded */
+    .sse_publish        = NULL,  /* Set by mod_web if loaded */
     .dtmf_register      = NULL,
     .dtmf_unregister    = NULL,
     .timer_create       = core_timer_create_fn,

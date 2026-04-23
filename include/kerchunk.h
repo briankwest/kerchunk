@@ -114,6 +114,23 @@ struct kerchunk_core {
     /* TTS (set by mod_tts if loaded, NULL otherwise) */
     int  (*tts_speak)(const char *text, int priority);
 
+    /* SSE broadcast for large/custom payloads (set by mod_web when loaded).
+     *
+     * Producers call this with an event-type string and a self-contained
+     * JSON payload. mod_web wraps it as {"type":<type>,"data":<payload>,
+     * "ts":<now_us>}, pushes it to every connected SSE client, and caches
+     * the last value per event-type so future connectors get a replay on
+     * their initial burst — no client polling needed.
+     *
+     *   admin_only = 0 → broadcast to public (/api/events) and admin
+     *   admin_only = 1 → admin (/admin/api/events) only
+     *
+     * Safe to call from any thread. The payload is copied; the caller's
+     * buffer does not need to outlive the call. */
+    void (*sse_publish)(const char *event_type,
+                        const char *payload_json,
+                        int admin_only);
+
     /* DTMF command registration (provided by mod_dtmfcmd when loaded) */
     int  (*dtmf_register)(const char *default_pattern, int event_offset,
                           const char *description, const char *config_key);

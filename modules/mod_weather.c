@@ -171,6 +171,42 @@ static int weather_parse_json(const char *json)
 }
 
 /* ================================================================== */
+/*  Response rendering (shared by CLI and SSE publish)                */
+/* ================================================================== */
+
+static void render_weather_resp(kerchunk_resp_t *r)
+{
+    resp_str(r, "location", g_location);
+    resp_int(r, "interval_ms", g_interval_ms);
+    resp_str(r, "api_key", g_api_key[0] ? "configured" : "NOT SET");
+    resp_bool(r, "valid", g_valid);
+    if (g_valid) {
+        resp_float(r, "temp_f", (double)g_temp_f);
+        resp_str(r, "wind_dir", g_wind_dir);
+        resp_float(r, "wind_mph", (double)g_wind_mph);
+        resp_str(r, "condition", g_condition);
+        resp_int(r, "humidity", g_humidity);
+    }
+    if (g_fc_valid) {
+        resp_float(r, "forecast_high_f", (double)g_fc_high_f);
+        resp_float(r, "forecast_low_f", (double)g_fc_low_f);
+        resp_int(r, "forecast_rain_pct", g_fc_rain_pct);
+        resp_int(r, "forecast_snow_pct", g_fc_snow_pct);
+        resp_int(r, "forecast_humidity", g_fc_humidity);
+    }
+}
+
+static void publish_weather_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+    kerchunk_resp_t r;
+    resp_init(&r);
+    render_weather_resp(&r);
+    resp_finish(&r);
+    g_core->sse_publish("weather_updated", r.json, /*admin_only=*/0);
+}
+
+/* ================================================================== */
 /*  HTTP fetch                                                        */
 /* ================================================================== */
 
@@ -222,6 +258,12 @@ static int weather_fetch(void)
                      g_temp_f, g_wind_dir, g_wind_mph, g_condition,
                      g_fc_high_f, g_fc_low_f, g_fc_rain_pct,
                      g_fc_snow_pct, g_fc_humidity);
+
+        /* Push the fresh sample to every SSE subscriber (public + admin)
+         * and refresh the snapshot cache. This is the single point that
+         * every successful fetch — periodic timer, DTMF, CLI, startup —
+         * passes through. */
+        publish_weather_snapshot();
     }
     return rc;
 }
@@ -581,24 +623,7 @@ static int cli_weather(int argc, const char **argv, kerchunk_resp_t *r)
             resp_str(r, "error", "Forecast fetch failed");
         }
     } else {
-        resp_str(r, "location", g_location);
-        resp_int(r, "interval_ms", g_interval_ms);
-        resp_str(r, "api_key", g_api_key[0] ? "configured" : "NOT SET");
-        resp_bool(r, "valid", g_valid);
-        if (g_valid) {
-            resp_float(r, "temp_f", (double)g_temp_f);
-            resp_str(r, "wind_dir", g_wind_dir);
-            resp_float(r, "wind_mph", (double)g_wind_mph);
-            resp_str(r, "condition", g_condition);
-            resp_int(r, "humidity", g_humidity);
-        }
-        if (g_fc_valid) {
-            resp_float(r, "forecast_high_f", (double)g_fc_high_f);
-            resp_float(r, "forecast_low_f", (double)g_fc_low_f);
-            resp_int(r, "forecast_rain_pct", g_fc_rain_pct);
-            resp_int(r, "forecast_snow_pct", g_fc_snow_pct);
-            resp_int(r, "forecast_humidity", g_fc_humidity);
-        }
+        render_weather_resp(r);
     }
     return 0;
 

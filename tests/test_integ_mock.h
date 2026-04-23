@@ -358,6 +358,7 @@ static void mock_init_core(void)
         .config_get_int      = mock_config_get_int,
         .log                 = mock_log,
         .tts_speak           = NULL,
+        .sse_publish         = NULL,
         .dtmf_register       = mock_dtmf_register,
         .dtmf_unregister     = mock_dtmf_unregister,
         .timer_create        = mock_timer_create,

@@ -687,45 +687,45 @@ function renderStats() {
   t.innerHTML=h;
 }
 
-async function refreshStats() {
-  try {
-    const d=await fetchJSON('/api/stats');
-    const now=Date.now();
-    liveStats.syncTime=now;
-    liveStats.uptime_ms=d.uptime_ms||0;
-    liveStats.total_uptime_ms=d.total_uptime_ms||0;
-    if(d.channel){
-      const c=d.channel;
-      liveStats.rx_count=c.rx_count||0;
-      liveStats.rx_time_ms=c.rx_time_ms||0;
-      liveStats.tx_count=c.tx_count||0;
-      liveStats.tx_time_ms=c.tx_time_ms||0;
-      liveStats.longest_rx_ms=c.longest_rx_ms||0;
-      liveStats.shortest_rx_ms=c.shortest_rx_ms||0;
-      liveStats.duty_pct=c.duty_pct||0;
-      liveStats.avg_rx_ms=c.avg_rx_ms||0;
-      liveStats.peak_hour=c.peak_hour||0;
-      liveStats.kerchunk_count=c.kerchunk_count||0;
-      liveStats.dtmf_commands=c.dtmf_commands||0;
-      liveStats.cwid_count=c.cwid_count||0;
-      liveStats.pages_sent=c.pages_sent||0;
-      liveStats.weather_count=c.weather_count||0;
-      liveStats.nws_alerts=c.nws_alerts||0;
-      liveStats.phone_calls=c.phone_calls||0;
-      liveStats.tot_events=c.tot_events||0;
-      liveStats.emergency_count=c.emergency_count||0;
-      liveStats.access_denied=c.access_denied||0;
-    }
-    if(d.system){
-      liveStats.queue_items=d.system.queue_items||0;
-      liveStats.cdr_records=d.system.cdr_records||0;
-    }
-    liveStats.restarts=d.restarts||0;
+/* Ingest a /api/stats-shaped object into liveStats + charts + users
+ * table. Pushed every minute by mod_stats via stats_updated SSE — no
+ * HTTP poll. */
+function applyStats(d) {
+  if (!d) return;
+  liveStats.syncTime=Date.now();
+  liveStats.uptime_ms=d.uptime_ms||0;
+  liveStats.total_uptime_ms=d.total_uptime_ms||0;
+  if(d.channel){
+    const c=d.channel;
+    liveStats.rx_count=c.rx_count||0;
+    liveStats.rx_time_ms=c.rx_time_ms||0;
+    liveStats.tx_count=c.tx_count||0;
+    liveStats.tx_time_ms=c.tx_time_ms||0;
+    liveStats.longest_rx_ms=c.longest_rx_ms||0;
+    liveStats.shortest_rx_ms=c.shortest_rx_ms||0;
+    liveStats.duty_pct=c.duty_pct||0;
+    liveStats.avg_rx_ms=c.avg_rx_ms||0;
+    liveStats.peak_hour=c.peak_hour||0;
+    liveStats.kerchunk_count=c.kerchunk_count||0;
+    liveStats.dtmf_commands=c.dtmf_commands||0;
+    liveStats.cwid_count=c.cwid_count||0;
+    liveStats.pages_sent=c.pages_sent||0;
+    liveStats.weather_count=c.weather_count||0;
+    liveStats.nws_alerts=c.nws_alerts||0;
+    liveStats.phone_calls=c.phone_calls||0;
+    liveStats.tot_events=c.tot_events||0;
+    liveStats.emergency_count=c.emergency_count||0;
+    liveStats.access_denied=c.access_denied||0;
+  }
+  if(d.system){
+    liveStats.queue_items=d.system.queue_items||0;
+    liveStats.cdr_records=d.system.cdr_records||0;
+  }
+  liveStats.restarts=d.restarts||0;
 
-    updateCharts(d);
-    if(d.users) updateUsersTable(d.users);
-    renderStats();
-  } catch(e){}
+  updateCharts(d);
+  if(d.users) updateUsersTable(d.users);
+  renderStats();
 }
 
 function tr(k,v){return '<tr><td>'+k+'</td><td>'+v+'</td></tr>';}
@@ -737,68 +737,61 @@ function fmtBps(bps) {
   return bps+' bps';
 }
 
-async function refreshSys() {
-  try {
-    const d = await fetchJSON('/api/sys');
-    const t = document.getElementById('sys-table');
-    if (!d.have_sample) {
-      t.innerHTML = '<tr><td colspan="2" style="color:var(--dim)">No sample yet</td></tr>';
-      return;
-    }
-    let h = '';
-    if (d.cpu_pct !== undefined)
-      h += tr('CPU', d.cpu_pct.toFixed(1)+'%');
-    if (d.mem_used_pct !== undefined) {
-      const used_mb = Math.round((d.mem_total_kb - d.mem_avail_kb)/1024);
-      const total_mb = Math.round(d.mem_total_kb/1024);
-      h += tr('Memory', d.mem_used_pct.toFixed(1)+'% ('+used_mb+' / '+total_mb+' MB)');
-    }
-    if (d.temp_c > 0)
-      h += tr('Temperature', d.temp_c.toFixed(1)+'°C');
-    if (d.load1 !== undefined)
-      h += tr('Load', d.load1.toFixed(2)+' / '+d.load5.toFixed(2)+' / '+d.load15.toFixed(2));
-    if (d.iface)
-      h += tr('Net ('+d.iface+') RX', fmtBps(d.net_rx_bps||0));
-    if (d.iface)
-      h += tr('Net ('+d.iface+') TX', fmtBps(d.net_tx_bps||0));
-    t.innerHTML = h || '<tr><td colspan="2" style="color:var(--dim)">No data</td></tr>';
-  } catch(e) {}
+function renderSys(d) {
+  const t = document.getElementById('sys-table');
+  if (!d || !d.have_sample) {
+    t.innerHTML = '<tr><td colspan="2" style="color:var(--dim)">No sample yet</td></tr>';
+    return;
+  }
+  let h = '';
+  if (d.cpu_pct !== undefined)
+    h += tr('CPU', d.cpu_pct.toFixed(1)+'%');
+  if (d.mem_used_pct !== undefined) {
+    const used_mb = Math.round((d.mem_total_kb - d.mem_avail_kb)/1024);
+    const total_mb = Math.round(d.mem_total_kb/1024);
+    h += tr('Memory', d.mem_used_pct.toFixed(1)+'% ('+used_mb+' / '+total_mb+' MB)');
+  }
+  if (d.temp_c > 0)
+    h += tr('Temperature', d.temp_c.toFixed(1)+'°C');
+  if (d.load1 !== undefined)
+    h += tr('Load', d.load1.toFixed(2)+' / '+d.load5.toFixed(2)+' / '+d.load15.toFixed(2));
+  if (d.iface)
+    h += tr('Net ('+d.iface+') RX', fmtBps(d.net_rx_bps||0));
+  if (d.iface)
+    h += tr('Net ('+d.iface+') TX', fmtBps(d.net_tx_bps||0));
+  t.innerHTML = h || '<tr><td colspan="2" style="color:var(--dim)">No data</td></tr>';
 }
 
-async function refreshAlerts() {
-  try {
-    const d=await fetchJSON('/api/nws');
-    const el=document.getElementById('alerts');
-    if(!d.alerts||d.alerts.length===0){el.textContent='None';return;}
-    el.innerHTML=d.alerts.map(a=>
-      '<div class="alert'+(a.severity==='MODERATE'?' moderate':'')+'">'+
-      '<strong>'+a.event+'</strong> ['+a.severity+']</div>'
-    ).join('');
-  } catch(e){}
+/* Pushed via SSE (nws_updated, weather_updated) — no HTTP polling. */
+function renderAlerts(d) {
+  const el=document.getElementById('alerts');
+  if(!d||!d.alerts||d.alerts.length===0){el.textContent='None';return;}
+  el.innerHTML=d.alerts.map(a=>
+    '<div class="alert'+(a.severity==="MODERATE"?" moderate":"")+'">'+
+    '<strong>'+a.event+'</strong> ['+a.severity+']</div>'
+  ).join('');
 }
 
-async function refreshWeather() {
-  try {
-    const d=await fetchJSON('/api/weather');
-    const wt=document.getElementById('wx-table');
-    const ft=document.getElementById('fc-table');
-    if(d.valid){
-      let h='';
-      h+=tr('Condition',d.condition||'—');
-      h+=tr('Temperature',Math.round(d.temp_f)+'\u00b0F');
-      h+=tr('Wind',d.wind_dir+' '+Math.round(d.wind_mph)+' mph');
-      h+=tr('Humidity',d.humidity+'%');
-      wt.innerHTML=h;
-    }
-    if(d.forecast_high_f!==undefined){
-      let h='';
-      h+=tr('High / Low',Math.round(d.forecast_high_f)+'\u00b0 / '+Math.round(d.forecast_low_f)+'\u00b0F');
-      if(d.forecast_rain_pct>0) h+=tr('Rain',d.forecast_rain_pct+'%');
-      if(d.forecast_snow_pct>0) h+=tr('Snow',d.forecast_snow_pct+'%');
-      h+=tr('Humidity',d.forecast_humidity+'%');
-      ft.innerHTML=h;
-    }
-  } catch(e){}
+function renderWeather(d) {
+  if(!d) return;
+  const wt=document.getElementById('wx-table');
+  const ft=document.getElementById('fc-table');
+  if(d.valid){
+    let h='';
+    h+=tr('Condition',d.condition||'\u2014');
+    h+=tr('Temperature',Math.round(d.temp_f)+'\u00b0F');
+    h+=tr('Wind',d.wind_dir+' '+Math.round(d.wind_mph)+' mph');
+    h+=tr('Humidity',d.humidity+'%');
+    wt.innerHTML=h;
+  }
+  if(d.forecast_high_f!==undefined){
+    let h='';
+    h+=tr('High / Low',Math.round(d.forecast_high_f)+'\u00b0 / '+Math.round(d.forecast_low_f)+'\u00b0F');
+    if(d.forecast_rain_pct>0) h+=tr('Rain',d.forecast_rain_pct+'%');
+    if(d.forecast_snow_pct>0) h+=tr('Snow',d.forecast_snow_pct+'%');
+    h+=tr('Humidity',d.forecast_humidity+'%');
+    ft.innerHTML=h;
+  }
 }
 
 async function refreshUsers() {
@@ -902,7 +895,6 @@ function connectSSE() {
           if (!relaying) updateTxState('TX_TAIL');
           addLog('TX: queue complete \u2192 tail','log-ptt');
           renderStats();
-          refreshWeather();
           break;
         case 'tail_start':
           addLog('RX: tail timer started','log-state');
@@ -921,12 +913,29 @@ function connectSSE() {
           break;
         case 'config_reload':
           addLog('Config reloaded','log-warn');
-          setTimeout(()=>{refreshUsers();refreshStation();refreshStatus();refreshWeather();refreshAlerts();},500);
+          setTimeout(()=>{refreshUsers();refreshStation();refreshStatus();},500);
           break;
         case 'shutdown':
           addLog('Daemon shutting down!','log-err');
           window._sseShutdown=true;
           es.close();
+          break;
+        case 'weather_updated':
+          renderWeather(evt.data);
+          break;
+        case 'nws_updated':
+          renderAlerts(evt.data);
+          break;
+        case 'stats_updated':
+          /* Minute-aligned stats snapshot from mod_stats. Replaces the
+           * former /api/stats poll. */
+          applyStats(evt.data);
+          break;
+        case 'sys_updated':
+          /* System metrics snapshot — pushed every 5s by mod_sysstats and
+           * replayed on (re)connect via the snapshot cache. Replaces the
+           * former /admin/api/sys poll. */
+          renderSys(evt.data);
           break;
         case 'heartbeat':
           /* Reset reconnect backoff — server is alive */
@@ -935,8 +944,6 @@ function connectSSE() {
         case 'custom':
           /* Custom events: 8=weather, 9=forecast, 10=time */
           addLog('Command: custom event '+evt.id,'log-state');
-          if (evt.id===8||evt.id===9) setTimeout(refreshWeather,2000);
-          if (evt.id===10) refreshStats();
           break;
         default:
           addLog(evt.type,'log-state');
@@ -1052,18 +1059,13 @@ function setAudioVolume(v) {
   initCharts();
   refreshStation();
   refreshStatus();
-  refreshStats();
-  refreshSys();
-  refreshAlerts();
-  refreshWeather();
   refreshUsers();
   buildDynamicControls().then(() => refreshStatus());
+  /* System metrics come in via SSE (sys_updated); the snapshot cache
+   * replays the latest value on connect, so no bootstrap fetch or
+   * periodic poll is needed. */
   connectSSE();
   setInterval(renderStats,1000);
-  setInterval(refreshStats,60000);
-  setInterval(refreshSys,5000);
-  setInterval(refreshAlerts,60000);
-  setInterval(refreshWeather,60000);
 })();
 </script>
 </body>

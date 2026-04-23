@@ -401,6 +401,53 @@ static pthread_mutex_t g_poll_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_poll_cond  = PTHREAD_COND_INITIALIZER;
 static volatile int    g_poll_requested;
 
+/* Forward decl: defined below with the other JSON helpers. */
+static void nws_json_escape(const char *in, char *out, size_t max);
+
+/* Build the alerts snapshot onto an already-open resp. Shared between
+ * the `nws` CLI default branch and the SSE publish path so both see the
+ * same shape. Caller is responsible for resp_init / resp_finish. */
+static void render_nws_resp(kerchunk_resp_t *r)
+{
+    resp_bool(r, "enabled", g_enabled);
+    resp_int64(r, "last_poll", (int64_t)g_last_poll);
+    resp_int(r, "alert_count", g_alert_count);
+
+    if (!r->jfirst) resp_json_raw(r, ",");
+    resp_json_raw(r, "\"alerts\":[");
+    int jfirst = 1;
+    for (int i = 0; i < MAX_ALERTS; i++) {
+        if (!g_alerts[i].active) continue;
+        if (!jfirst) resp_json_raw(r, ",");
+        char e_id[ALERT_ID_LEN * 2], e_event[ALERT_EVT_LEN * 2];
+        char e_headline[ALERT_HDL_LEN * 2];
+        nws_json_escape(g_alerts[i].id, e_id, sizeof(e_id));
+        nws_json_escape(g_alerts[i].event, e_event, sizeof(e_event));
+        nws_json_escape(g_alerts[i].headline, e_headline, sizeof(e_headline));
+        char frag[1024];
+        snprintf(frag, sizeof(frag),
+                 "{\"id\":\"%s\",\"event\":\"%s\",\"severity\":\"%s\","
+                 "\"headline\":\"%s\"}",
+                 e_id, e_event,
+                 severity_str(g_alerts[i].severity),
+                 e_headline);
+        resp_json_raw(r, frag);
+        jfirst = 0;
+    }
+    resp_json_raw(r, "]");
+    r->jfirst = 0;
+}
+
+static void publish_nws_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+    kerchunk_resp_t r;
+    resp_init(&r);
+    render_nws_resp(&r);
+    resp_finish(&r);
+    g_core->sse_publish("nws_updated", r.json, /*admin_only=*/0);
+}
+
 static void poll_nws(void)
 {
     char *json = nws_fetch();
@@ -412,6 +459,11 @@ static void poll_nws(void)
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
                 "polled: %d active alert%s", g_alert_count,
                 g_alert_count == 1 ? "" : "s");
+
+    /* Push the freshly-processed alert list to every SSE client and
+     * refresh the snapshot cache so future connectors get current alerts
+     * instantly without polling. */
+    publish_nws_snapshot();
 }
 
 static void *poll_worker(void *arg)
@@ -552,6 +604,9 @@ static int nws_configure(const kerchunk_config_t *cfg)
 
     if (!g_enabled) {
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "disabled");
+        /* Still seed the snapshot cache so the public page gets a coherent
+         * (empty) alerts list on SSE connect instead of an empty card. */
+        publish_nws_snapshot();
         return 0;
     }
 
@@ -591,6 +646,12 @@ static int nws_configure(const kerchunk_config_t *cfg)
 
     /* Initial poll */
     request_poll();
+
+    /* Seed the snapshot cache with the current (possibly empty) alert
+     * list immediately so pages connecting before the first poll
+     * completes still render a valid card. The async poll will replace
+     * it with live data shortly. */
+    publish_nws_snapshot();
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "monitoring %.4f,%.4f poll=%ds reannounce=%ds min_sev=%s",
@@ -673,34 +734,7 @@ static int cli_nws(int argc, const char **argv, kerchunk_resp_t *r)
         return 0;
     }
 
-    resp_bool(r, "enabled", g_enabled);
-    resp_int64(r, "last_poll", (int64_t)g_last_poll);
-    resp_int(r, "alert_count", g_alert_count);
-
-    /* JSON: alerts array */
-    if (!r->jfirst) resp_json_raw(r, ",");
-    resp_json_raw(r, "\"alerts\":[");
-    int jfirst = 1;
-    for (int i = 0; i < MAX_ALERTS; i++) {
-        if (!g_alerts[i].active) continue;
-        if (!jfirst) resp_json_raw(r, ",");
-        char e_id[ALERT_ID_LEN * 2], e_event[ALERT_EVT_LEN * 2];
-        char e_headline[ALERT_HDL_LEN * 2];
-        nws_json_escape(g_alerts[i].id, e_id, sizeof(e_id));
-        nws_json_escape(g_alerts[i].event, e_event, sizeof(e_event));
-        nws_json_escape(g_alerts[i].headline, e_headline, sizeof(e_headline));
-        char frag[1024];
-        snprintf(frag, sizeof(frag),
-                 "{\"id\":\"%s\",\"event\":\"%s\",\"severity\":\"%s\","
-                 "\"headline\":\"%s\"}",
-                 e_id, e_event,
-                 severity_str(g_alerts[i].severity),
-                 e_headline);
-        resp_json_raw(r, frag);
-        jfirst = 0;
-    }
-    resp_json_raw(r, "]");
-    r->jfirst = 0;
+    render_nws_resp(r);
 
     /* Text */
     if (g_enabled) {

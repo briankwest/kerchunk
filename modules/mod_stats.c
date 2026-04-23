@@ -214,6 +214,26 @@ static void on_tick(const kerchevt_t *evt, void *ud)
     kerchunk_rrd_tick(g_rrd);
 }
 
+/* Forward decls: defined alongside cli_stats below. The CLI renderer is
+ * reused verbatim for the SSE publish so both paths emit identical
+ * shapes. Publish runs on a wall-clock 60s cadence (aligned to the RRD
+ * minute rotation). */
+static void render_stats_resp(kerchunk_resp_t *r);
+
+static int g_stats_pub_sched = -1;
+
+static void publish_stats_snapshot(void *ud)
+{
+    (void)ud;
+    if (!g_core || !g_core->sse_publish || !g_rrd) return;
+    kerchunk_resp_t r;
+    resp_init(&r);
+    render_stats_resp(&r);
+    resp_finish(&r);
+    /* Top-users list includes usernames — admin-only. */
+    g_core->sse_publish("stats_updated", r.json, /*admin_only=*/1);
+}
+
 static void on_shutdown(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
@@ -264,6 +284,20 @@ static int stats_configure(const kerchunk_config_t *cfg)
                 "RRD opened: %s (rx=%u tx=%u users=%u restarts=%u)",
                 g_rrd_path, c->rx_count, c->tx_count,
                 kerchunk_rrd_data(g_rrd)->user_count, c->restarts);
+
+    /* Schedule a wall-clock-aligned publish every minute — matches the
+     * RRD minute-slot rotation so each fresh snapshot includes the slot
+     * that just closed. */
+    if (g_stats_pub_sched >= 0) {
+        g_core->schedule_cancel(g_stats_pub_sched);
+        g_stats_pub_sched = -1;
+    }
+    g_stats_pub_sched = g_core->schedule_aligned(60000, 0, 1,
+                                                  publish_stats_snapshot, NULL);
+    /* Seed the snapshot cache immediately so pages connecting before the
+     * first minute boundary see current numbers, not empty card. */
+    publish_stats_snapshot(NULL);
+
     return 0;
 }
 
@@ -282,52 +316,25 @@ static void stats_unload(void)
     g_core->unsubscribe(KERCHEVT_TICK,              on_tick);
     g_core->unsubscribe(KERCHEVT_SHUTDOWN,          on_shutdown);
 
+    if (g_stats_pub_sched >= 0) {
+        g_core->schedule_cancel(g_stats_pub_sched);
+        g_stats_pub_sched = -1;
+    }
+
     if (g_rrd) { kerchunk_rrd_close(g_rrd); g_rrd = NULL; }
 }
 
 /* ── CLI ── */
 
-static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
+/* Build the full stats dashboard JSON + text onto an already-open resp.
+ * Shared by the \ CLI default branch and the SSE publish path so
+ * both see identical shape. Caller is responsible for resp_init /
+ * resp_finish. */
+static void render_stats_resp(kerchunk_resp_t *r)
 {
-    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
-    if (!g_rrd) { resp_str(r, "error", "RRD not open"); return -1; }
-
+    if (!g_rrd) return;
     const rrd_file_t *d = kerchunk_rrd_data(g_rrd);
     const rrd_counters_t *c = &d->counters;
-
-    /* stats reset */
-    if (argc >= 2 && strcmp(argv[1], "reset") == 0) {
-        kerchunk_rrd_reset(g_rrd);
-        resp_bool(r, "ok", 1);
-        resp_str(r, "action", "reset");
-        return 0;
-    }
-
-    /* stats save (force sync) */
-    if (argc >= 2 && strcmp(argv[1], "save") == 0) {
-        kerchunk_rrd_sync(g_rrd);
-        resp_bool(r, "ok", 1);
-        resp_str(r, "file", g_rrd_path);
-        return 0;
-    }
-
-    /* stats user <name> */
-    if (argc >= 3 && strcmp(argv[1], "user") == 0) {
-        for (uint32_t i = 0; i < d->user_count; i++) {
-            if (strcasecmp(d->users[i].name, argv[2]) == 0) {
-                const rrd_user_t *u = &d->users[i];
-                resp_str(r, "name", u->name);
-                resp_int(r, "user_id", u->user_id);
-                resp_int(r, "tx_count", (int)u->tx_count);
-                resp_int64(r, "tx_time_ms", (int64_t)u->tx_time_ms);
-                resp_int(r, "longest_ms", (int)u->longest_ms);
-                resp_int64(r, "last_heard", (int64_t)u->last_heard);
-                return 0;
-            }
-        }
-        resp_str(r, "error", "User not found");
-        return 0;
-    }
 
     /* ── Full dashboard ── */
 
@@ -537,6 +544,50 @@ static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
         c->queue_items, c->cdr_records, g_rrd_path);
       resp_text_raw(r, l); }
 
+}
+
+static int cli_stats(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+    if (!g_rrd) { resp_str(r, "error", "RRD not open"); return -1; }
+
+    const rrd_file_t *d = kerchunk_rrd_data(g_rrd);
+
+    /* stats reset */
+    if (argc >= 2 && strcmp(argv[1], "reset") == 0) {
+        kerchunk_rrd_reset(g_rrd);
+        resp_bool(r, "ok", 1);
+        resp_str(r, "action", "reset");
+        return 0;
+    }
+
+    /* stats save (force sync) */
+    if (argc >= 2 && strcmp(argv[1], "save") == 0) {
+        kerchunk_rrd_sync(g_rrd);
+        resp_bool(r, "ok", 1);
+        resp_str(r, "file", g_rrd_path);
+        return 0;
+    }
+
+    /* stats user <name> */
+    if (argc >= 3 && strcmp(argv[1], "user") == 0) {
+        for (uint32_t i = 0; i < d->user_count; i++) {
+            if (strcasecmp(d->users[i].name, argv[2]) == 0) {
+                const rrd_user_t *u = &d->users[i];
+                resp_str(r, "name", u->name);
+                resp_int(r, "user_id", u->user_id);
+                resp_int(r, "tx_count", (int)u->tx_count);
+                resp_int64(r, "tx_time_ms", (int64_t)u->tx_time_ms);
+                resp_int(r, "longest_ms", (int)u->longest_ms);
+                resp_int64(r, "last_heard", (int64_t)u->last_heard);
+                return 0;
+            }
+        }
+        resp_str(r, "error", "User not found");
+        return 0;
+    }
+
+    render_stats_resp(r);
     return 0;
 
 usage:

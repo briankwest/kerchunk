@@ -1511,21 +1511,23 @@ static void json_escape_append(char *dst, size_t max, const char *src, size_t n)
     dst[len] = '\0';
 }
 
-static void handle_api_bulletin_get(struct mg_connection *c)
+/* Render the current bulletin as a self-contained JSON payload:
+ *   {"text":"<escaped>","updated_at":<mtime>,"empty":<bool>}
+ *
+ * Returns a malloc'd string the caller must free. NULL on OOM. Used by
+ * both the GET handler and the SSE publish path so the wire shape is
+ * identical. */
+static char *build_bulletin_json(void)
 {
     FILE *fp = fopen(g_bulletin_path, "r");
     if (!fp) {
-        /* No bulletin yet — empty payload is fine, not an error. */
-        mg_http_reply(c, 200, API_HEADERS,
-                      "{\"text\":\"\",\"updated_at\":0,\"empty\":true}");
-        return;
+        char *empty = strdup("{\"text\":\"\",\"updated_at\":0,\"empty\":true}");
+        return empty;
     }
 
-    /* Read at most max_size + 1 so we can detect oversize files written
-     * out-of-band. Anything past max_size is truncated. */
     size_t cap = (size_t)g_bulletin_max_size;
     char *buf = malloc(cap + 1);
-    if (!buf) { fclose(fp); mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"oom\"}"); return; }
+    if (!buf) { fclose(fp); return NULL; }
     size_t n = fread(buf, 1, cap, fp);
     fclose(fp);
     buf[n] = '\0';
@@ -1534,19 +1536,36 @@ static void handle_api_bulletin_get(struct mg_connection *c)
     long mtime = 0;
     if (stat(g_bulletin_path, &st) == 0) mtime = (long)st.st_mtime;
 
-    /* Build JSON: {"text":"<escaped>","updated_at":<mtime>,"empty":<bool>} */
-    size_t jsz = n * 6 + 128;  /* worst-case: every char escaped */
+    /* Worst-case: every character escapes to six bytes (\uXXXX). */
+    size_t jsz = n * 6 + 128;
     char *json = malloc(jsz);
-    if (!json) { free(buf); mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"oom\"}"); return; }
+    if (!json) { free(buf); return NULL; }
     snprintf(json, jsz, "{\"text\":\"");
     json_escape_append(json, jsz, buf, n);
     size_t l = strlen(json);
     snprintf(json + l, jsz - l, "\",\"updated_at\":%ld,\"empty\":%s}",
              mtime, n == 0 ? "true" : "false");
+    free(buf);
+    return json;
+}
 
+/* Build the current bulletin payload and push it as a bulletin_updated
+ * SSE event. Safe to call before g_core->sse_publish is wired (no-op). */
+static void publish_bulletin_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+    char *json = build_bulletin_json();
+    if (!json) return;
+    g_core->sse_publish("bulletin_updated", json, /*admin_only=*/0);
+    free(json);
+}
+
+static void handle_api_bulletin_get(struct mg_connection *c)
+{
+    char *json = build_bulletin_json();
+    if (!json) { mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"oom\"}"); return; }
     mg_http_reply(c, 200, API_HEADERS, "%s", json);
     free(json);
-    free(buf);
 }
 
 static void handle_api_bulletin_put(struct mg_connection *c,
@@ -1590,6 +1609,9 @@ static void handle_api_bulletin_put(struct mg_connection *c,
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "bulletin updated (%zu bytes)", n);
+    /* Push the new content to every live SSE client and refresh the
+     * snapshot cache so future connectors see the latest edit. */
+    publish_bulletin_snapshot();
     mg_http_reply(c, 200, API_HEADERS,
                   "{\"ok\":true,\"bytes\":%zu}", n);
 }
@@ -1799,6 +1821,11 @@ static void handle_admin_api_status(struct mg_connection *c,
     (void)hm;
 }
 
+/* Forward decl: defined next to sse_publish_impl, below. Called from the
+ * /api/events and /admin/api/events route handlers to replay cached
+ * snapshots to a just-connected SSE client. */
+static void emit_snapshot_burst(struct mg_connection *c, int admin);
+
 /* ── Admin API dispatch — rewrites /admin/api/X to /api/X for handlers ── */
 
 static void handle_admin_api(struct mg_connection *c,
@@ -1822,6 +1849,7 @@ static void handle_admin_api(struct mg_connection *c,
             "\r\n");
         c->data[0] = 'E';  /* Mark as SSE client */
         atomic_fetch_add(&g_sse_count, 1);
+        emit_snapshot_burst(c, 1);  /* replay cached snapshots */
         return;
     }
 
@@ -2021,7 +2049,16 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                     mg_http_reply(c, 403, "", "Forbidden\n");
                     return;
                 }
-                struct mg_http_serve_opts opts = { .root_dir = g_static_dir };
+                /* Cache-Control: no-cache forces every request to
+                 * revalidate, so a freshly-deployed HTML/JS/CSS shows up
+                 * on the next reload instead of being served stale for
+                 * hours from the browser's heuristic cache. 304s still
+                 * work via If-Modified-Since, so bytes only move when
+                 * the file actually changed. */
+                struct mg_http_serve_opts opts = {
+                    .root_dir      = g_static_dir,
+                    .extra_headers = "Cache-Control: no-cache\r\n",
+                };
                 mg_http_serve_dir(c, hm, &opts);
             } else {
                 mg_http_reply(c, 404, "", "Not found\n");
@@ -2091,6 +2128,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                     "\r\n");
                 c->data[0] = 'P';  /* Mark as public SSE client */
                 atomic_fetch_add(&g_sse_count, 1);
+                emit_snapshot_burst(c, 0);  /* replay public snapshots */
                 return;
             }
 
@@ -2110,7 +2148,11 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                 mg_http_reply(c, 403, "", "Forbidden\n");
                 return;
             }
-            struct mg_http_serve_opts opts = { .root_dir = g_static_dir };
+            /* See comment at the admin static-serve site; same rationale. */
+            struct mg_http_serve_opts opts = {
+                .root_dir      = g_static_dir,
+                .extra_headers = "Cache-Control: no-cache\r\n",
+            };
             mg_http_serve_dir(c, hm, &opts);
         } else {
             mg_http_reply(c, 404, "", "Not found\n");
@@ -2252,6 +2294,110 @@ static int is_public_safe_event(kerchevt_type_t t)
     }
 }
 
+/* ── SSE broadcast API for large/custom payloads ──
+ *
+ * Any module can call g_core->sse_publish("type", json, admin_only) to
+ * open or update a named SSE channel. Every call:
+ *   1. Pre-renders the full SSE data JSON.
+ *   2. Broadcasts to every live SSE client (via the existing wakeup path).
+ *   3. Caches the rendered line keyed by type so future connectors get a
+ *      replay burst on connect and never need to HTTP-poll for initial
+ *      state.
+ *
+ * The cache grows dynamically — there is no registration step and no
+ * fixed limit on channel count. Re-publishing the same type replaces
+ * the cached value. */
+
+typedef struct {
+    char   type[48];
+    char  *line;        /* malloc'd JSON "{\"type\":...,\"data\":...,\"ts\":...}" */
+    size_t line_len;
+    int    admin_only;
+} sse_snapshot_t;
+
+static sse_snapshot_t *g_sse_snaps;
+static int             g_sse_snap_count;
+static int             g_sse_snap_cap;
+static pthread_mutex_t g_sse_snap_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void sse_publish_impl(const char *type,
+                              const char *payload_json,
+                              int admin_only)
+{
+    if (!type || !*type || !payload_json) return;
+
+    /* Render the full SSE data line once. Used for both the live broadcast
+     * and the per-type snapshot cache. */
+    size_t plen   = strlen(payload_json);
+    size_t buflen = strlen(type) + plen + 64;
+    char  *line   = malloc(buflen);
+    if (!line) return;
+
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now_us = (uint64_t)ts.tv_sec * 1000000ULL +
+                      (uint64_t)ts.tv_nsec / 1000ULL;
+
+    int n = snprintf(line, buflen,
+                     "{\"type\":\"%s\",\"data\":%s,\"ts\":%llu}",
+                     type, payload_json, (unsigned long long)now_us);
+    if (n < 0 || (size_t)n >= buflen) { free(line); return; }
+
+    /* Replace existing slot with same type, or append a new one. */
+    pthread_mutex_lock(&g_sse_snap_mutex);
+    sse_snapshot_t *slot = NULL;
+    for (int i = 0; i < g_sse_snap_count; i++) {
+        if (strcmp(g_sse_snaps[i].type, type) == 0) { slot = &g_sse_snaps[i]; break; }
+    }
+    if (!slot) {
+        if (g_sse_snap_count >= g_sse_snap_cap) {
+            int new_cap = g_sse_snap_cap ? g_sse_snap_cap * 2 : 8;
+            sse_snapshot_t *r = realloc(g_sse_snaps,
+                                        (size_t)new_cap * sizeof(*g_sse_snaps));
+            if (!r) { pthread_mutex_unlock(&g_sse_snap_mutex); free(line); return; }
+            g_sse_snaps    = r;
+            g_sse_snap_cap = new_cap;
+        }
+        slot = &g_sse_snaps[g_sse_snap_count++];
+        snprintf(slot->type, sizeof(slot->type), "%s", type);
+        slot->line = NULL;
+    }
+    free(slot->line);
+    slot->line       = line;                /* cache takes ownership */
+    slot->line_len   = (size_t)n;
+    slot->admin_only = admin_only ? 1 : 0;
+    pthread_mutex_unlock(&g_sse_snap_mutex);
+
+    /* Broadcast to live clients. Uses the same scope-prefix protocol as
+     * web_event_handler: 'P' = public+admin, 'E' = admin-only. We need
+     * our own heap buffer here because the 520 B stack buffer in
+     * web_event_handler is too small for large snapshots. */
+    if (atomic_load(&g_sse_count) <= 0) return;
+
+    char *wbuf = malloc((size_t)n + 2);
+    if (!wbuf) return;
+    wbuf[0] = admin_only ? 'E' : 'P';
+    memcpy(wbuf + 1, line, (size_t)n);
+    mg_wakeup(&g_mgr, g_listener_id, wbuf, (size_t)n + 1);
+    free(wbuf);
+}
+
+/* Replay cached snapshots to a just-connected SSE client. Runs on the
+ * mongoose thread synchronously after the HTTP headers are written, so
+ * the client's very first network activity after connect is the current
+ * snapshot burst. */
+static void emit_snapshot_burst(struct mg_connection *c, int admin)
+{
+    pthread_mutex_lock(&g_sse_snap_mutex);
+    for (int i = 0; i < g_sse_snap_count; i++) {
+        sse_snapshot_t *s = &g_sse_snaps[i];
+        if (s->admin_only && !admin) continue;
+        if (!s->line || s->line_len == 0) continue;
+        mg_printf(c, "data: %.*s\n\n", (int)s->line_len, s->line);
+    }
+    pthread_mutex_unlock(&g_sse_snap_mutex);
+}
+
 static void web_event_handler(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
@@ -2327,6 +2473,8 @@ static int web_load(kerchunk_core_t *core)
 {
     g_core = core;
     build_cors_headers();
+    /* Expose the SSE broadcast API to other modules. */
+    core->sse_publish = sse_publish_impl;
     return 0;
 }
 
@@ -2404,6 +2552,11 @@ static int web_configure(const kerchunk_config_t *cfg)
                                                    g_bulletin_max_size);
     if (g_bulletin_max_size < 256) g_bulletin_max_size = 256;
     if (g_bulletin_max_size > (1 << 20)) g_bulletin_max_size = 1 << 20;
+
+    /* Seed the SSE snapshot cache with whatever is on disk right now so
+     * first-time visitors see the bulletin as soon as they connect —
+     * otherwise the cache stays empty until the next admin edit. */
+    publish_bulletin_snapshot();
 
     /* Redirect mongoose logs through our logger */
     mg_log_set_fn(mg_log_cb, NULL);
@@ -2611,6 +2764,20 @@ static void web_unload(void)
 
     if (g_cert_data.buf) { free(g_cert_data.buf); g_cert_data.buf = NULL; }
     if (g_key_data.buf) { free(g_key_data.buf); g_key_data.buf = NULL; }
+
+    /* Tear down the SSE snapshot cache. Safe to do without the mutex here
+     * because the web thread has been joined and no more sse_publish_impl
+     * calls can land — but hold the mutex anyway for symmetry. */
+    pthread_mutex_lock(&g_sse_snap_mutex);
+    for (int i = 0; i < g_sse_snap_count; i++)
+        free(g_sse_snaps[i].line);
+    free(g_sse_snaps);
+    g_sse_snaps      = NULL;
+    g_sse_snap_count = 0;
+    g_sse_snap_cap   = 0;
+    pthread_mutex_unlock(&g_sse_snap_mutex);
+
+    g_core->sse_publish = NULL;
 }
 
 /* ── CLI ── */

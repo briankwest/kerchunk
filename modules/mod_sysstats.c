@@ -174,23 +174,10 @@ static void read_network(void)
     g_have_prev_net = 1;
 }
 
-static void sample_cb(void *ud)
+/* Populate a kerchunk_resp_t with the current sample. Used by both the
+ * `sys` CLI handler and the periodic SSE publish after each sample. */
+static void render_sys_resp(kerchunk_resp_t *r)
 {
-    (void)ud;
-    read_cpu();
-    read_meminfo();
-    read_loadavg();
-    read_temperature();
-    read_network();
-    g_last_sample_time = time(NULL);
-    g_have_sample = 1;
-}
-
-/* CLI */
-static int cli_sys(int argc, const char **argv, kerchunk_resp_t *r)
-{
-    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
-
     resp_bool(r, "enabled", g_enabled);
     resp_int(r, "interval_ms", g_interval_ms);
     resp_str(r, "iface", g_iface);
@@ -210,6 +197,36 @@ static int cli_sys(int argc, const char **argv, kerchunk_resp_t *r)
     resp_int64(r, "net_rx_bps", (int64_t)g_net_rx_bps);
     resp_int64(r, "net_tx_bps", (int64_t)g_net_tx_bps);
     resp_int64(r, "sample_time", (int64_t)g_last_sample_time);
+}
+
+static void sample_cb(void *ud)
+{
+    (void)ud;
+    read_cpu();
+    read_meminfo();
+    read_loadavg();
+    read_temperature();
+    read_network();
+    g_last_sample_time = time(NULL);
+    g_have_sample = 1;
+
+    /* Broadcast the fresh sample to admin SSE clients. Payload is the
+     * same JSON the CLI would emit, so consumers see a consistent shape
+     * whether they polled or subscribed. */
+    if (g_core->sse_publish) {
+        kerchunk_resp_t r;
+        resp_init(&r);
+        render_sys_resp(&r);
+        resp_finish(&r);
+        g_core->sse_publish("sys_updated", r.json, /*admin_only=*/1);
+    }
+}
+
+/* CLI */
+static int cli_sys(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    if (argc >= 2 && strcmp(argv[1], "help") == 0) goto usage;
+    render_sys_resp(r);
     return 0;
 
 usage:

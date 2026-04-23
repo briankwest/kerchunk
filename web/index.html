@@ -263,42 +263,38 @@ function renderStreamTable() {
   t.innerHTML = h || '<tr><td colspan="2" style="color:var(--dim)">No data</td></tr>';
 }
 
-/* ── Weather ── */
-async function refreshWeather() {
-  try {
-    const d = await (await fetch('/api/weather')).json();
-    const wt = document.getElementById('wx-table');
-    const ft = document.getElementById('fc-table');
-    if (d.valid) {
-      let h = '';
-      h += tr('Condition', d.condition || '\u2014');
-      h += tr('Temperature', Math.round(d.temp_f) + '\u00b0F');
-      h += tr('Wind', d.wind_dir + ' ' + Math.round(d.wind_mph) + ' mph');
-      h += tr('Humidity', d.humidity + '%');
-      wt.innerHTML = h;
-    }
-    if (d.forecast_high_f !== undefined) {
-      let h = '';
-      h += tr('High / Low', Math.round(d.forecast_high_f) + '\u00b0 / ' + Math.round(d.forecast_low_f) + '\u00b0F');
-      if (d.forecast_rain_pct > 0) h += tr('Rain', d.forecast_rain_pct + '%');
-      if (d.forecast_snow_pct > 0) h += tr('Snow', d.forecast_snow_pct + '%');
-      h += tr('Humidity', d.forecast_humidity + '%');
-      ft.innerHTML = h;
-    }
-  } catch(e) {}
+/* ── Weather / NWS ──
+ * Pushed via SSE (weather_updated, nws_updated). Snapshot-on-connect
+ * delivers current values to each new SSE client — no HTTP polling. */
+function renderWeather(d) {
+  if (!d) return;
+  const wt = document.getElementById('wx-table');
+  const ft = document.getElementById('fc-table');
+  if (d.valid) {
+    let h = '';
+    h += tr('Condition', d.condition || '\u2014');
+    h += tr('Temperature', Math.round(d.temp_f) + '\u00b0F');
+    h += tr('Wind', d.wind_dir + ' ' + Math.round(d.wind_mph) + ' mph');
+    h += tr('Humidity', d.humidity + '%');
+    wt.innerHTML = h;
+  }
+  if (d.forecast_high_f !== undefined) {
+    let h = '';
+    h += tr('High / Low', Math.round(d.forecast_high_f) + '\u00b0 / ' + Math.round(d.forecast_low_f) + '\u00b0F');
+    if (d.forecast_rain_pct > 0) h += tr('Rain', d.forecast_rain_pct + '%');
+    if (d.forecast_snow_pct > 0) h += tr('Snow', d.forecast_snow_pct + '%');
+    h += tr('Humidity', d.forecast_humidity + '%');
+    ft.innerHTML = h;
+  }
 }
 
-/* ── NWS Alerts ── */
-async function refreshAlerts() {
-  try {
-    const d = await (await fetch('/api/nws')).json();
-    const el = document.getElementById('alerts');
-    if (!d.alerts || d.alerts.length === 0) { el.textContent = 'None'; return; }
-    el.innerHTML = d.alerts.map(function(a) {
-      return '<div class="alert' + (a.severity === 'MODERATE' ? ' moderate' : '') + '">' +
-             '<strong>' + a.event + '</strong> [' + a.severity + ']</div>';
-    }).join('');
-  } catch(e) {}
+function renderAlerts(d) {
+  const el = document.getElementById('alerts');
+  if (!d || !d.alerts || d.alerts.length === 0) { el.textContent = 'None'; return; }
+  el.innerHTML = d.alerts.map(function(a) {
+    return '<div class="alert' + (a.severity === 'MODERATE' ? ' moderate' : '') + '">' +
+           '<strong>' + a.event + '</strong> [' + a.severity + ']</div>';
+  }).join('');
 }
 
 /* ── Live Audio ── */
@@ -335,6 +331,15 @@ function connectSSE() {
           break;
         case 'ptt_drop':
           updatePTT(false);
+          break;
+        case 'bulletin_updated':
+          renderBulletin(e.data);
+          break;
+        case 'weather_updated':
+          renderWeather(e.data);
+          break;
+        case 'nws_updated':
+          renderAlerts(e.data);
           break;
         case 'shutdown':
           updateState('IDLE');
@@ -428,33 +433,28 @@ window.setAudioVolume = function(v) {
   if (audioGain) audioGain.gain.value = v / 100;
 };
 
-/* ── Bulletin ── */
-async function refreshBulletin() {
-  try {
-    const d = await (await fetch('/api/bulletin')).json();
-    const card = document.getElementById('bulletin-card');
-    const body = document.getElementById('bulletin-body');
-    if (!d.text || d.empty) {
-      card.style.display = 'none';
-      return;
-    }
-    body.innerHTML = window.renderMarkdown(d.text);
-    card.style.display = '';
-  } catch(e) {}
+/* ── Bulletin ──
+ * Driven by the bulletin_updated SSE event (see connectSSE). The server
+ * seeds the snapshot cache at startup and pushes updates on every admin
+ * edit, so this page never polls /api/bulletin. */
+function renderBulletin(d) {
+  const card = document.getElementById('bulletin-card');
+  const body = document.getElementById('bulletin-body');
+  if (!d || !d.text || d.empty) {
+    card.style.display = 'none';
+    return;
+  }
+  body.innerHTML = window.renderMarkdown(d.text);
+  card.style.display = '';
 }
 
 /* ── Init ── */
 refreshStation();
-refreshWeather();
-refreshAlerts();
-refreshBulletin();
-/* connectSSE's onopen calls refreshStatus, so the initial bootstrap
- * happens there — no need to call it here too. */
+/* Everything else — state, PTT, bulletin, weather, alerts — comes in
+ * via SSE. connectSSE's onopen calls refreshStatus for state/PTT
+ * bootstrap, and the snapshot-on-connect burst delivers the current
+ * weather, alerts, and bulletin. No HTTP polling. */
 connectSSE();
-setInterval(refreshWeather, 60000);
-setInterval(refreshAlerts, 60000);
-/* Refresh bulletin every 5 min — it's rarely updated so no need to hammer. */
-setInterval(refreshBulletin, 300000);
 
 window.openCoverageOverlay = function() {
   document.getElementById('coverage-overlay-img').src=document.getElementById('coverage-img').src;
