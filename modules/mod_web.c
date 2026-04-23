@@ -1816,6 +1816,17 @@ static void handle_admin_api_status(struct mg_connection *c,
     if (key) {
         resp_str(&resp, "google_maps_api_key", key);
     }
+
+    /* Audio stream fields — same as /api/status gets augmented with.
+     * The admin dashboard's Live Audio card reads these to populate
+     * Listeners / Sample rate / Bitrate; without them the stream-table
+     * stays empty because handle_admin_api_status bypasses the inline
+     * augmentation that handles the public route. */
+    int sr = g_core ? g_core->sample_rate : 0;
+    resp_int(&resp, "audio_listeners", atomic_load(&g_ws_audio_count));
+    resp_int(&resp, "audio_sample_rate", sr);
+    resp_int(&resp, "audio_bitrate_kbps", sr * 16 / 1000);
+
     resp_finish(&resp);
     mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
     (void)hm;
