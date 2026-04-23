@@ -1662,19 +1662,30 @@ static void handle_api_coverage_png_put(struct mg_connection *c,
                       "{\"error\":\"coverage PNG too large\"}");
         return;
     }
-    /* Sanity-check the PNG magic so we don't write arbitrary data to
-     * a path the public site happily serves. */
-    if (n < 8 ||
-        (uint8_t)hm->body.buf[0] != 0x89 ||
-        hm->body.buf[1] != 'P' || hm->body.buf[2] != 'N' ||
-        hm->body.buf[3] != 'G') {
+    /* Full 8-byte PNG signature check. Rejecting non-PNG bodies keeps a
+     * malformed upload (or a typo'd curl) from landing on a path the
+     * public site happily serves. We don't parse the rest of the file —
+     * the browser will catch any structural corruption and just fail
+     * to render, which is an acceptable failure mode. */
+    static const unsigned char png_sig[8] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
+    };
+    if (n < sizeof(png_sig) ||
+        memcmp(hm->body.buf, png_sig, sizeof(png_sig)) != 0) {
         mg_http_reply(c, 400, API_HEADERS,
                       "{\"error\":\"body is not a PNG\"}");
         return;
     }
 
-    char tmp_path[300];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", g_coverage_png_path);
+    /* PID-suffixed tmp path so concurrent PUTs don't fight over one
+     * shared tempfile and produce an interleaved-write corrupt final.
+     * Each PUT runs on the same mongoose thread today, but the suffix
+     * is cheap insurance against any future threading changes and also
+     * keeps a crash-during-write from leaving a permanent .tmp lying
+     * around under the same predictable name. */
+    char tmp_path[320];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.%d.tmp",
+             g_coverage_png_path, (int)getpid());
     FILE *fp = fopen(tmp_path, "wb");
     if (!fp) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,

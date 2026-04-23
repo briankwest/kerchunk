@@ -1952,10 +1952,11 @@ function presetSnapshot() {
   return p;
 }
 
-/* Apply a preset's values to the form, reposition the marker if we
- * know where, and trigger a recalc so the map reflects the loaded
- * config immediately (the user's explicit "redoing the analysis"
- * ask). Fields missing from older presets are left at their current
+/* Apply a preset's values to the form and reposition the marker if
+ * we know where — but do NOT auto-run Calculate Coverage. Running
+ * the analysis is a deliberate, expensive step (Google Elevation
+ * API calls, radial sweeps); the user clicks Calculate when they're
+ * ready. Fields missing from older presets are left at their current
  * value instead of being cleared. */
 function presetApply(p) {
   if (!p) return;
@@ -1971,13 +1972,10 @@ function presetApply(p) {
     placeMarker(ll);
     gMap.panTo(ll);
   } else if (p.address) {
-    /* Fall back to geocoding if no lat/lng (shouldn't happen for
-     * presets written by this code, but robust for edge cases). */
+    /* Fall back to geocoding if no lat/lng — only places the marker
+     * at the geocoded spot, does not calculate coverage. */
     geocode();
-    return;  /* geocode triggers its own flow */
   }
-
-  if (!$('btnCalc').disabled) $('btnCalc').click();
 }
 
 function presetSelectedName() { return $('savedPresetSelect').value || ''; }
@@ -2026,7 +2024,7 @@ function presetDoLoad() {
   const p = presetsLoad()[name];
   if (!p) return;
   presetApply(p);
-  setStatus('Loaded preset "' + name + '".');
+  setStatus('Loaded preset "' + name + '". Click Calculate Coverage to analyze.');
 }
 
 function presetDoRename() {
