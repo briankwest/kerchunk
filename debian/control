@@ -14,6 +14,11 @@ Build-Depends: debhelper-compat (= 13),
                libssl-dev,
                librtlsdr-dev,
                libasound2-dev,
+               libaprs-dev,
+               libflex-dev,
+               libpoc-dev,
+               libpocsag-dev,
+               libwyoming-dev,
                libplcode-dev (>= 1.0.1),
                libnemo-normalize (>= 1.0.1)
 Standards-Version: 4.6.2
