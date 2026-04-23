@@ -215,23 +215,23 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
     <div class="sys-grid">
       <div class="sys-chart">
         <h3>CPU (%)</h3>
-        <div style="position:relative;height:100px"><canvas id="chart-sys-cpu"></canvas></div>
+        <div style="position:relative;height:120px"><canvas id="chart-sys-cpu"></canvas></div>
       </div>
       <div class="sys-chart">
         <h3>Memory (%)</h3>
-        <div style="position:relative;height:100px"><canvas id="chart-sys-mem"></canvas></div>
+        <div style="position:relative;height:120px"><canvas id="chart-sys-mem"></canvas></div>
       </div>
       <div class="sys-chart">
         <h3>Temperature (°F)</h3>
-        <div style="position:relative;height:100px"><canvas id="chart-sys-temp"></canvas></div>
+        <div style="position:relative;height:120px"><canvas id="chart-sys-temp"></canvas></div>
       </div>
       <div class="sys-chart">
         <h3>Load (1/5/15 min)</h3>
-        <div style="position:relative;height:100px"><canvas id="chart-sys-load"></canvas></div>
+        <div style="position:relative;height:120px"><canvas id="chart-sys-load"></canvas></div>
       </div>
       <div class="sys-chart" style="grid-column: 1 / -1">
         <h3>Network (RX ↓ / TX ↑)</h3>
-        <div style="position:relative;height:120px"><canvas id="chart-sys-net"></canvas></div>
+        <div style="position:relative;height:144px"><canvas id="chart-sys-net"></canvas></div>
       </div>
     </div>
   </div>
@@ -597,6 +597,14 @@ function openZoom(srcChart) {
   zoomOpts.plugins.tooltip.bodyFont = {size:13};
   zoomOpts.scales.x.ticks.font = {size:11};
   zoomOpts.scales.y.ticks.font = {size:11};
+  /* JSON-clone strips function values. Re-attach tick callbacks so
+   * e.g. the Network chart's fmtBps formatter survives into the zoom. */
+  if (src.options.scales && src.options.scales.y &&
+      src.options.scales.y.ticks && src.options.scales.y.ticks.callback)
+    zoomOpts.scales.y.ticks.callback = src.options.scales.y.ticks.callback;
+  if (src.options.scales && src.options.scales.x &&
+      src.options.scales.x.ticks && src.options.scales.x.ticks.callback)
+    zoomOpts.scales.x.ticks.callback = src.options.scales.x.ticks.callback;
 
   if (zoomChart) { zoomChart.destroy(); zoomChart = null; }
   zoomChart = new Chart(document.getElementById('chart-zoom-canvas'), {
@@ -685,6 +693,10 @@ function initSysCharts() {
     pointHoverRadius:3, spanGaps:false
   });
 
+  /* Every panel pins y at 0 so visual scale reflects magnitude. The
+   * bounded-percentage ones cap at 100; the rest let the top auto-grow.
+   * Tooltips on mode:'index' give per-line labels so we don't need a
+   * visual legend on the load panel. */
   sysCharts = {
     cpu: new Chart(document.getElementById('chart-sys-cpu'), {
       type:'line',
@@ -699,7 +711,7 @@ function initSysCharts() {
     temp: new Chart(document.getElementById('chart-sys-temp'), {
       type:'line',
       data:{labels:[],datasets:[lineDS('rgb(248,81,73)','Temp')]},
-      options:{...baseOpts,scales:{...baseOpts.scales,y:{beginAtZero:false,ticks:{font:{size:9}}}}}
+      options:{...baseOpts}  /* uses baseOpts.y which is beginAtZero:true */
     }),
     load: new Chart(document.getElementById('chart-sys-load'), {
       type:'line',
@@ -708,7 +720,7 @@ function initSysCharts() {
         lineDS('rgb(210,153,34)','5m'),
         lineDS('rgb(139,148,158)','15m')
       ]},
-      options:{...baseOpts,plugins:{...baseOpts.plugins,legend:{display:true,position:'bottom',labels:{boxWidth:8,font:{size:10}}}}}
+      options:{...baseOpts}
     }),
     net: new Chart(document.getElementById('chart-sys-net'), {
       type:'line',
@@ -720,6 +732,15 @@ function initSysCharts() {
         scales:{...baseOpts.scales,y:{beginAtZero:true,ticks:{font:{size:9},callback:v=>fmtBps(v)}}}}
     }),
   };
+
+  /* Click to enlarge — mirrors the channel-stats pattern */
+  const zoom = (id, chart) =>
+    document.getElementById(id).addEventListener('click', () => openZoom(chart));
+  zoom('chart-sys-cpu',  sysCharts.cpu);
+  zoom('chart-sys-mem',  sysCharts.mem);
+  zoom('chart-sys-temp', sysCharts.temp);
+  zoom('chart-sys-load', sysCharts.load);
+  zoom('chart-sys-net',  sysCharts.net);
 
   /* Timeframe toggle */
   document.querySelectorAll('.sys-range').forEach(btn => {
