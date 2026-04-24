@@ -45,6 +45,10 @@
 /* ESL receive buffer */
 #define ESL_BUF_SIZE         16384
 
+/* Forward declaration: defined after the static globals so we can
+ * call it from any state-change site. */
+static void publish_freeswitch_snapshot(void);
+
 /* Call states */
 typedef enum {
     CALL_IDLE,
@@ -64,6 +68,11 @@ typedef struct {
 /* ================================================================== */
 /*  Static globals                                                     */
 /* ================================================================== */
+/* Authoritative FreeSWITCH/ESL snapshot for admin dashboard.
+ * Sensitive (dialed digits) → admin_only=1. Called on every state-
+ * change site: configure seed, ESL connect/auth/disconnect, every
+ * g_call_state assignment, circuit-breaker open/close. Defined
+ * below the globals so it can read them all. */
 
 static kerchunk_core_t *g_core;
 
@@ -92,6 +101,7 @@ static char g_call_digits[32]      = "";
 static int  g_call_timer           = -1;
 static int  g_inactivity_timer     = -1;
 static int  g_dial_timer           = -1;
+static time_t g_call_started_at    = 0;     /* set on CONNECTED transition */
 
 /* ESL client */
 static int  g_esl_fd              = -1;
@@ -118,6 +128,58 @@ static socklen_t g_fs_udp_addrlen = sizeof(struct sockaddr_in);
 
 /* Audio state */
 static atomic_int g_cor_active     = 0;
+
+/* Snapshot publisher — defined here, after all globals it reads. */
+static void publish_freeswitch_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+
+    const char *st =
+        (g_call_state == CALL_DIALING)   ? "dialing"   :
+        (g_call_state == CALL_RINGING)   ? "ringing"   :
+        (g_call_state == CALL_CONNECTED) ? "connected" : "idle";
+
+    long call_seconds = 0;
+    if (g_call_state == CALL_CONNECTED && g_call_started_at > 0)
+        call_seconds = (long)(time(NULL) - g_call_started_at);
+
+    /* JSON-escape dialed digits (digits + '*'/'#'). */
+    char e_digits[64];
+    size_t j = 0;
+    for (const char *p = g_call_digits; *p && j < sizeof(e_digits) - 6; p++) {
+        switch (*p) {
+        case '"':  e_digits[j++] = '\\'; e_digits[j++] = '"';  break;
+        case '\\': e_digits[j++] = '\\'; e_digits[j++] = '\\'; break;
+        default:   e_digits[j++] = *p;                         break;
+        }
+    }
+    e_digits[j] = '\0';
+
+    char json[768];
+    snprintf(json, sizeof(json),
+        "{\"enabled\":%s,"
+        "\"esl_connected\":%s,"
+        "\"esl_authed\":%s,"
+        "\"esl_circuit_open\":%s,"
+        "\"call_state\":\"%s\","
+        "\"dialed_number\":\"%s\","
+        "\"call_started_at\":%lld,"
+        "\"call_seconds\":%ld,"
+        "\"max_call_duration_s\":%d,"
+        "\"sip_gateway\":\"%s\"}",
+        g_enabled              ? "true" : "false",
+        g_esl_connected        ? "true" : "false",
+        g_esl_authed           ? "true" : "false",
+        g_esl_circuit_open     ? "true" : "false",
+        st,
+        e_digits,
+        (long long)g_call_started_at,
+        call_seconds,
+        g_max_call_secs,
+        g_sip_gateway);
+
+    g_core->sse_publish("freeswitch_updated", json, /*admin_only=*/1);
+}
 static atomic_int g_vox_ptt_held   = 0;
 static int          g_vad_hold_remaining = 0;
 static int          g_speech_frames  = 0;
@@ -275,6 +337,7 @@ static void esl_disconnect(void)
     g_esl_connected = 0;
     g_esl_authed    = 0;
     g_esl_buf_len   = 0;
+    publish_freeswitch_snapshot();
 }
 
 static int esl_send(const char *cmd)
@@ -363,6 +426,8 @@ static void esl_handle_event(const char *block)
             /* Subscribe to events */
             esl_send("event plain CHANNEL_ANSWER CHANNEL_HANGUP "
                      "CHANNEL_PROGRESS DTMF\n\n");
+
+            publish_freeswitch_snapshot();
         }
         return;
     }
@@ -389,7 +454,9 @@ static void esl_handle_event(const char *block)
                 g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                              "call answered: %s", g_call_uuid);
                 g_call_state = CALL_CONNECTED;
+                g_call_started_at = time(NULL);
                 call_setup_audio();
+                publish_freeswitch_snapshot();
             }
         }
         return;
@@ -403,6 +470,7 @@ static void esl_handle_event(const char *block)
             char path[512];
             snprintf(path, sizeof(path), "%s/phone/phone_ringing.wav", g_sounds_dir);
             g_core->queue_audio_file(path, KERCHUNK_PRI_ELEVATED);
+            publish_freeswitch_snapshot();
         }
         return;
     }
@@ -488,6 +556,7 @@ static void esl_record_connect_failure(const char *why)
             "Autopatch disabled until module is reloaded "
             "(`module reload mod_freeswitch`) or daemon restart.",
             ESL_MAX_RECONNECT_ATTEMPTS);
+        publish_freeswitch_snapshot();
         return;
     }
     /* Exponential backoff: 1s, 2s, 4s, 8s, 16s, then cap at 30s */
@@ -886,6 +955,7 @@ static void autopatch_dial(const char *digits)
     }
 
     g_call_state = CALL_DIALING;
+    publish_freeswitch_snapshot();
 
     /* Play dialing prompt */
     char path[512];
@@ -1044,13 +1114,15 @@ static void call_teardown(void)
     }
 
     /* Reset state */
-    g_call_state    = CALL_IDLE;
-    g_call_uuid[0]  = '\0';
-    g_call_digits[0] = '\0';
+    g_call_state      = CALL_IDLE;
+    g_call_started_at = 0;
+    g_call_uuid[0]    = '\0';
+    g_call_digits[0]  = '\0';
     jitter_buf_reset(&g_jitter);
     vad_reset();
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "call teardown complete");
+    publish_freeswitch_snapshot();
 
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
         .announcement = { .source = "freeswitch", .description = "call ended" } };
@@ -1320,6 +1392,8 @@ static int freeswitch_configure(const kerchunk_config_t *cfg)
 
     v = kerchunk_config_get(cfg, "general", "sounds_dir");
     if (v) snprintf(g_sounds_dir, sizeof(g_sounds_dir), "%s", v);
+
+    publish_freeswitch_snapshot();
 
     /* Clamp values */
     if (g_max_call_secs < 30)   g_max_call_secs  = 30;
