@@ -984,8 +984,18 @@ static void *audio_thread_fn(void *arg)
          * catchup every tick — and since kerchunk_audio_capture zero-pads
          * a partial read up to frame_samples, that spurious extra iteration
          * feeds silent frames into the DTMF decoder and corrupts detection.
-         * Drift only matters once we're a full frame behind. */
-        if (cap_pending >= 2u * (size_t)g_frame_samples) {
+         * Drift only matters once we're a full frame behind.
+         *
+         * Skip the burst while TX is active: catchup work is synchronous in
+         * this thread and 8 frames of extra dispatch (DTMF decode, taps, ASR
+         * feed, mod_recorder) can blow the 20ms tick budget, delaying the
+         * TX drain below. That starves the PortAudio playback ring and the
+         * WebSocket audio tap, producing audible jitter on parrot playback
+         * and the web-listen stream. During TX we're not receiving, so RX
+         * latency growth is a non-issue; we absorb backlog the moment PTT
+         * releases. */
+        int tx_active = g_queue_ptt || kerchunk_core_get_ptt();
+        if (!tx_active && cap_pending >= 2u * (size_t)g_frame_samples) {
             rx_frames = (int)(cap_pending / (size_t)g_frame_samples);
             if (rx_frames > RX_CATCHUP_MAX) rx_frames = RX_CATCHUP_MAX;
         }
