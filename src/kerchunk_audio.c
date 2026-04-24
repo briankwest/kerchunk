@@ -465,7 +465,17 @@ int kerchunk_audio_capture(int16_t *buf, size_t n)
          * 2-block hysteresis lock-on, plus produces an audible click
          * in the relay/web paths), repeat samples from the tail of
          * the last good frame. The decoder sees "tone continues" and
-         * the audio path stays continuous. */
+         * the audio path stays continuous.
+         *
+         * Historical note: the pre-refactor code had a slightly
+         * different fallback here — when g_cap_last_n was smaller
+         * than the missing count (i.e. `miss`), it zero-filled
+         * rather than tiling. In practice g_cap_last_n is always
+         * equal to frame_samples (from the save path below) or 0,
+         * and `miss` is always ≤ frame_samples, so the old path
+         * only hit its silence-fallback when g_cap_last_n == 0 —
+         * which kerchunk_audio_repeat_fill() also zero-fills via
+         * its last_n==0 branch. No practical behavior change. */
         kerchunk_audio_repeat_fill(buf + got, n - got,
                                    g_cap_last, g_cap_last_n);
     } else if (n <= KERCHUNK_MAX_FRAME_SAMPLES) {

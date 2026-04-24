@@ -1,6 +1,11 @@
 # Plan: Extract `kerchunk_audio_tick()` and PA-callback ring commit
 
-**Status:** Plan — not yet implemented. Author: pair, 2026-04-24.
+**Status:** Completed 2026-04-24 on branch `audio-tick-prep`. All
+five phases landed; test suite grew 283 → 318. See
+ARCH-COR-DTMF.md §12 for the resulting coverage map. This document
+is retained as a design artifact — the shape of the pure-function
+API is documented inline in `include/kerchunk_audio_tick.h` and
+`include/kerchunk_audio_ring.h`.
 **Companion:** [ARCH-COR-DTMF.md](./ARCH-COR-DTMF.md) — §12 documents
 the four audio-thread items this plan makes testable.
 

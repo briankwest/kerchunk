@@ -156,7 +156,6 @@ void kerchunk_audio_tick_rx(kerchunk_audio_state_t *s,
  */
 
 typedef struct kerchunk_audio_tick_tx_in_s {
-    int      queue_paused_unused;   /* reserved; compute inside the fn */
     int      relay_active;          /* from core->is_receiving() */
     int      ptt_held;              /* from core_get_ptt() snapshot */
     int      queue_depth;           /* from kerchunk_queue_depth() */
