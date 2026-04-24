@@ -125,6 +125,54 @@ static void activity_log(const char *direction, const char *who,
 /* Static buffer for RECORDING_SAVED event path — survives event dispatch */
 static char g_last_saved_path[512];
 
+/* Authoritative recorder snapshot for admin dashboard. Sensitive
+ * (file paths can leak usernames) → admin_only=1. Called on every
+ * state-change site: configure seed, rx_start/stop, tx_start/stop,
+ * save_recording (last_saved_path changes). */
+static void publish_recorder_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+
+    /* JSON-escape last-saved path (slashes are safe but the field
+     * is user-influenced via username sanitisation). */
+    char e_path[1024];
+    size_t j = 0;
+    for (const char *p = g_last_saved_path; *p && j < sizeof(e_path) - 6; p++) {
+        switch (*p) {
+        case '"':  e_path[j++] = '\\'; e_path[j++] = '"';  break;
+        case '\\': e_path[j++] = '\\'; e_path[j++] = '\\'; break;
+        default:   e_path[j++] = *p;                       break;
+        }
+    }
+    e_path[j] = '\0';
+
+    long rx_seconds = (g_core->sample_rate > 0)
+        ? (long)(g_rx_len / (size_t)g_core->sample_rate) : 0;
+    long tx_seconds = (g_core->sample_rate > 0)
+        ? (long)(g_tx_len / (size_t)g_core->sample_rate) : 0;
+
+    char json[1536];
+    snprintf(json, sizeof(json),
+        "{\"enabled\":%s,"
+        "\"recording_rx\":%s,"
+        "\"recording_tx\":%s,"
+        "\"rx_seconds\":%ld,"
+        "\"tx_seconds\":%ld,"
+        "\"max_duration_s\":%d,"
+        "\"directory\":\"%s\","
+        "\"last_saved_path\":\"%s\"}",
+        g_enabled        ? "true" : "false",
+        g_rx_active      ? "true" : "false",
+        g_tx_active      ? "true" : "false",
+        rx_seconds,
+        tx_seconds,
+        g_max_duration_s,
+        g_dir,
+        e_path);
+
+    g_core->sse_publish("recorder_updated", json, /*admin_only=*/1);
+}
+
 static void save_recording(const char *direction, const char *start_time,
                            const char *who, int16_t *buf, size_t len)
 {
@@ -158,6 +206,7 @@ static void save_recording(const char *direction, const char *start_time,
             },
         };
         g_core->fire_event(&rev);
+        publish_recorder_snapshot();
     } else {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
                      "failed to save: %s", path);
@@ -189,6 +238,7 @@ static void rx_start(void)
      * Resetting here would wipe the identification. It's reset in rx_stop()
      * after the recording is saved. */
     g_core->audio_tap_register(rx_audio_tap, NULL);
+    publish_recorder_snapshot();
 }
 
 static void rx_stop(void)
@@ -210,6 +260,7 @@ static void rx_stop(void)
     g_rx_len = 0;
     g_rx_caller_id = 0;  /* reset for next transmission */
     g_rx_cap = 0;
+    publish_recorder_snapshot();
 }
 
 /* ---- TX recording (via playback tap) ---- */
@@ -234,6 +285,7 @@ static void tx_start(void)
     fmt_timestamp(g_tx_start_time, sizeof(g_tx_start_time));
     g_core->playback_tap_register(tx_playback_tap, NULL);
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "TX recording started");
+    publish_recorder_snapshot();
 }
 
 static void tx_stop(void)
@@ -247,6 +299,7 @@ static void tx_stop(void)
     g_tx_buf = NULL;
     g_tx_len = 0;
     g_tx_cap = 0;
+    publish_recorder_snapshot();
 }
 
 /* ---- event handlers ---- */
@@ -325,6 +378,7 @@ static int recorder_configure(const kerchunk_config_t *cfg)
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "enabled=%d dir=%s max_duration=%ds",
                 g_enabled, g_dir, g_max_duration_s);
+    publish_recorder_snapshot();
     return 0;
 }
 
