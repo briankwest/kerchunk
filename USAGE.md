@@ -498,7 +498,19 @@ Order matters for dependencies:
 | `cwid_wpm` | `20` | Morse code speed in words per minute |
 | `cwid_freq` | `800` | CW tone frequency in Hz |
 | `voice_id` | `on` | Announce frequency/PL via TTS after CW ID |
-| `cor_drop_hold` | `1000` | COR drop hold for DTMF COS glitch absorption, in ms (0-5000) |
+| `cor_drop_hold` | `1000` | DEPRECATED — use `[txactivity] end_silence_ms`. Read as fallback. |
+
+#### `[txactivity]` -- TX-activity detector (fused presence sensor)
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `end_silence_ms` | `300` | Voice-mode unkey latency: all inputs quiet this long before TX_END fires |
+| `end_silence_dtmf_ms` | `1000` | DTMF-mode silence window (longer to absorb inter-tone gaps on tight-squelch radios) |
+| `dtmf_grace_ms` | `3000` | How long after the last DTMF tone we stay in DTMF-patient mode |
+| `trust_cos_bit` | `on` | Set off for radios whose COS bit lies; falls back to dtmf_active only |
+
+Replaces the old `[repeater] cor_drop_hold` mechanism. See
+`ARCH-COR-DTMF.md` for the full design rationale.
 
 #### `[caller]` -- Caller Identification
 
@@ -660,7 +672,9 @@ Avoid models smaller than ~7B for production — they can emit structurally-vali
 | Key | Default | Description |
 |-----|---------|-------------|
 | `inter_digit_timeout` | `3000` | Timeout between digits before reset, in ms |
-| `cor_gate_ms` | `200` | Suppress DTMF during squelch transients, in ms |
+| `hits_to_begin` | `1` | Consecutive 20 ms tone blocks before decoder lock-on |
+| `misses_to_end` | `3` | Consecutive 20 ms silent blocks before tone-end |
+| `min_off_frames` | `1` | Silence (in 20 ms blocks) required before SAME digit can re-fire |
 
 #### `[recording]` -- Transmission Recording
 

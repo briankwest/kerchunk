@@ -106,7 +106,9 @@ timeout_time = 3m                ; Time-Out Timer — max TX duration
 cor_debounce = 150               ; COR debounce / kerchunk filter (ms)
 tx_delay = 100                   ; Silence after PTT assert before audio (ms)
 tx_tail = 200                    ; Silence after audio before PTT release (ms)
-cor_drop_hold = 1s               ; COR drop hold time (absorbs DTMF COS glitches)
+; cor_drop_hold = 1s             ; DEPRECATED — use [txactivity] end_silence_ms.
+;                                ; Still read as a fallback for back-compat;
+;                                ; ignored if [txactivity] end_silence_ms is set.
 
 ; Software relay: kerchunkd captures RX audio and retransmits it in software
 ; Disable the radio's internal relay when using this.
@@ -153,6 +155,31 @@ cwid_freq = 800                  ; CW tone frequency (Hz)
 ; Overrides quiet_start/quiet_end when enabled.
 ; quiet_mode = solar             ; "solar" or omit for fixed hours
 ; solar_offset = 30              ; Minutes: quiet starts after sunset, ends before sunrise
+
+; ----------------------------------------------------------------------------
+; TX activity detector (fused presence sensor)
+;
+; Decides "user is transmitting" by OR'ing two independent inputs:
+;   COS bit (raw HID)   — fast but lies on Retevis-class radios
+;                         that drop COS during DTMF tones.
+;   DTMF decoder active — covers the COS-drop-during-DTMF case
+;                         honestly. Either signal asserts presence.
+;
+; Both must be quiet continuously for end_silence_ms before TX_END
+; fires. Replaces the old [repeater] cor_drop_hold mechanism.
+;
+; Adaptive: while DTMF is in flight (or recently-active), the silence
+; requirement extends to end_silence_dtmf_ms so inter-tone gaps on
+; tight-squelch radios don't cause premature TX_END. After
+; dtmf_grace_ms of no DTMF activity, falls back to the fast value.
+;
+; See ARCH-COR-DTMF.md for the design rationale.
+; ----------------------------------------------------------------------------
+[txactivity]
+; end_silence_ms       = 300       ; pure-voice unkey latency
+; end_silence_dtmf_ms  = 1000      ; mid-DTMF inter-tone tolerance
+; dtmf_grace_ms        = 3000      ; how long after last tone we stay patient
+; trust_cos_bit        = 1         ; set 0 for radios whose COS bit is unreliable
 
 ; ----------------------------------------------------------------------------
 ; Web dashboard (embedded HTTP server)
@@ -285,7 +312,22 @@ max_duration = 60s               ; Max recording duration
 ; ----------------------------------------------------------------------------
 [dtmf]
 inter_digit_timeout = 3s         ; Timeout between digits before reset
-cor_gate_ms = 200                ; Suppress DTMF during squelch transients (ms, 0=disable)
+;
+; libplcode DTMF decoder thresholds (each value is in 20-ms decoder blocks):
+;   hits_to_begin   — consecutive tone blocks before lock-on
+;                     (1 = catch ~20 ms tones; 2 = lib default, more
+;                     tolerant of noise but misses brief tones)
+;   misses_to_end   — consecutive silent blocks before tone-end
+;                     (rides through brief audio dropouts during DTMF)
+;   min_off_frames  — silence required before SAME digit can re-fire
+;                     (1 = fast double-taps OK; raise on noisy lines
+;                     with spurious double-detects)
+; Defaults below are tuned LOOSE for tight-squelch radios (Retevis,
+; etc.) that mute audio between DTMF presses. Increase any value if
+; your radio passes clean continuous audio and you see false detects.
+hits_to_begin  = 1
+misses_to_end  = 3
+min_off_frames = 1
 ;
 ; DTMF command pattern overrides (modules register defaults, override here)
 ; voicemail_status = 87

@@ -337,9 +337,13 @@ Shutdown proceeds in strict order to avoid use-after-free and ensure clean teard
   Notes:                                    │
   - software_relay=on: PTT asserted during RECEIVING
   - software_relay=off: no PTT on COR (RT97L relays internally)
-  - COR drop hold: configurable delay before accepting COR drop
-    (absorbs DTMF-induced COS glitches, default 1000ms)
-  - cor_debounce: filters brief key-ups (kerchunk filter)
+  - COR_ASSERT/DROP are emitted by a fused TX-activity detector
+    that OR's the raw COS bit with the DTMF decoder's detected
+    state. See ARCH-COR-DTMF.md.
+  - end_silence_ms: how long all inputs must be quiet before
+    COR_DROP fires (300 ms voice-mode, 1000 ms during DTMF)
+  - cor_debounce: kerchunk filter on the IDLE→RECEIVING state
+    transition (mod_repeater)
 ```
 
 ## TX State Machine
@@ -412,20 +416,35 @@ Shutdown proceeds in strict order to avoid use-after-free and ensure clean teard
   Returns -1 (EAGAIN) when no state change — NOT "COR off"
 ```
 
-### COR Drop Hold Timer
+### TX-activity detector (fused presence)
+
+The events `KERCHEVT_COR_ASSERT` / `KERCHEVT_COR_DROP` are emitted by
+a small detector in the main-thread loop that fuses two independent
+signals — the raw HID COS bit and the DTMF decoder's detected state.
 
 ```
-  COR assert ──────────────────────────────────────────► Process immediately
-  COR drop   ──► Start hold timer (cor_drop_hold ms)
-                       │
-                       ├── COR reasserts within hold ──► Cancel drop (silent)
-                       │
-                       └── Timer expires ──────────────► Fire COR_DROP event
+  ┌──────────────┐   COS bit (sticky over -1)    ─┐
+  │  HID poll    │────────────────────────────────┤
+  └──────────────┘                                │
+                                                  ├─ OR ─► present
+  ┌──────────────┐   DTMF decoder.detected       │
+  │ Audio thread │──── (atomic_int) ──────────────┘
+  └──────────────┘
 
-  Purpose: DTMF tones interrupt CTCSS, causing RT97L to briefly drop COS.
-  Without hold timer, each DTMF key press tears down the session.
-  Default: 1000ms. Configurable 0-5000ms.
+  present rising edge       ─► fire KERCHEVT_COR_ASSERT
+  present continuously low  ─► increment silent_ticks
+  silent_ticks ≥ N          ─► fire KERCHEVT_COR_DROP
+
+  Adaptive N:
+    end_silence_ms       (default 300)   — voice mode
+    end_silence_dtmf_ms  (default 1000)  — within dtmf_grace_ms of last tone
 ```
+
+The dtmf_active channel covers the Retevis case where DTMF tones
+themselves drop COS — the session stays open as long as the decoder
+is locked on a tone, regardless of what the COS bit says. This
+replaces the old single-signal cor_drop_hold mask. See
+`ARCH-COR-DTMF.md` for the design history.
 
 ---
 

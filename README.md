@@ -637,11 +637,29 @@ Controls the IDLE/RECEIVING/TAIL_WAIT/HANG_WAIT/TIMEOUT RX state machine and clo
 | `tx_tail` | ms | `200` | Silence after audio before PTT release |
 | `software_relay` | on/off | `off` | Relay RX audio to TX in software |
 | `relay_drain` | ms | `500` | Continue relaying after COR drop (0-5000) |
-| `cor_drop_hold` | int | `1000` | COR drop hold time in ms (absorbs DTMF COS glitches) |
+| `cor_drop_hold` | ms | `1000` | DEPRECATED — use `[txactivity] end_silence_ms`. Read as fallback for back-compat. |
 | `require_identification` | on/off | `off` | Closed repeater: deny unless identified |
 | `voice_id` | on/off | `on` | Speak frequency/PL via TTS after CW ID |
 
 Config section: `[repeater]`
+
+### TX-activity detector — fused presence sensing
+
+The `KERCHEVT_COR_ASSERT` / `KERCHEVT_COR_DROP` events are no longer
+derived directly from a single HID bit — they're emitted by a fused
+detector that OR's the raw COS bit with the DTMF decoder's
+detected state. This makes Retevis-class radios (which drop COS
+during DTMF tones) work correctly without the old 1 s drop-hold
+mask.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `end_silence_ms` | ms | `300` | Voice-mode unkey latency. All inputs must be quiet this long before TX_END fires. |
+| `end_silence_dtmf_ms` | ms | `1000` | DTMF-mode silence window (longer to absorb inter-tone gaps on tight-squelch radios). |
+| `dtmf_grace_ms` | ms | `3000` | How long after the last DTMF tone we stay in DTMF-patient mode. |
+| `trust_cos_bit` | on/off | `on` | Set off for radios whose COS bit lies; falls back to dtmf_active only. |
+
+Config section: `[txactivity]`. See `ARCH-COR-DTMF.md` for the full design rationale.
 
 ### mod_cwid — CW Callsign Identification
 
@@ -690,9 +708,12 @@ Config section: `[caller]`
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `inter_digit_timeout` | ms | `3000` | Reset timeout between digits |
-| `cor_gate_ms` | ms | `200` | Suppress DTMF during squelch transients (0 to disable) |
+| `hits_to_begin` | blocks (20 ms) | `1` | Consecutive tone blocks before decoder lock-on |
+| `misses_to_end` | blocks (20 ms) | `3` | Consecutive silent blocks before tone-end |
+| `min_off_frames` | blocks (20 ms) | `1` | Silence required before SAME digit can re-fire |
 
-Config section: `[dtmf]`
+Config section: `[dtmf]`. Defaults are tuned loose for tight-squelch
+radios; raise on noisy lines if you see spurious double-detects.
 
 ### mod_voicemail — Voicemail
 
@@ -1149,8 +1170,8 @@ The public dashboard (`index.html`) includes a GMRS coverage map. The full cover
 
 | Event | Fired when |
 |-------|-----------|
-| `COR_ASSERT` | Carrier detected (hardware COR via HID) |
-| `COR_DROP` | Carrier lost (after `cor_drop_hold` debounce) |
+| `COR_ASSERT` | User started transmitting (fused: COS bit OR DTMF active) |
+| `COR_DROP` | User finished transmitting (fused detector silent for `[txactivity] end_silence_ms`) |
 | `VCOR_ASSERT` | Virtual carrier — web PTT / PoC / phone keyed up |
 | `VCOR_DROP` | Virtual carrier — network caller released |
 | `PTT_ASSERT` | Transmitter keyed |

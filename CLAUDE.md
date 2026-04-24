@@ -113,7 +113,7 @@ The NWS module needs libcurl: `make modules/mod_nws.so` uses `pkg-config --libs 
 
 - **CW ID interval** capped at 15 min max (FCC 95.1751) in mod_cwid
 - **Weather/time auto-announce** default off (FCC 95.1733 — unsolicited one-way); DTMF-triggered always works
-- **Kerchunk filter**: COR debounce (`cor_debounce` config, default 150ms) in mod_repeater
+- **Kerchunk filter**: COR debounce (`cor_debounce` config, default 150ms) in mod_repeater (filters the IDLE→RECEIVING state transition; not the same as `[txactivity] end_silence_ms` which controls the fused TX_END detector — see ARCH-COR-DTMF.md)
 - **Emergency mode** (`*911#`/`*910#`): suppresses TOT and automated announcements
 
 ## Config

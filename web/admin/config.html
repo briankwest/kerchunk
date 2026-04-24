@@ -119,15 +119,17 @@ const TOGGLE_KEYS = new Set([
   'auto_announce','announce_temp','announce_conditions','announce_wind',
   'attention_tones','persist','ptt_enabled','registration_enabled',
   'queue_courtesy','voice_id','streaming','rf_to_poc','poc_to_rf',
-  'auto_punctuation','vad_filter'
+  'auto_punctuation','vad_filter','trust_cos_bit'
 ]);
 
 const NUMBER_KEYS = new Set([
   'tail_time','hang_time','timeout_time','cor_debounce','tx_delay','tx_tail',
   'relay_drain','cwid_interval','cwid_wpm','cwid_freq','cwid_amplitude',
   'cor_drop_hold','quiet_start','quiet_end','solar_offset',
+  'end_silence_ms','end_silence_dtmf_ms','dtmf_grace_ms',
+  'hits_to_begin','misses_to_end','min_off_frames',
   'freq','duration','amplitude','ani_window','login_timeout','max_messages',
-  'max_duration','inter_digit_timeout','cor_gate_ms','interval','timeout',
+  'max_duration','inter_digit_timeout','interval','timeout',
   'session_timeout','time_skew','port','hw_rate','preemphasis_alpha',
   'cor_bit','ptt_bit','max_size_mb','poll_interval','reannounce_interval',
   'wyoming_port','max_capture','min_duration','ptt_max_duration','ptt_priority',
