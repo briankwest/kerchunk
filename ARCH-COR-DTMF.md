@@ -331,3 +331,148 @@ Delete the old `KERCHEVT_COR_*` events entirely (they've been aliased during pha
 ## 8. Summary of the point
 
 We've been patching a worn-out shirt. The real problem is the shirt's design: one noisy binary signal is being asked to represent a fuzzy concept ("is the user transmitting"), and twelve modules + three filter layers + one DSP are all trying to compensate for that signal's dishonesty in their own way. Replace that single-signal source-of-truth with a small sensor-fusion component, rename the events to what they actually mean, and the whole stack simplifies.
+
+---
+
+## 9. Phase 0 results (update)
+
+Built + ran libplcode's existing `decode_dtmf_wav` tool against three
+real RX recordings captured on the live system:
+
+| Recording | What user pressed | Live decoder | Offline decoder | Agree? |
+|---|---|---|---|---|
+| Retevis attempt 1 | `*101#` | `*1#` (`*` / `1` / `#` at 0.9 / 3.8 / 6.0 s) | `*1#` (same timing) | ✓ |
+| Retevis attempt 2 | `*101#` | `*0#` (`*` / `0` / `#` at 0.3 / 1.4 / 2.4 s) | `*0#` (same timing) | ✓ |
+| Different radio | `*93#` | `*93#` (`*` / `9` / `3` / `#` at 1.1 / 2.4 / 3.3 / 4.0 s) | `*93#` (same timing) | ✓ |
+
+**Offline and live decoders produce identical output for the same
+audio.** libplcode is correctly identifying every DTMF tone present
+in the captured audio — it is NOT the bottleneck.
+
+**The Retevis RT97L is dropping tones from its audio output.** When
+the user presses `*101#`, only one of the three middle digits (`1`,
+`0`, `1`) physically makes it to the audio stream. The 2-3 second
+gap visible between `*` and the next detected digit is the window
+where multiple button presses happen but only one gets through.
+
+No amount of decoder tuning or pipeline fixing can recover digits
+the radio never captured. §5's libplcode tuning suggestions are
+therefore **withdrawn** — they'd help marginal-SNR cases but do
+nothing for missing-tone cases, which is what we actually have.
+
+## 10. Revised recommendation
+
+Phase 0 changes what Phase 1-3 are *worth*:
+
+| Phase | Was | Now |
+|---|---|---|
+| 0 (diagnostic) | proposed | **done** — radio is the bottleneck |
+| 1 (TX-activity detector) | fixes DTMF reliability | **hygiene-only** — still worth doing for latency + clarity, but won't improve `*101#` |
+| 2 (migrate consumers) | needed for Phase 1 rename | **simplified** — keep existing event names, just change how they're derived |
+| 3 (libplcode tuning) | possible fix | **dropped** — decoder is already correct |
+| 4 (cleanup) | follows 2 | same, smaller scope |
+
+### Simplified Phase 1
+
+The original plan proposed renaming `KERCHEVT_COR_*` → `KERCHEVT_TX_*`
+and migrating twelve module subscriptions. Given Phase 0 findings,
+a smaller change captures the architectural value:
+
+- **Keep event names as-is** (`KERCHEVT_COR_ASSERT` / `KERCHEVT_COR_DROP`).
+  No module changes.
+- **Change how main.c derives them** from a single HID bit + 1 s hold
+  to the fused signal described in §4 (cos_bit OR audio_rms OR
+  dtmf_active, with a short end-silence window).
+- **Remove `cor_drop_hold`** from `[repeater]` — obsolete once
+  fused, since the DTMF-induced COS drops are absorbed by
+  `dtmf_active = true` rather than by a time-based mask.
+- **New config** `[txactivity]` section with the fused-detector
+  knobs.
+
+This gets us the latency win (~700 ms earlier command dispatch on
+unkey), the architectural clarity, and lets us retire one filter
+layer — without churning every module subscriber.
+
+### What this re-architecture does NOT fix
+
+- DTMF reliability on radios that mute audio mid-tone. That's a
+  hardware limitation. Mitigations remain:
+  - Use a radio that doesn't mute DTMF (most non-Chinese HTs)
+  - Restrict DTMF commands to two-tone patterns the radio can pass
+  - Use web dashboard + Wyoming ASR for multi-digit commands
+
+## 11. Phase 1 implementation details
+
+### 11.1 Atomic snapshots the audio thread writes
+
+Add two `atomic_int` globals exposed from the audio thread via
+getters:
+
+```c
+/* Running-RMS of the most recent ~20 ms capture frame. int16 domain. */
+static _Atomic int32_t g_tx_audio_rms;
+
+/* 1 when libplcode's DTMF decoder is currently in detected state. */
+static _Atomic int g_tx_dtmf_active;
+```
+
+Written per-tick by the audio thread; read per-tick by the main thread.
+
+### 11.2 Main-thread fused detector
+
+Replaces the current `prev_cor / cor_drop_hold` logic in `main.c`'s
+main-thread loop:
+
+```
+per 20 ms tick:
+  cos     = kerchunk_hid_read_cor()         (0 or 1)
+  rms     = atomic_load(&g_tx_audio_rms)    (int16 RMS)
+  dtmf    = atomic_load(&g_tx_dtmf_active)  (0 or 1)
+
+  audio_present = (rms >= audio_noise_floor)  ; simple threshold
+  present_now   = cos || audio_present || dtmf
+
+  if present_now:
+      silent_ticks = 0
+      if !published_present:
+          published_present = 1
+          set_cor(1)
+          fire KERCHEVT_COR_ASSERT
+  else:
+      silent_ticks += 1
+      if published_present && silent_ticks >= end_silence_ticks:
+          published_present = 0
+          set_cor(0)
+          fire KERCHEVT_COR_DROP
+```
+
+Three inputs OR'd — any one channel can assert presence. All three
+must be false (continuously, for `end_silence_ticks`) before we
+declare the transmission over.
+
+### 11.3 Config
+
+```ini
+[txactivity]
+; ms of combined-silence before KERCHEVT_COR_DROP fires.
+; Replaces [repeater] cor_drop_hold.
+end_silence_ms    = 300
+
+; int16 RMS above which captured audio counts as "present".
+; Typical mic-noise floor on CM108AH is ~12-15; 30 is comfortably above.
+audio_noise_floor = 30
+
+; Whether the raw HID COS bit contributes to the fused state.
+; Set to 0 for radios that lie about COS (Retevis during DTMF). The
+; audio_present + dtmf_active channels cover the same ground.
+trust_cos_bit     = 1
+```
+
+Back-compat: if `[txactivity]` section absent, read legacy
+`[repeater] cor_drop_hold` and use it for `end_silence_ms`.
+
+### 11.4 What gets deleted
+
+- `prev_cor`, `cor_drop_hold`, `cor_drop_hold_ms`, `cor_drop_hold_ticks` locals in main.c
+- The COR: drop seen / reassert / hold timer expired log lines (replaced by the new detector's simpler logging)
+- `[repeater] cor_drop_hold` config key (documented as deprecated alias)
