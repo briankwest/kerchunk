@@ -204,43 +204,36 @@ static void ws_ring_push(const int16_t *pcm, size_t n, uint8_t dir)
     atomic_store_explicit(&g_ws_ring_w, next, memory_order_release);
 }
 
-/* Flush ring → WebSocket clients (called from web thread on MG_EV_WAKEUP).
- *
- * Sends AT MOST one frame per call so audio thread bursts (RX catchup
- * loop draining 2-8 frames in a single tick) don't translate into a
- * single WebSocket batch the browser hears as 160ms of audio crammed
- * into <5ms wall-clock followed by silence. The audio_ws_thread runs
- * at a 5ms cadence and triggers this on every cadence where the ring
- * has data, so the effective drain rate is up to 200 frames/sec —
- * still 4x the steady-state 50 fps fill rate, so the ring catches up
- * in 2-3 wake cycles after a burst. */
+/* Flush ring → WebSocket clients (called from web thread before each poll) */
 static void ws_flush_ring(void)
 {
     if (atomic_load(&g_ws_audio_count) <= 0) return;
 
     unsigned r = atomic_load_explicit(&g_ws_ring_r, memory_order_relaxed);
     unsigned w = atomic_load_explicit(&g_ws_ring_w, memory_order_acquire);
-    if (r == w) return;
 
-    ws_audio_slot_t *s = &g_ws_ring[r];
+    while (r != w) {
+        ws_audio_slot_t *s = &g_ws_ring[r];
 
-    int fs = g_core->frame_samples;
-    size_t frame_bytes = (size_t)fs * sizeof(int16_t);
-    size_t msg_size = 4 + frame_bytes;
-    uint8_t msg[WS_MAX_FRAME_SIZE];
-    msg[0] = 0x01;
-    msg[1] = s->dir;
-    msg[2] = (uint8_t)(g_ws_seq & 0xFF);
-    msg[3] = (uint8_t)((g_ws_seq >> 8) & 0xFF);
-    g_ws_seq++;
-    memcpy(msg + 4, s->samples, frame_bytes);
+        int fs = g_core->frame_samples;
+        size_t frame_bytes = (size_t)fs * sizeof(int16_t);
+        size_t msg_size = 4 + frame_bytes;
+        uint8_t msg[WS_MAX_FRAME_SIZE];
+        msg[0] = 0x01;
+        msg[1] = s->dir;
+        msg[2] = (uint8_t)(g_ws_seq & 0xFF);
+        msg[3] = (uint8_t)((g_ws_seq >> 8) & 0xFF);
+        g_ws_seq++;
+        memcpy(msg + 4, s->samples, frame_bytes);
 
-    for (struct mg_connection *c = g_mgr.conns; c != NULL; c = c->next) {
-        if (ws_get_state(c))
-            mg_ws_send(c, msg, msg_size, WEBSOCKET_OP_BINARY);
+        for (struct mg_connection *c = g_mgr.conns; c != NULL; c = c->next) {
+            if (ws_get_state(c))
+                mg_ws_send(c, msg, msg_size, WEBSOCKET_OP_BINARY);
+        }
+
+        r = (r + 1) & WS_RING_MASK;
     }
 
-    r = (r + 1) & WS_RING_MASK;
     atomic_store_explicit(&g_ws_ring_r, r, memory_order_release);
 }
 
