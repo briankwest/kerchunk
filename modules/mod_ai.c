@@ -33,6 +33,7 @@
 #include <time.h>
 #include <errno.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
@@ -163,6 +164,13 @@ static int                g_req_count;
 static pthread_mutex_t    g_req_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t     g_req_cond  = PTHREAD_COND_INITIALIZER;
 static int                g_worker_tid = -1;
+
+/* Set by the worker while it holds a dequeued request open for
+ * inference + tool rounds. Combined with g_req_count this tells
+ * on_announcement whether it's safe to enqueue a fresh transcript
+ * or whether the caller should get a "standby" cue instead — see
+ * ai_is_busy() and fire_standby_cue() below. */
+static _Atomic int        g_inflight;
 
 /* History (for `ai history` CLI) */
 static ai_history_entry_t g_history[AI_MAX_HISTORY];
@@ -1111,6 +1119,66 @@ static const char *strip_wake_phrase(const char *text)
  *  Worker thread
  * ════════════════════════════════════════════════════════════════════ */
 
+/* Is the AI currently unavailable for a new request? True if the
+ * worker has one in flight, or if there's anything still queued
+ * waiting for it. Used to drop-with-cue instead of stacking. */
+static int ai_is_busy(void)
+{
+    if (atomic_load(&g_inflight)) return 1;
+    pthread_mutex_lock(&g_req_mutex);
+    int queued = g_req_count;
+    pthread_mutex_unlock(&g_req_mutex);
+    return queued > 0;
+}
+
+/* Play the configured standby cue (sound file / TTS / none).
+ * Used when a transcript arrives while the worker is busy — tells
+ * the caller we heard them but aren't ready yet, so they don't
+ * rekey and stack duplicate answers. */
+static void fire_standby_cue(void)
+{
+    if (!g_core) return;
+    if (strcmp(g_standby_cue, "none") == 0) return;
+
+    if (strcmp(g_standby_cue, "sound") == 0 &&
+        g_core->queue_audio_file &&
+        g_core->queue_audio_file(g_standby_sound, KERCHUNK_PRI_NORMAL) == 0) {
+        return;
+    }
+
+    /* "tts" mode, or fallback when the sound file is missing. */
+    if (g_core->tts_speak && g_standby_text[0])
+        g_core->tts_speak(g_standby_text, KERCHUNK_PRI_NORMAL);
+}
+
+/* Whisper emits parenthetical non-speech markers like "(clippers
+ * buzzing)", "(music)", "[background noise]" when it can't hear
+ * actual speech. These aren't real utterances — they're Whisper
+ * narrating the acoustic environment. Don't feed them to the LLM
+ * as if the caller had asked a question (the model will happily
+ * fabricate a plausible answer, as with the Retevis log that
+ * motivated this filter).
+ *
+ * Returns 1 iff the only non-whitespace, non-punctuation content
+ * of `s` lives inside parenthetical/bracketed spans. Mixed input
+ * like "hello (background noise)" still passes through — there's
+ * real speech to handle. */
+static int is_noise_only_marker(const char *s)
+{
+    if (!s) return 1;
+    int in_paren = 0, in_brack = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p == '(')       { in_paren++; continue; }
+        if (*p == ')' && in_paren > 0) { in_paren--; continue; }
+        if (*p == '[')       { in_brack++; continue; }
+        if (*p == ']' && in_brack > 0) { in_brack--; continue; }
+        if (in_paren == 0 && in_brack == 0 &&
+            isalnum((unsigned char)*p))
+            return 0;
+    }
+    return 1;
+}
+
 static int enqueue_request(const char *transcript, int caller_id)
 {
     pthread_mutex_lock(&g_req_mutex);
@@ -1162,6 +1230,7 @@ static void *ai_worker(void *arg)
         }
 
         g_total_requests++;
+        atomic_store(&g_inflight, 1);
 
         /* Build/append to conversation */
         pthread_mutex_lock(&g_convs_mutex);
@@ -1199,6 +1268,7 @@ static void *ai_worker(void *arg)
             }
         }
         free(answer);
+        atomic_store(&g_inflight, 0);
     }
     return NULL;
 }
@@ -1252,6 +1322,14 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
     const char *transcript = evt->announcement.description;
     if (!transcript || !transcript[0]) return;
 
+    /* Whisper non-speech marker — "(clippers buzzing)", "[music]",
+     * etc. Never a real user utterance; don't feed it to the LLM. */
+    if (is_noise_only_marker(transcript)) {
+        g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                    "skipping ASR noise marker: \"%s\"", transcript);
+        return;
+    }
+
     int caller_id = g_current_caller_id;
     const char *to_send = transcript;
     int trigger_hit = 0;
@@ -1304,6 +1382,20 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
     }
 
     if (!trigger_hit) return;  /* not for us */
+
+    /* In-flight guard: if the worker is already processing a
+     * request (or has one queued behind it), firing another will
+     * stack a duplicate response behind the one coming up. Drop
+     * the new transcript and fire a standby cue so the caller
+     * knows they were heard but need to wait — see the log that
+     * motivated this guard (two near-identical LLM answers
+     * delivered back-to-back for a rekey during inference). */
+    if (ai_is_busy()) {
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "busy, dropping request: \"%s\"", to_send);
+        fire_standby_cue();
+        return;
+    }
 
     enqueue_request(to_send, caller_id);
 }
