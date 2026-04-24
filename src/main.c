@@ -1271,6 +1271,21 @@ static void *audio_thread_fn(void *arg)
             }
         }
 
+        /* TX state transitions — mirror mod_repeater's RX state logs so
+         * operators can see "kerchunkd started transmitting" / "released
+         * PTT" in the journal, not just infer it from PTT refs. Label
+         * comes from get_tx_state() which is the same string the web
+         * dashboard uses. Logged on change only. */
+        {
+            static const char *prev_tx_state = "TX_IDLE";
+            const char *cur_tx_state = get_tx_state();
+            if (strcmp(cur_tx_state, prev_tx_state) != 0) {
+                KERCHUNK_LOG_I(LOG_MOD, "tx state: %s -> %s",
+                               prev_tx_state, cur_tx_state);
+                prev_tx_state = cur_tx_state;
+            }
+        }
+
         /* ── Sleep to maintain cadence (absolute time — no drift) ── */
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL);
     }
