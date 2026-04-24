@@ -1610,8 +1610,12 @@ static int ai_configure(const kerchunk_config_t *cfg)
 
     g_max_consec_fail =
         kerchunk_config_get_int(cfg, "ai", "max_consecutive_failures", 5);
+    /* Use the _s parser so a bare integer means seconds (matching
+     * the key's _s suffix). Previously this used the _ms parser
+     * and divided by 1000, which silently produced 0s for plain
+     * integer config values like "300". */
     g_disable_after_s =
-        kerchunk_config_get_duration_ms(cfg, "ai", "disable_after_fail_s", 300000) / 1000;
+        kerchunk_config_get_duration_s(cfg, "ai", "disable_after_fail_s", 300);
 
     if (!g_enabled) {
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "disabled");
@@ -1628,6 +1632,12 @@ static int ai_configure(const kerchunk_config_t *cfg)
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                     "llm_model not set — backends requiring model name will fail");
     }
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "configured: model=%s timeout=%ds conv_timeout=%ds "
+                "max_fail=%d disable_after=%ds",
+                g_model, g_timeout_s, g_conversation_timeout_s,
+                g_max_consec_fail, g_disable_after_s);
 
     /* Subscribe event handlers (unsubscribe first for config reload) */
     g_core->unsubscribe(KERCHEVT_ANNOUNCEMENT, on_announcement);
