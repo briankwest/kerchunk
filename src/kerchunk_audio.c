@@ -99,6 +99,30 @@ static int duplex_cb(const void *in, void *out, unsigned long n,
                                    (fl & paInputUnderflow) ? 1 : 0);
     }
 
+    /* Playback side — log output under-run once per second so a
+     * stuttering CM119 doesn't flood the log but a real scheduling
+     * problem is visible at the default log level. The recording
+     * tap sees clean buffers even when this fires, so a clean TX
+     * recording + a non-zero underflow counter here is the
+     * signature of "kerchunk did its job; PA couldn't deliver". */
+    if (fl & paOutputUnderflow) {
+        static uint64_t last_log_us = 0;
+        static unsigned underflow_count = 0;
+        underflow_count++;
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        uint64_t now_us = (uint64_t)now.tv_sec * 1000000u +
+                          (uint64_t)now.tv_nsec / 1000u;
+        if (now_us - last_log_us > 1000000u) {
+            KERCHUNK_LOG_W(LOG_MOD,
+                "PA output underflow (duplex): %u events in last second, "
+                "n=%lu — audio thread missed the playback deadline",
+                underflow_count, n);
+            last_log_us = now_us;
+            underflow_count = 0;
+        }
+    }
+
     /* Playback side */
     if (out) {
         int16_t *dst = (int16_t *)out;
@@ -154,12 +178,26 @@ static int play_cb(const void *in, void *out, unsigned long n,
     /* paOutputUnderflow: PA pulled samples from us but we couldn't
      * fill in time — hardware sent silence (or PA's last samples)
      * for that callback. Not data-corrupting like the input side
-     * (no garbage flows back into our DSP), but it's a useful
-     * signal that the audio thread isn't keeping up with the
-     * playback clock. Log at DEBUG so it's visible only when
-     * actively diagnosing scheduling problems. */
+     * (no garbage flows back into our DSP), but it's the signal
+     * that the audio thread missed the playback deadline and the
+     * listener is hearing a gap. Log at WARN rate-limited to once
+     * per second so heavy stuttering doesn't flood the journal. */
     if (fl & paOutputUnderflow) {
-        KERCHUNK_LOG_D(LOG_MOD, "PA output underflow: n=%lu", n);
+        static uint64_t last_log_us = 0;
+        static unsigned underflow_count = 0;
+        underflow_count++;
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        uint64_t now_us = (uint64_t)now.tv_sec * 1000000u +
+                          (uint64_t)now.tv_nsec / 1000u;
+        if (now_us - last_log_us > 1000000u) {
+            KERCHUNK_LOG_W(LOG_MOD,
+                "PA output underflow: %u events in last second, n=%lu — "
+                "audio thread missed the playback deadline",
+                underflow_count, n);
+            last_log_us = now_us;
+            underflow_count = 0;
+        }
     }
 
     if (g_hw_rate == g_rate) {
