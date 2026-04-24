@@ -1558,6 +1558,11 @@ static char *build_bulletin_json(void)
     return json;
 }
 
+/* Forward declaration — publish_status_snapshot() is defined near
+ * sse_publish_impl below but is called from the WebSocket
+ * connect/disconnect paths above it. */
+static void publish_status_snapshot(void);
+
 /* Build the current bulletin payload and push it as a bulletin_updated
  * SSE event. Safe to call before g_core->sse_publish is wired (no-op). */
 static void publish_bulletin_snapshot(void)
@@ -2316,6 +2321,9 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             g_core->playback_tap_register(ws_tx_playback_tap, NULL);
             g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "audio streaming started");
         }
+        /* Listener count just changed — republish the status snapshot
+         * so every SSE-connected dashboard sees the new count live. */
+        publish_status_snapshot();
     }
 
     /* WebSocket message (text commands or binary audio) */
@@ -2399,6 +2407,9 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                                 "audio streaming stopped");
                 }
+                /* Listener count changed — republish snapshot for the
+                 * live "Listeners" counter on the dashboards. */
+                publish_status_snapshot();
             }
         }
     }
@@ -2561,18 +2572,19 @@ static void publish_status_snapshot(void)
     int ptt = kerchunk_core_get_ptt();
     int q   = g_core->queue_depth ? g_core->queue_depth() : 0;
     int em  = kerchunk_core_get_emergency();
+    int listeners = atomic_load(&g_ws_audio_count);
 
     char payload[256];
     int n = snprintf(payload, sizeof(payload),
         "{\"rx_state\":\"%s\",\"tx_state\":\"%s\","
         "\"cor\":%s,\"ptt\":%s,\"emergency\":%s,"
-        "\"queue_depth\":%d}",
+        "\"queue_depth\":%d,\"audio_listeners\":%d}",
         rx ? rx : "IDLE",
         tx ? tx : "TX_IDLE",
         cor ? "true" : "false",
         ptt ? "true" : "false",
         em  ? "true" : "false",
-        q);
+        q, listeners);
     if (n <= 0 || (size_t)n >= sizeof(payload)) return;
 
     g_core->sse_publish("status", payload, 0 /* public-safe */);

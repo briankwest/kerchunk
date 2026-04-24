@@ -1185,6 +1185,12 @@ function connectSSE() {
           if (typeof s.tx_state === 'string') updateTxState(s.tx_state);
           if (typeof s.cor === 'boolean') updateCOR(s.cor);
           if (typeof s.ptt === 'boolean' && typeof updatePTT === 'function') updatePTT(s.ptt);
+          /* Live listener count — republished by mod_web on every
+           * WebSocket audio connect/disconnect. */
+          if (typeof s.audio_listeners === 'number') {
+            streamServerStats.listeners = s.audio_listeners;
+            renderStreamTable();
+          }
           // First authoritative payload since (re)connect — clear the
           // disconnection overlay.
           document.body.classList.remove('sse-disconnected');

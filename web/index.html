@@ -391,6 +391,12 @@ function connectSSE() {
           if (typeof s.rx_state === 'string') updateState(s.rx_state);
           if (typeof s.tx_state === 'string') updateTxIndicator(s.tx_state);
           if (typeof s.ptt === 'boolean') updatePTT(s.ptt);
+          /* Live listener count — republished on every WS audio
+           * connect/disconnect. */
+          if (typeof s.audio_listeners === 'number') {
+            streamServerStats.listeners = s.audio_listeners;
+            renderStreamTable();
+          }
           break;
         }
         case 'rx_state_change':
