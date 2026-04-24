@@ -19,6 +19,7 @@
 #include "kerchunk_log.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #define LOG_MOD "caller"
 #define MAX_ANI_LEN 8
@@ -42,9 +43,10 @@ static char g_login_buf[MAX_ANI_LEN + 1];
 static int  g_login_pos;
 
 /* Login session */
-static int  g_session_user_id = 0;      /* persists across COR drops */
-static int  g_session_timer   = -1;
-static int  g_login_timeout_ms = 1800000; /* 30 min default */
+static int    g_session_user_id    = 0;     /* persists across COR drops */
+static int    g_session_timer      = -1;
+static int    g_login_timeout_ms   = 1800000; /* 30 min default */
+static time_t g_session_started_at = 0;     /* wall-clock; resets on refresh */
 
 /* Optional DTMF logout code. Empty string = disabled (no DTMF logout).
  * When set and the user is logged in, dialing *<logout_code># clears
@@ -58,6 +60,47 @@ static const char *method_name(int m)
     case KERCHUNK_CALLER_DTMF_LOGIN: return "LOGIN";
     default:                       return "?";
     }
+}
+
+/* Publish authoritative caller-session snapshot to admin dashboard.
+ * mod_web caches the last value per type and replays to new SSE
+ * subscribers, so this only needs to fire on state transitions.
+ * Sensitive (names + login state) → admin_only=1. */
+static void publish_session_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+
+    int authenticated = (g_session_user_id > 0);
+    const kerchunk_user_t *u = authenticated
+        ? g_core->user_lookup_by_id(g_session_user_id) : NULL;
+
+    long remaining_sec = 0;
+    if (authenticated && g_session_started_at > 0) {
+        long elapsed = (long)(time(NULL) - g_session_started_at);
+        long total   = g_login_timeout_ms / 1000;
+        remaining_sec = (total > elapsed) ? (total - elapsed) : 0;
+    }
+
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{\"authenticated\":%s,"
+        "\"user_id\":%d,"
+        "\"user_name\":\"%s\","
+        "\"method\":\"%s\","
+        "\"current_user_id\":%d,"
+        "\"session_started_at\":%lld,"
+        "\"session_remaining_sec\":%ld,"
+        "\"session_timeout_sec\":%d}",
+        authenticated ? "true" : "false",
+        g_session_user_id,
+        u ? u->name : "",
+        authenticated ? method_name(KERCHUNK_CALLER_DTMF_LOGIN) : "",
+        g_current_user_id,
+        (long long)g_session_started_at,
+        remaining_sec,
+        g_login_timeout_ms / 1000);
+
+    g_core->sse_publish("caller_session_updated", json, /*admin_only=*/1);
 }
 
 static void fire_identified(int user_id, int method)
@@ -74,6 +117,8 @@ static void fire_identified(int user_id, int method)
     const kerchunk_user_t *u = g_core->user_lookup_by_id(user_id);
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "identified: %s (id=%d, via %s)",
                 u ? u->name : "unknown", user_id, method_name(method));
+
+    publish_session_snapshot();
 }
 
 static void fire_cleared(const char *reason)
@@ -91,6 +136,8 @@ static void fire_cleared(const char *reason)
 
     kerchevt_t evt = { .type = KERCHEVT_CALLER_CLEARED };
     g_core->fire_event(&evt);
+
+    publish_session_snapshot();
 }
 
 /* ---- Login session management ---- */
@@ -106,11 +153,13 @@ static void session_timeout_cb(void *ud)
                      "login session expired: %s (id=%d, after %ds)",
                      u ? u->name : "unknown", g_session_user_id,
                      g_login_timeout_ms / 1000);
-        g_session_user_id = 0;
+        g_session_user_id    = 0;
+        g_session_started_at = 0;
         /* If this user is still the current caller, clear them */
         if (g_current_user_id > 0 &&
             g_current_method == KERCHUNK_CALLER_DTMF_LOGIN)
             fire_cleared("session expired");
+        publish_session_snapshot();
 
         /* Audible logout — only if TTS is available; tones in this
          * context could be confused with other repeater alerts. */
@@ -128,7 +177,8 @@ static void session_timeout_cb(void *ud)
 
 static void session_start(int user_id)
 {
-    g_session_user_id = user_id;
+    g_session_user_id    = user_id;
+    g_session_started_at = time(NULL);
 
     /* Reset session timer */
     if (g_session_timer >= 0)
@@ -141,6 +191,8 @@ static void session_start(int user_id)
                  "login session started: %s (id=%d, timeout=%ds)",
                  u ? u->name : "unknown", user_id,
                  g_login_timeout_ms / 1000);
+
+    publish_session_snapshot();
 
     /* Audible login confirmation. Only fires here (in session_start),
      * not in fire_identified, so the welcome only plays on a fresh
@@ -169,6 +221,9 @@ static void session_refresh(void)
     g_core->timer_cancel(g_session_timer);
     g_session_timer = g_core->timer_create(
         g_login_timeout_ms, 0, session_timeout_cb, NULL);
+    g_session_started_at = time(NULL);
+
+    publish_session_snapshot();
 }
 
 static void session_clear(void)
@@ -177,7 +232,9 @@ static void session_clear(void)
         g_core->timer_cancel(g_session_timer);
         g_session_timer = -1;
     }
-    g_session_user_id = 0;
+    g_session_user_id    = 0;
+    g_session_started_at = 0;
+    publish_session_snapshot();
 }
 
 /* Explicit logout — user-initiated (DTMF or CLI). Speaks goodbye and
@@ -399,6 +456,10 @@ static int caller_configure(const kerchunk_config_t *cfg)
                 "ani_window=%dms login_timeout=%ds logout_code=%s",
                 g_ani_window_ms, g_login_timeout_ms / 1000,
                 g_logout_code[0] ? g_logout_code : "(disabled)");
+
+    /* Seed the SSE cache so admin dashboards connecting before any
+     * login activity see an authoritative "no session" payload. */
+    publish_session_snapshot();
     return 0;
 }
 

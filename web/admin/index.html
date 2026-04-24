@@ -1060,6 +1060,31 @@ function renderSys(d) {
 }
 
 /* Pushed via SSE (nws_updated, weather_updated) — no HTTP polling. */
+/* Format remaining seconds as "23m 45s" / "1h 4m" — short and stable. */
+function fmtRemaining(sec){
+  if(!sec || sec <= 0) return '0s';
+  const h = Math.floor(sec/3600);
+  const m = Math.floor((sec%3600)/60);
+  const s = sec%60;
+  if(h > 0) return h+'h '+m+'m';
+  if(m > 0) return m+'m '+s+'s';
+  return s+'s';
+}
+
+/* Authoritative caller-session render. Snapshot from mod_caller.
+ * Authenticated → name + remaining countdown; not → "None". */
+function renderCallerSession(d){
+  const el = document.getElementById('caller');
+  if (!el) return;
+  if (!d || !d.authenticated) { el.textContent = 'None'; return; }
+  const name = d.user_name || ('user '+d.user_id);
+  const txing = d.current_user_id && d.current_user_id === d.user_id;
+  el.innerHTML =
+    '<strong>'+name+'</strong> (logged in via '+(d.method||'?')+
+    ', '+fmtRemaining(d.session_remaining_sec)+' left'+
+    (txing ? ', transmitting' : '')+')';
+}
+
 function renderAlerts(d) {
   const el=document.getElementById('alerts');
   if(!d||!d.alerts||d.alerts.length===0){el.textContent='None';return;}
@@ -1336,12 +1361,17 @@ function connectSSE() {
           renderStats();
           break;
         case 'caller_identified':
-          document.getElementById('caller').innerHTML=
-            '<strong>User '+evt.user_id+'</strong> via '+evt.method;
+          /* Snapshot authoritative for the #caller div; just log here. */
           addLog('Caller: user '+evt.user_id+' ('+evt.method+')','log-caller');
           break;
         case 'caller_cleared':
-          document.getElementById('caller').textContent='None';
+          /* Snapshot will overwrite #caller; nothing to do. */
+          break;
+        case 'caller_session_updated':
+          /* Authoritative snapshot from mod_caller. Reflects session
+           * state (DTMF login persists across COR drops) and the
+           * remaining timeout countdown. */
+          renderCallerSession(evt.data || {});
           break;
         case 'dtmf_digit':
           addDtmf(evt.digit);
