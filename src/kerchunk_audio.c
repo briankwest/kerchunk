@@ -99,13 +99,22 @@ static int duplex_cb(const void *in, void *out, unsigned long n,
                                    (fl & paInputUnderflow) ? 1 : 0);
     }
 
-    /* Playback side — log output under-run once per second so a
-     * stuttering CM119 doesn't flood the log but a real scheduling
-     * problem is visible at the default log level. The recording
-     * tap sees clean buffers even when this fires, so a clean TX
-     * recording + a non-zero underflow counter here is the
-     * signature of "kerchunk did its job; PA couldn't deliver". */
-    if (fl & paOutputUnderflow) {
+    /* Playback side — log output under-run only when we actually had
+     * something to play.
+     *
+     * PA sets paOutputUnderflow whenever its callback scheduling slips,
+     * regardless of whether our ring had real audio or just zeros. At
+     * idle the ring is empty, we zero-fill, and the resulting output is
+     * silence either way — no perceptible glitch. Logging those "idle
+     * underflows" is pure noise (and the journald round-trip can itself
+     * delay the next callback, creating a feedback loop).
+     *
+     * Only log when kerchunk_audio_ring_readable(&g_play_ring) > 0 —
+     * that means we had queued samples (TTS, relay, tail silence) that
+     * might have been clipped. Rate-limited to once per second so a
+     * stuttering CM119 doesn't flood the log. */
+    if ((fl & paOutputUnderflow) &&
+        kerchunk_audio_ring_readable(&g_play_ring) > 0) {
         static uint64_t last_log_us = 0;
         static unsigned underflow_count = 0;
         underflow_count++;
@@ -180,9 +189,16 @@ static int play_cb(const void *in, void *out, unsigned long n,
      * for that callback. Not data-corrupting like the input side
      * (no garbage flows back into our DSP), but it's the signal
      * that the audio thread missed the playback deadline and the
-     * listener is hearing a gap. Log at WARN rate-limited to once
-     * per second so heavy stuttering doesn't flood the journal. */
-    if (fl & paOutputUnderflow) {
+     * listener is hearing a gap.
+     *
+     * Gate on ring having real content: at idle the ring is empty
+     * and we zero-fill, so a "late" callback still produces silence
+     * → silence. Logging those is noise (and the journald round-
+     * trip can itself delay the next callback). Only log when we
+     * had queued samples that might have been clipped. Rate-limited
+     * to once per second. */
+    if ((fl & paOutputUnderflow) &&
+        kerchunk_audio_ring_readable(&g_play_ring) > 0) {
         static uint64_t last_log_us = 0;
         static unsigned underflow_count = 0;
         underflow_count++;
