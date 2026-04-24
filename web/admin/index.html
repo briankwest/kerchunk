@@ -1102,6 +1102,12 @@ function connectSSE() {
           }
           updatePTT(false);
           if (!relaying) updateTxState('TX_IDLE');
+          /* Clear RX/TX direction chip — announcements (CW ID, TTS,
+           * parrot) transmit while state is IDLE, so state_change
+           * never fires to clean it up. */
+          audioLastDir = -1;
+          { const dir = document.getElementById('audio-dir');
+            if (dir) dir.style.display = 'none'; }
           addLog('PTT off','log-ptt');
           renderStats();
           break;

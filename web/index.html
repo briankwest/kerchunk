@@ -331,6 +331,12 @@ function connectSSE() {
           break;
         case 'ptt_drop':
           updatePTT(false);
+          /* Also clear the RX/TX direction chip — for announcements
+           * (CW ID, TTS, parrot) the repeater state stays IDLE the
+           * whole time, so no state_change fires to clean it up. */
+          audioLastDir = -1;
+          { const dir = document.getElementById('audio-dir');
+            if (dir) dir.style.display = 'none'; }
           break;
         case 'bulletin_updated':
           renderBulletin(e.data);
