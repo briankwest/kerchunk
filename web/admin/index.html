@@ -287,6 +287,8 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
     <div id="dynamic-controls"></div>
     <h2 style="margin-top:12px">NWS Alerts</h2>
     <div id="alerts" style="font-size:12px">None</div>
+    <h2 style="margin-top:12px">Voicemail</h2>
+    <div id="voicemail" style="font-size:12px;color:var(--dim)">No data</div>
     <h2 style="margin-top:12px">Users</h2>
     <div id="users-list" style="font-size:12px">Loading...</div>
   </div>
@@ -1085,6 +1087,39 @@ function renderCallerSession(d){
     (txing ? ', transmitting' : '')+')';
 }
 
+/* Voicemail snapshot render. Top line carries mode (recording /
+ * armed / disabled / idle) and total count; per-user list shows
+ * who has unread mail. */
+function renderVoicemail(d){
+  const el = document.getElementById('voicemail');
+  if (!el) return;
+  if (!d || typeof d.enabled === 'undefined'){ el.textContent = 'No data'; return; }
+  if (!d.enabled){ el.innerHTML = '<span style="color:var(--dim)">Disabled</span>'; return; }
+
+  let head = '';
+  if (d.recording) head =
+    '<span style="color:var(--red)">● Recording for user '+d.recording_user_id+'</span>';
+  else if (d.armed) head =
+    '<span style="color:var(--yellow)">⏵ Armed for user '+d.armed_user_id+'</span>';
+  else head =
+    '<span style="color:var(--dim)">Idle</span> — '+(d.total_messages||0)+
+    ' message'+(d.total_messages===1?'':'s')+' total';
+
+  let users = '';
+  if (Array.isArray(d.users) && d.users.length){
+    const withMail = d.users.filter(u => u.count > 0);
+    if (withMail.length){
+      users = '<div style="margin-top:4px">'+
+        withMail.map(u =>
+          '<div class="user-row"><span>'+
+          (u.name||('user '+u.user_id))+'</span><span>'+
+          u.count+(u.full?' <span style="color:var(--red)">FULL</span>':'')+
+          '</span></div>').join('') + '</div>';
+    }
+  }
+  el.innerHTML = head + users;
+}
+
 function renderAlerts(d) {
   const el=document.getElementById('alerts');
   if(!d||!d.alerts||d.alerts.length===0){el.textContent='None';return;}
@@ -1372,6 +1407,11 @@ function connectSSE() {
            * state (DTMF login persists across COR drops) and the
            * remaining timeout countdown. */
           renderCallerSession(evt.data || {});
+          break;
+        case 'voicemail_updated':
+          /* Authoritative snapshot from mod_voicemail: per-user
+           * mailbox counts + recording/armed state. */
+          renderVoicemail(evt.data || {});
           break;
         case 'dtmf_digit':
           addDtmf(evt.digit);

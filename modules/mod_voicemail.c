@@ -93,6 +93,77 @@ static int count_messages(int user_id)
     return count;
 }
 
+/* Authoritative voicemail-state snapshot for admin dashboard.
+ * Sensitive (per-user message counts, names) → admin_only=1.
+ * Called on every state transition: armed/disarmed, recording
+ * start/stop, message saved, message deleted. Also seeded at
+ * configure() so the SSE cache always carries truth. */
+static void publish_voicemail_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+
+    char users[2048];
+    size_t up = 0;
+    int total = 0;
+    int armed_uid     = g_record_armed ? g_record_user_id : 0;
+    int recording_uid = g_recording    ? g_record_user_id : 0;
+
+    users[0] = '\0';
+    int first = 1;
+    for (int i = 1; i <= 64; i++) {
+        const kerchunk_user_t *u = g_core->user_lookup_by_id(i);
+        if (!u || !u->voicemail) continue;
+        int n = count_messages(i);
+        total += n;
+
+        char e_name[64];
+        size_t j = 0;
+        for (const char *p = u->name; *p && j < sizeof(e_name) - 6; p++) {
+            switch (*p) {
+            case '"':  e_name[j++] = '\\'; e_name[j++] = '"';  break;
+            case '\\': e_name[j++] = '\\'; e_name[j++] = '\\'; break;
+            default:   e_name[j++] = *p;                       break;
+            }
+        }
+        e_name[j] = '\0';
+
+        char frag[200];
+        int flen = snprintf(frag, sizeof(frag),
+            "%s{\"user_id\":%d,\"name\":\"%s\",\"count\":%d,\"full\":%s}",
+            first ? "" : ",",
+            u->id, e_name, n, (n >= g_max_messages) ? "true" : "false");
+        if (flen < 0) continue;
+        if (up + (size_t)flen >= sizeof(users)) break;
+        memcpy(users + up, frag, (size_t)flen);
+        up += (size_t)flen;
+        users[up] = '\0';
+        first = 0;
+    }
+
+    char json[3072];
+    snprintf(json, sizeof(json),
+        "{\"enabled\":%s,"
+        "\"armed\":%s,"
+        "\"armed_user_id\":%d,"
+        "\"recording\":%s,"
+        "\"recording_user_id\":%d,"
+        "\"max_messages\":%d,"
+        "\"max_duration_s\":%d,"
+        "\"total_messages\":%d,"
+        "\"users\":[%s]}",
+        g_enabled            ? "true" : "false",
+        g_record_armed       ? "true" : "false",
+        armed_uid,
+        g_recording          ? "true" : "false",
+        recording_uid,
+        g_max_messages,
+        g_max_duration_s,
+        total,
+        users);
+
+    g_core->sse_publish("voicemail_updated", json, /*admin_only=*/1);
+}
+
 /* Get next message number for a user */
 static int next_msg_num(int user_id)
 {
@@ -160,6 +231,8 @@ static void stop_recording(void)
     kerchevt_t ae = { .type = KERCHEVT_ANNOUNCEMENT,
         .announcement = { .source = "voicemail", .description = "recording saved" } };
     kerchevt_fire(&ae);
+
+    publish_voicemail_snapshot();
 }
 
 /* Recording timer (max duration) */
@@ -327,6 +400,8 @@ static void on_vm_record(const kerchevt_t *evt, void *ud)
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "recorder armed for user %d (timeout %ds)",
                 target_id, g_arm_timeout_ms / 1000);
+
+    publish_voicemail_snapshot();
 }
 
 /* Recorder was armed but the user never keyed up to speak — disarm. */
@@ -341,6 +416,7 @@ static void arm_timeout(void *ud)
                     g_arm_timeout_ms / 1000);
         if (g_core->tts_speak)
             g_core->tts_speak("Voicemail timed out.", KERCHUNK_PRI_LOW);
+        publish_voicemail_snapshot();
     }
 }
 
@@ -376,6 +452,8 @@ static void start_recording_now(void)
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "recording for user %d", g_record_user_id);
+
+    publish_voicemail_snapshot();
 }
 
 static void on_vm_play(const kerchevt_t *evt, void *ud)
@@ -466,6 +544,8 @@ static void on_vm_delete(const kerchevt_t *evt, void *ud)
     if (!deleted && g_core->tts_speak)
         g_core->tts_speak("You have no voicemail messages to delete.",
                           KERCHUNK_PRI_LOW);
+    if (deleted)
+        publish_voicemail_snapshot();
 }
 
 static void on_vm_list(const kerchevt_t *evt, void *ud)
@@ -553,6 +633,8 @@ static int voicemail_configure(const kerchunk_config_t *cfg)
                     "cannot create directory: %s", g_vm_dir);
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "voicemail dir=%s max_msg=%d max_dur=%ds enabled=%d",
                 g_vm_dir, g_max_messages, g_max_duration_s, g_enabled);
+
+    publish_voicemail_snapshot();
     return 0;
 }
 
