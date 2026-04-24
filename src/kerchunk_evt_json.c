@@ -12,18 +12,8 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *state_name(int s)
-{
-    switch (s) {
-    case 0: return "IDLE";
-    case 1: return "RECEIVING";
-    case 2: return "TAIL_WAIT";
-    case 3: return "HANG_WAIT";
-    case 4: return "RX_TIMEOUT";    /* renamed Phase 2 — collides
-                                     * with TX tail timer otherwise */
-    default: return "UNKNOWN";
-    }
-}
+/* RX FSM state-name lookup is centralized in kerchunk_events.c —
+ * see kerchunk_rx_kerchunk_rx_state_name() in kerchunk_events.h. */
 
 static const char *method_name(int m)
 {
@@ -71,8 +61,8 @@ int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max)
         return snprintf(buf, max,
             "{\"type\":\"rx_state_change\",\"old_state\":\"%s\","
             "\"new_state\":\"%s\",\"ts\":%llu}",
-            state_name(evt->state.old_state),
-            state_name(evt->state.new_state), ts);
+            kerchunk_rx_state_name(evt->state.old_state),
+            kerchunk_rx_state_name(evt->state.new_state), ts);
 
     case KERCHEVT_TX_STATE_CHANGE:
         return snprintf(buf, max,

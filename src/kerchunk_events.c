@@ -27,6 +27,22 @@ static sub_list_t     g_subs[KERCHEVT_MAX_TYPES];
 static int            g_initialized;
 static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* RX FSM state-name lookup.  The integer values match the
+ * mod_repeater enum (RPT_IDLE..RPT_RX_TIMEOUT). Kept here so it
+ * can be exported from the daemon for both mod_logger (a .so) and
+ * kerchunk_evt_json (linked into the daemon binary). */
+const char *kerchunk_rx_state_name(int s)
+{
+    switch (s) {
+    case 0: return "IDLE";
+    case 1: return "RECEIVING";
+    case 2: return "TAIL_WAIT";
+    case 3: return "HANG_WAIT";
+    case 4: return "RX_TIMEOUT";
+    default: return "UNKNOWN";
+    }
+}
+
 /* Per-thread event dispatch depth. Synchronous event dispatch means a
  * handler can fire another event, which dispatches more handlers on the
  * same thread's stack. Without a ceiling, a buggy fire→handler→fire

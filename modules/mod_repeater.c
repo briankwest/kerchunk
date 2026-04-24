@@ -27,17 +27,10 @@ enum {
     RPT_RX_TIMEOUT,
 };
 
-static const char *state_name(int s)
-{
-    switch (s) {
-    case RPT_IDLE:      return "IDLE";
-    case RPT_RECEIVING: return "RECEIVING";
-    case RPT_TAIL_WAIT: return "TAIL_WAIT";
-    case RPT_HANG_WAIT: return "HANG_WAIT";
-    case RPT_RX_TIMEOUT:   return "RX_TIMEOUT";
-    default:            return "???";
-    }
-}
+/* RX FSM state-name lookup is centralized — kerchunk_rx_state_name()
+ * exported from the daemon (see kerchunk_events.h). The labels match
+ * RPT_IDLE..RPT_RX_TIMEOUT by integer value. */
+#define state_name(s) kerchunk_rx_state_name(s)
 
 static kerchunk_core_t *g_core;
 static int g_state = RPT_IDLE;

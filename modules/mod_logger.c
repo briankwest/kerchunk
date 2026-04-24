@@ -23,17 +23,8 @@ static long  g_cur_size;
 
 /* ---- state name helpers ---- */
 
-static const char *state_name(int s)
-{
-    switch (s) {
-    case 0: return "IDLE";
-    case 1: return "RECEIVING";
-    case 2: return "TAIL_WAIT";
-    case 3: return "HANG_WAIT";
-    case 4: return "RX_TIMEOUT";
-    default: return "???";
-    }
-}
+/* RX FSM state-name lookup is centralized — kerchunk_rx_state_name()
+ * exported from the daemon (see kerchunk_events.h). */
 
 static const char *caller_method_name(int m)
 {
@@ -171,8 +162,8 @@ static void log_event(const kerchevt_t *evt, void *ud)
 
     case KERCHEVT_RX_STATE_CHANGE:
         snprintf(detail, sizeof(detail), " %s → %s",
-                 state_name(evt->state.old_state),
-                 state_name(evt->state.new_state));
+                 kerchunk_rx_state_name(evt->state.old_state),
+                 kerchunk_rx_state_name(evt->state.new_state));
         break;
 
     case KERCHEVT_TX_STATE_CHANGE:

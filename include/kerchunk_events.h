@@ -101,4 +101,11 @@ int  kerchevt_unsubscribe(kerchevt_type_t type, kerchevt_handler_t handler);
 void kerchevt_fire(const kerchevt_t *evt);
 int  kerchevt_subscriber_count(kerchevt_type_t type);
 
+/* Canonical RX-state label for the integer values mod_repeater puts
+ * into evt->state.{old,new}_state. Single source of truth for
+ * mod_repeater, mod_logger, and kerchunk_evt_json. Returns "UNKNOWN"
+ * for out-of-range inputs. Mirrors kerchunk_tx_state_name() for the
+ * TX FSM. */
+const char *kerchunk_rx_state_name(int s);
+
 #endif /* KERCHUNK_EVENTS_H */
