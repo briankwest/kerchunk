@@ -12,6 +12,7 @@
 #include "kerchunk_log.h"
 #include "kerchunk_console.h"
 #include "kerchunk_txactivity.h"
+#include "kerchunk_audio_tick.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -910,10 +911,14 @@ typedef struct {
     plcode_dtmf_dec_t  *dtmf_dec;
 } audio_thread_ctx_t;
 
-static int g_software_relay; /* 1 = relay RX audio to TX in software */
-static int g_relay_drain;    /* Samples remaining in drain timer after COR drop */
-static int g_relay_drain_ms = 500; /* Configurable relay drain time */
-static int g_relay_was_active; /* Track COR transition for drain trigger */
+/* Audio-thread-owned state. See include/kerchunk_audio_tick.h for the
+ * layout and PLAN-AUDIO-TICK.md Phase 0 for the rationale. Initialised
+ * to zeros at BSS time; relay_drain_ms is set to its config default in
+ * configure() before the audio thread starts. */
+static kerchunk_audio_state_t g_audio_state = {
+    .relay_drain_ms = 500,  /* config default, overridden in configure() */
+    .tx_tail_rem    = -1,   /* -1 = idle (not in tail countdown) */
+};
 
 /* TX-activity atomic — written by audio thread, read by main thread.
  * Together with the raw HID COS bit it drives the fused presence
@@ -922,32 +927,52 @@ static int g_relay_was_active; /* Track COR transition for drain trigger */
 static _Atomic int g_tx_dtmf_active;   /* 1 when decoder is detecting */
 
 int kerchunk_tx_dtmf_active(void) { return atomic_load(&g_tx_dtmf_active); }
-static int g_queue_ptt;      /* 1 while the queue holds a PTT ref */
-static int g_queue_fired_drain; /* 1 after QUEUE_DRAIN event fired */
-static uint64_t g_queue_drain_start_us; /* timestamp when drain began */
-static int g_tx_delay_ms;   /* silence after PTT assert before audio */
-static int g_tx_tail_ms;    /* silence after last audio before PTT release */
-static int g_tx_delay_rem;  /* remaining TX delay samples */
-static int g_tx_tail_rem;   /* remaining TX tail samples */
-static int g_ptt_hold_ticks; /* extra ticks after ring empty before PTT drop */
 
 /* Derive current TX state for the status API */
 static const char *get_tx_state(void)
 {
     int cor = kerchunk_core_get()->is_receiving();
-    if (cor && g_software_relay)
+    if (cor && g_audio_state.software_relay)
         return "TX_RELAY";
-    if (g_relay_drain > 0)
+    if (g_audio_state.relay_drain > 0)
         return "TX_TAIL";
-    if (g_queue_ptt && g_tx_delay_rem > 0)
+    if (g_audio_state.queue_ptt && g_audio_state.tx_delay_rem > 0)
         return "TX_QUEUE";
-    if (g_queue_ptt)
+    if (g_audio_state.queue_ptt)
         return "TX_QUEUE";
     if (kerchunk_core_get_ptt() && !cor)
         return "TX_TAIL";
     return "TX_IDLE";
 }
 
+/* Audio thread.
+ *
+ * Dependency budget (PLAN-AUDIO-TICK.md Phase 0). All non-pure inputs
+ * and outputs are listed here so future phases can lift this loop into
+ * a pure kerchunk_audio_tick() function with a known boundary:
+ *
+ *   Reads (per tick):
+ *     - kerchunk_audio_capture / _capture_pending / _capture_repeat_last
+ *     - kerchunk_audio_playback_writable / _playback_pending
+ *     - kerchunk_core_get()->is_receiving()    (COR / relay_active)
+ *     - kerchunk_core_get_ptt()                (PTT refcount)
+ *     - kerchunk_core_get_rx_scrambler / _tx_scrambler
+ *     - kerchunk_queue_depth / _is_draining
+ *     - g_audio_state.{software_relay,tx_delay_ms,tx_tail_ms,relay_drain_ms}
+ *
+ *   Writes (per tick):
+ *     - kerchunk_audio_playback        (relay + queue audio + silence)
+ *     - kerchevt_fire                  (AUDIO_FRAME, DTMF_*, QUEUE_*)
+ *     - kerchunk_core_dispatch_taps / _dispatch_playback_taps
+ *     - kerchunk_core_get()->request_ptt / release_ptt
+ *     - atomic_store(&g_tx_dtmf_active, ...)
+ *     - plcode_dtmf_dec_reset / _process   (decoder owned by ctx)
+ *     - g_audio_state.* (everything except the *_ms config fields)
+ *
+ *   Mutated locals (would become state-struct fields in Phase 2/3):
+ *     - prev_dtmf
+ *     - deadline, t0
+ */
 static void *audio_thread_fn(void *arg)
 {
     audio_thread_ctx_t *ctx = (audio_thread_ctx_t *)arg;
@@ -1005,7 +1030,7 @@ static void *audio_thread_fn(void *arg)
          * and the web-listen stream. During TX we're not receiving, so RX
          * latency growth is a non-issue; we absorb backlog the moment PTT
          * releases. */
-        int tx_active = g_queue_ptt || kerchunk_core_get_ptt();
+        int tx_active = g_audio_state.queue_ptt || kerchunk_core_get_ptt();
         if (!tx_active && cap_pending >= 2u * (size_t)g_frame_samples) {
             rx_frames = (int)(cap_pending / (size_t)g_frame_samples);
             if (rx_frames > RX_CATCHUP_MAX) rx_frames = RX_CATCHUP_MAX;
@@ -1058,13 +1083,13 @@ static void *audio_thread_fn(void *arg)
          * decoder onto the wrong digit for the first real tone.
          * Particularly bad when the user rekeys during the courtesy
          * tone / relay drain window. */
-        if (relay_active && !g_relay_was_active)
+        if (relay_active && !g_audio_state.relay_was_active)
             plcode_dtmf_dec_reset(ctx->dtmf_dec);
 
         /* ── DTMF decoder: only process when COR active or draining ──
          * Saves CPU and prevents false detections from noise/silence.
          * The relay drain window catches late digits in the squelch tail. */
-        if (relay_active || g_relay_drain > 0) {
+        if (relay_active || g_audio_state.relay_drain > 0) {
             plcode_dtmf_result_t dtmf_res;
             plcode_dtmf_dec_process(ctx->dtmf_dec, frame, (size_t)nread, &dtmf_res);
 
@@ -1118,10 +1143,10 @@ static void *audio_thread_fn(void *arg)
          * of speech aren't cut off mid-word.
          */
         /* Detect COR drop → start drain countdown */
-        if (g_software_relay && g_relay_was_active && !relay_active) {
-            g_relay_drain = (g_sample_rate * g_relay_drain_ms) / 1000;
+        if (g_audio_state.software_relay && g_audio_state.relay_was_active && !relay_active) {
+            g_audio_state.relay_drain = (g_sample_rate * g_audio_state.relay_drain_ms) / 1000;
         }
-        g_relay_was_active = relay_active;
+        g_audio_state.relay_was_active = relay_active;
 
         /* Relay when COR active OR drain timer running.
          * The drain timer gives captured audio time to flush through
@@ -1130,9 +1155,9 @@ static void *audio_thread_fn(void *arg)
          * is feedback from our own transmission, not a real signal.  Without
          * this guard the relay fills the playback ring with noise and the
          * queue can never release PTT (playback_pending never reaches 0). */
-        int do_relay = g_software_relay && kerchunk_core_get_ptt() &&
-                       !g_queue_ptt &&
-                       (relay_active || g_relay_drain > 0);
+        int do_relay = g_audio_state.software_relay && kerchunk_core_get_ptt() &&
+                       !g_audio_state.queue_ptt &&
+                       (relay_active || g_audio_state.relay_drain > 0);
 
         if (do_relay && nread > 0) {
             if (kerchunk_audio_playback_writable() >= (size_t)nread) {
@@ -1160,13 +1185,13 @@ static void *audio_thread_fn(void *arg)
                  * Early stop: if captured audio is below noise floor, speech
                  * has ended — skip remaining drain so courtesy tone plays
                  * immediately instead of waiting the full relay_drain period. */
-                if (!relay_active && g_relay_drain > 0) {
-                    g_relay_drain -= nread;
+                if (!relay_active && g_audio_state.relay_drain > 0) {
+                    g_audio_state.relay_drain -= nread;
                     int64_t pwr = 0;
                     for (int k = 0; k < nread; k++)
                         pwr += (int64_t)frame[k] * frame[k];
                     if (pwr / nread < 200 * 200)  /* ~200 RMS = noise floor */
-                        g_relay_drain = 0;
+                        g_audio_state.relay_drain = 0;
                 }
             }
         }
@@ -1185,43 +1210,43 @@ static void *audio_thread_fn(void *arg)
          */
 
         /* Pause queue drain for live relay — but NOT if the queue already
-         * holds PTT.  When queue is transmitting (g_queue_ptt=1), any COR
+         * holds PTT.  When queue is transmitting (g_audio_state.queue_ptt=1), any COR
          * is likely TX-to-RX feedback from our own transmission and must
          * not stall the drain, or PTT gets stuck forever.
          *
          * The wait-for-COR-clear behavior applies regardless of
          * software_relay mode. Originally the guard was conditioned on
-         * g_software_relay, which meant on hardware-relay setups
+         * g_audio_state.software_relay, which meant on hardware-relay setups
          * (software_relay=off) the queue would start draining the
          * instant audio was enqueued — kerchunk PTTing in the middle
          * of the user's still-held transmission. */
-        int queue_paused = (!g_queue_ptt &&
-                            (kerchunk_core_get()->is_receiving() || g_relay_drain > 0));
+        int queue_paused = (!g_audio_state.queue_ptt &&
+                            (kerchunk_core_get()->is_receiving() || g_audio_state.relay_drain > 0));
 
         /* Start PTT + delay when queue has items and we're not already playing */
-        if (!queue_paused && !g_queue_ptt &&
+        if (!queue_paused && !g_audio_state.queue_ptt &&
             (kerchunk_queue_depth() > 0 || kerchunk_queue_is_draining())) {
             /* Check if PTT is already held (e.g., by mod_repeater during
              * tail/hang, or by web_ptt) BEFORE we assert our own ref —
              * otherwise get_ptt() always returns true. */
             int ptt_already_held = kerchunk_core_get_ptt();
             kerchunk_core_get()->request_ptt("queue");
-            g_queue_ptt = 1;
-            g_queue_fired_drain = 0;
+            g_audio_state.queue_ptt = 1;
+            g_audio_state.queue_fired_drain = 0;
             if (ptt_already_held)
-                g_tx_delay_rem = 0;
+                g_audio_state.tx_delay_rem = 0;
             else
-                g_tx_delay_rem = (g_sample_rate * g_tx_delay_ms) / 1000;
-            g_tx_tail_rem = -1;
+                g_audio_state.tx_delay_rem = (g_sample_rate * g_audio_state.tx_delay_ms) / 1000;
+            g_audio_state.tx_tail_rem = -1;
         }
 
         /* TX delay: feed silence while radio keys up */
-        while (!queue_paused && g_queue_ptt && g_tx_delay_rem > 0 &&
+        while (!queue_paused && g_audio_state.queue_ptt && g_audio_state.tx_delay_rem > 0 &&
                kerchunk_audio_playback_writable() >= (size_t)g_frame_samples) {
             int16_t silence[KERCHUNK_MAX_FRAME_SAMPLES];
             memset(silence, 0, g_frame_samples * sizeof(int16_t));
-            int sn = g_tx_delay_rem < g_frame_samples ?
-                     g_tx_delay_rem : g_frame_samples;
+            int sn = g_audio_state.tx_delay_rem < g_frame_samples ?
+                     g_audio_state.tx_delay_rem : g_frame_samples;
 
             kerchunk_audio_playback(silence, (size_t)sn);
 
@@ -1233,7 +1258,7 @@ static void *audio_thread_fn(void *arg)
             };
             kerchunk_core_dispatch_playback_taps(&delay_evt);
 
-            g_tx_delay_rem -= sn;
+            g_audio_state.tx_delay_rem -= sn;
         }
 
         /* Drain exactly 1 frame per tick = real-time rate (50/sec).
@@ -1241,7 +1266,7 @@ static void *audio_thread_fn(void *arg)
          * draining — keeps the browser ring stable and prevents the
          * write pointer from lapping the read pointer. */
         int frames_drained = 0;
-        if (!queue_paused && g_queue_ptt && g_tx_delay_rem <= 0 &&
+        if (!queue_paused && g_audio_state.queue_ptt && g_audio_state.tx_delay_rem <= 0 &&
             !(kerchunk_core_get()->is_receiving() && !kerchunk_core_get_ptt())) {
 
             int16_t play_buf[KERCHUNK_MAX_FRAME_SAMPLES];
@@ -1250,9 +1275,9 @@ static void *audio_thread_fn(void *arg)
                 frames_drained = 1;
 
                 /* Fire QUEUE_DRAIN on first audio frame */
-                if (!g_queue_fired_drain) {
-                    g_queue_fired_drain = 1;
-                    g_queue_drain_start_us = t0;
+                if (!g_audio_state.queue_fired_drain) {
+                    g_audio_state.queue_fired_drain = 1;
+                    g_audio_state.queue_drain_start_us = t0;
                     kerchevt_t qd = { .type = KERCHEVT_QUEUE_DRAIN,
                                     .timestamp_us = t0 };
                     kerchevt_fire(&qd);
@@ -1278,22 +1303,22 @@ static void *audio_thread_fn(void *arg)
         }
 
         /* TX tail + PTT release when queue is empty */
-        if (!queue_paused && frames_drained == 0 && g_queue_ptt && g_tx_delay_rem <= 0 &&
+        if (!queue_paused && frames_drained == 0 && g_audio_state.queue_ptt && g_audio_state.tx_delay_rem <= 0 &&
             kerchunk_queue_depth() == 0 && !kerchunk_queue_is_draining()) {
             /* Start tail countdown on first empty tick */
-            if (g_tx_tail_rem < 0) {
-                g_tx_tail_rem = (g_sample_rate * g_tx_tail_ms) / 1000;
+            if (g_audio_state.tx_tail_rem < 0) {
+                g_audio_state.tx_tail_rem = (g_sample_rate * g_audio_state.tx_tail_ms) / 1000;
 
                 /* Fire QUEUE_COMPLETE at tail start — gives the dashboard
                  * time to show TAIL state before PTT drops */
-                if (g_queue_fired_drain) {
+                if (g_audio_state.queue_fired_drain) {
                     uint64_t end_us = now_us();
-                    uint32_t dur_ms = (uint32_t)((end_us - g_queue_drain_start_us) / 1000);
+                    uint32_t dur_ms = (uint32_t)((end_us - g_audio_state.queue_drain_start_us) / 1000);
                     kerchevt_t qc = { .type = KERCHEVT_QUEUE_COMPLETE,
                                     .timestamp_us = end_us,
                                     .queue = { .duration_ms = dur_ms } };
                     kerchevt_fire(&qc);
-                    g_queue_fired_drain = 0;
+                    g_audio_state.queue_fired_drain = 0;
                 }
             }
 
@@ -1301,22 +1326,22 @@ static void *audio_thread_fn(void *arg)
              * during the QUEUE_COMPLETE callback above.  If so, cancel
              * the tail and resume draining — the new items will play
              * before PTT releases. */
-            if (g_tx_tail_rem >= 0 && kerchunk_queue_depth() > 0) {
+            if (g_audio_state.tx_tail_rem >= 0 && kerchunk_queue_depth() > 0) {
                 KERCHUNK_LOG_D(LOG_MOD, "tail cancelled: %d new items in queue",
                                kerchunk_queue_depth());
-                g_tx_tail_rem = -1;
-                g_queue_fired_drain = 1;
-                g_ptt_hold_ticks = 0;
+                g_audio_state.tx_tail_rem = -1;
+                g_audio_state.queue_fired_drain = 1;
+                g_audio_state.ptt_hold_ticks = 0;
                 continue;  /* re-enter drain loop on next tick */
             }
 
             /* Feed tail silence */
-            while (g_tx_tail_rem > 0 &&
+            while (g_audio_state.tx_tail_rem > 0 &&
                    kerchunk_audio_playback_writable() >= (size_t)g_frame_samples) {
                 int16_t silence[KERCHUNK_MAX_FRAME_SAMPLES];
                 memset(silence, 0, g_frame_samples * sizeof(int16_t));
-                int sn = g_tx_tail_rem < g_frame_samples ?
-                         g_tx_tail_rem : g_frame_samples;
+                int sn = g_audio_state.tx_tail_rem < g_frame_samples ?
+                         g_audio_state.tx_tail_rem : g_frame_samples;
 
                 kerchunk_audio_playback(silence, (size_t)sn);
 
@@ -1328,23 +1353,23 @@ static void *audio_thread_fn(void *arg)
                 };
                 kerchunk_core_dispatch_playback_taps(&tail_evt);
 
-                g_tx_tail_rem -= sn;
+                g_audio_state.tx_tail_rem -= sn;
             }
 
             /* Release PTT when tail is done AND playback ring is drained
              * AND hardware has had time to flush its internal buffer.
              * Hold PTT for 3 extra ticks (60ms) after the ring empties
              * so PortAudio/ALSA can finish playing the CTCSS tail. */
-            if (g_tx_tail_rem <= 0 &&
+            if (g_audio_state.tx_tail_rem <= 0 &&
                 kerchunk_audio_playback_pending() == 0) {
-                if (++g_ptt_hold_ticks >= 3) {
-                    g_queue_ptt = 0;
-                    g_tx_tail_rem = -1;
-                    g_ptt_hold_ticks = 0;
+                if (++g_audio_state.ptt_hold_ticks >= 3) {
+                    g_audio_state.queue_ptt = 0;
+                    g_audio_state.tx_tail_rem = -1;
+                    g_audio_state.ptt_hold_ticks = 0;
                     kerchunk_core_get()->release_ptt("queue");
                 }
             } else {
-                g_ptt_hold_ticks = 0;
+                g_audio_state.ptt_hold_ticks = 0;
             }
         }
 
@@ -1556,27 +1581,27 @@ int main(int argc, char **argv)
     }
 
     /* TX timing (with validation) */
-    g_tx_delay_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_delay", 100);
-    g_tx_tail_ms  = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_tail", 200);
-    if (g_tx_delay_ms < 0) g_tx_delay_ms = 0;
-    if (g_tx_delay_ms > 2000) g_tx_delay_ms = 2000;
-    if (g_tx_tail_ms < 0)  g_tx_tail_ms = 0;
-    if (g_tx_tail_ms > 2000) g_tx_tail_ms = 2000;
-    g_tx_tail_rem = -1;
+    g_audio_state.tx_delay_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_delay", 100);
+    g_audio_state.tx_tail_ms  = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_tail", 200);
+    if (g_audio_state.tx_delay_ms < 0) g_audio_state.tx_delay_ms = 0;
+    if (g_audio_state.tx_delay_ms > 2000) g_audio_state.tx_delay_ms = 2000;
+    if (g_audio_state.tx_tail_ms < 0)  g_audio_state.tx_tail_ms = 0;
+    if (g_audio_state.tx_tail_ms > 2000) g_audio_state.tx_tail_ms = 2000;
+    g_audio_state.tx_tail_rem = -1;
 
     /* Software relay: if on, kerchunkd relays RX audio to TX in software.
      * The radio's internal relay must be disabled. */
     const char *sr = kerchunk_config_get(cfg, "repeater", "software_relay");
-    g_software_relay = (sr && strcmp(sr, "on") == 0);
+    g_audio_state.software_relay = (sr && strcmp(sr, "on") == 0);
 
-    g_relay_drain_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "relay_drain", 500);
-    if (g_relay_drain_ms < 0) g_relay_drain_ms = 0;
-    if (g_relay_drain_ms > 5000) g_relay_drain_ms = 5000;
+    g_audio_state.relay_drain_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "relay_drain", 500);
+    if (g_audio_state.relay_drain_ms < 0) g_audio_state.relay_drain_ms = 0;
+    if (g_audio_state.relay_drain_ms > 5000) g_audio_state.relay_drain_ms = 5000;
 
     KERCHUNK_LOG_I(LOG_MOD, "tx_delay=%dms tx_tail=%dms software_relay=%s "
                  "relay_drain=%dms",
-                 g_tx_delay_ms, g_tx_tail_ms, g_software_relay ? "on" : "off",
-                 g_relay_drain_ms);
+                 g_audio_state.tx_delay_ms, g_audio_state.tx_tail_ms, g_audio_state.software_relay ? "on" : "off",
+                 g_audio_state.relay_drain_ms);
 
     /* Create decoders */
     audio_thread_ctx_t audio_ctx = { NULL, NULL, NULL };
@@ -1720,12 +1745,12 @@ int main(int argc, char **argv)
                 }
 
                 /* Re-read TX timing */
-                g_tx_delay_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_delay", 100);
-                g_tx_tail_ms  = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_tail", 200);
-                if (g_tx_delay_ms < 0) g_tx_delay_ms = 0;
-                if (g_tx_delay_ms > 2000) g_tx_delay_ms = 2000;
-                if (g_tx_tail_ms < 0) g_tx_tail_ms = 0;
-                if (g_tx_tail_ms > 5000) g_tx_tail_ms = 5000;
+                g_audio_state.tx_delay_ms = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_delay", 100);
+                g_audio_state.tx_tail_ms  = kerchunk_config_get_duration_ms(cfg, "repeater", "tx_tail", 200);
+                if (g_audio_state.tx_delay_ms < 0) g_audio_state.tx_delay_ms = 0;
+                if (g_audio_state.tx_delay_ms > 2000) g_audio_state.tx_delay_ms = 2000;
+                if (g_audio_state.tx_tail_ms < 0) g_audio_state.tx_tail_ms = 0;
+                if (g_audio_state.tx_tail_ms > 5000) g_audio_state.tx_tail_ms = 5000;
 
                 kerchevt_t evt = { .type = KERCHEVT_CONFIG_RELOAD, .timestamp_us = tick_start };
                 kerchevt_fire(&evt);
