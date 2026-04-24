@@ -2108,30 +2108,18 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
-        /* Access log */
-        {
-            uint8_t *ip = c->rem.addr.ip;
-            if (c->rem.is_ip6)
-                g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                    "%x:%x:%x:%x:%x:%x:%x:%x %.*s %.*s",
-                    (ip[0]<<8)|ip[1], (ip[2]<<8)|ip[3],
-                    (ip[4]<<8)|ip[5], (ip[6]<<8)|ip[7],
-                    (ip[8]<<8)|ip[9], (ip[10]<<8)|ip[11],
-                    (ip[12]<<8)|ip[13], (ip[14]<<8)|ip[15],
-                    (int)hm->method.len, hm->method.buf,
-                    (int)hm->uri.len, hm->uri.buf);
-            else
-                g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                    "%d.%d.%d.%d %.*s %.*s",
-                    ip[0], ip[1], ip[2], ip[3],
-                    (int)hm->method.len, hm->method.buf,
-                    (int)hm->uri.len, hm->uri.buf);
-        }
+        /* Access log emitted at access_log_done: below, after the
+         * handler has written the response into c->send. We capture
+         * the buffer offset so we can read the response status line
+         * ("HTTP/1.x NNN ...") that gets written there. Every return
+         * inside this block jumps to that label so the access log
+         * fires for every response (200, 304, 403, 404, 5xx alike). */
+        size_t resp_off = c->send.len;
 
         /* CORS preflight */
         if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
             mg_http_reply(c, 204, CORS_HEADERS, "");
-            return;
+            goto access_log_done;
         }
 
         /* ════════════════════════════════════════════════════════
@@ -2146,27 +2134,27 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             if (!check_admin_acl(c)) {
                 mg_http_reply(c, 404, "Content-Type: text/plain\r\n",
                               "Not found\n");
-                return;
+                goto access_log_done;
             }
 
             /* public_only mode: all admin access blocked */
             if (g_public_only) {
                 mg_http_reply(c, 403, API_HEADERS,
                               "{\"error\":\"Admin access disabled (public_only mode)\"}");
-                return;
+                goto access_log_done;
             }
 
             /* Check Basic Auth */
             if (!check_basic_auth(hm)) {
                 send_basic_auth_required(c,
                     mg_match(hm->uri, mg_str("/admin/api/#"), NULL) ? 1 : 0);
-                return;
+                goto access_log_done;
             }
 
             /* /admin/api/... -- admin API endpoints */
             if (mg_match(hm->uri, mg_str("/admin/api/#"), NULL)) {
                 handle_admin_api(c, hm);
-                return;
+                goto access_log_done;
             }
 
             /* /admin/... -- serve from static_dir/admin/ naturally.
@@ -2175,7 +2163,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                 /* Defense-in-depth: reject path traversal before mongoose */
                 if (memmem(hm->uri.buf, hm->uri.len, "..", 2) != NULL) {
                     mg_http_reply(c, 403, "", "Forbidden\n");
-                    return;
+                    goto access_log_done;
                 }
                 /* Cache-Control: no-cache forces every request to
                  * revalidate, so a freshly-deployed HTML/JS/CSS shows up
@@ -2191,7 +2179,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             } else {
                 mg_http_reply(c, 404, "", "Not found\n");
             }
-            return;
+            goto access_log_done;
         }
 
         /* ════════════════════════════════════════════════════════
@@ -2215,12 +2203,12 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                     resp_int(&resp, "audio_bitrate_kbps", sr * 16 / 1000);
                     resp_finish(&resp);
                     mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
-                    return;
+                    goto access_log_done;
                 }
                 for (int i = 0; g_public_apis[i]; i++) {
                     if (mg_match(hm->uri, mg_str(g_public_apis[i]), NULL)) {
                         handle_api_get(c, hm);
-                        return;
+                        goto access_log_done;
                     }
                 }
             }
@@ -2229,20 +2217,20 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             if (mg_match(hm->method, mg_str("POST"), NULL) &&
                 mg_match(hm->uri, mg_str("/api/register"), NULL)) {
                 handle_api_register(c, hm);
-                return;
+                goto access_log_done;
             }
 
             /* WebSocket audio stream — public (listen-only, no PTT commands) */
             if (mg_match(hm->uri, mg_str("/api/audio"), NULL)) {
                 mg_ws_upgrade(c, hm, NULL);
-                return;
+                goto access_log_done;
             }
 
             /* /api/bulletin — public GET (markdown text) */
             if (mg_match(hm->uri, mg_str("/api/bulletin"), NULL) &&
                 mg_match(hm->method, mg_str("GET"), NULL)) {
                 handle_api_bulletin_get(c);
-                return;
+                goto access_log_done;
             }
 
             /* /api/events — public SSE (state transitions only, no PII) */
@@ -2257,14 +2245,14 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
                 c->data[0] = 'P';  /* Mark as public SSE client */
                 atomic_fetch_add(&g_sse_count, 1);
                 emit_snapshot_burst(c, 0);  /* replay public snapshots */
-                return;
+                goto access_log_done;
             }
 
             /* All other /api/... routes are not publicly accessible --
              * they must go through /admin/api/... */
             mg_http_reply(c, 404, API_HEADERS,
                           "{\"error\":\"Unknown API endpoint\"}");
-            return;
+            goto access_log_done;
         }
 
         /* /coverage.png — served from coverage_png_path (default
@@ -2278,7 +2266,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             struct stat st;
             if (stat(g_coverage_png_path, &st) == 0 && S_ISREG(st.st_mode)) {
                 handle_api_coverage_png_get(c, hm);
-                return;
+                goto access_log_done;
             }
             /* fall through to static serve */
         }
@@ -2290,7 +2278,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             /* Defense-in-depth: reject path traversal before mongoose */
             if (memmem(hm->uri.buf, hm->uri.len, "..", 2) != NULL) {
                 mg_http_reply(c, 403, "", "Forbidden\n");
-                return;
+                goto access_log_done;
             }
             /* See comment at the admin static-serve site; same rationale. */
             struct mg_http_serve_opts opts = {
@@ -2300,6 +2288,43 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data)
             mg_http_serve_dir(c, hm, &opts);
         } else {
             mg_http_reply(c, 404, "", "Not found\n");
+        }
+
+        access_log_done: {
+            /* Parse status from "HTTP/1.x NNN " in c->send.buf at the
+             * offset captured before the handler ran. Bytes-written =
+             * total response size (headers + body). status=0 if we
+             * couldn't parse — handler may have closed the connection
+             * without writing a response. */
+            int status = 0;
+            size_t resp_len = c->send.len > resp_off ? c->send.len - resp_off : 0;
+            if (resp_len >= 12) {
+                const unsigned char *r = c->send.buf + resp_off;
+                if (r[0]=='H' && r[1]=='T' && r[2]=='T' && r[3]=='P' && r[4]=='/' &&
+                    r[9]>='0' && r[9]<='9' &&
+                    r[10]>='0' && r[10]<='9' &&
+                    r[11]>='0' && r[11]<='9')
+                    status = (r[9]-'0')*100 + (r[10]-'0')*10 + (r[11]-'0');
+            }
+
+            uint8_t *ip = c->rem.addr.ip;
+            if (c->rem.is_ip6)
+                g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "%x:%x:%x:%x:%x:%x:%x:%x %.*s %.*s %d %zu",
+                    (ip[0]<<8)|ip[1], (ip[2]<<8)|ip[3],
+                    (ip[4]<<8)|ip[5], (ip[6]<<8)|ip[7],
+                    (ip[8]<<8)|ip[9], (ip[10]<<8)|ip[11],
+                    (ip[12]<<8)|ip[13], (ip[14]<<8)|ip[15],
+                    (int)hm->method.len, hm->method.buf,
+                    (int)hm->uri.len, hm->uri.buf,
+                    status, resp_len);
+            else
+                g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "%d.%d.%d.%d %.*s %.*s %d %zu",
+                    ip[0], ip[1], ip[2], ip[3],
+                    (int)hm->method.len, hm->method.buf,
+                    (int)hm->uri.len, hm->uri.buf,
+                    status, resp_len);
         }
     }
 
