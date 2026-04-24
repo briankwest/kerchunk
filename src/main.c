@@ -1135,179 +1135,105 @@ static void *audio_thread_fn(void *arg)
         }
         }  /* end RX per-frame catchup loop */
 
-        /* ── Drain queue → playback ring buffer ──
-         *
-         * tx_delay: silence after PTT assert, before first audio
-         * tx_tail:  silence after last audio, before PTT release
-         *
-         * Flow: [PTT assert] → [tx_delay silence] → [audio] → [tx_tail silence] → [PTT release]
-         *
-         * When software_relay is on and COR is active, queue drain is
-         * paused — live relay has priority over announcements. Queue
-         * resumes after COR drops.
-         */
-
-        /* Pause queue drain for live relay — but NOT if the queue already
-         * holds PTT.  When queue is transmitting (g_audio_state.queue_ptt=1), any COR
-         * is likely TX-to-RX feedback from our own transmission and must
-         * not stall the drain, or PTT gets stuck forever.
-         *
-         * The wait-for-COR-clear behavior applies regardless of
-         * software_relay mode. Originally the guard was conditioned on
-         * g_audio_state.software_relay, which meant on hardware-relay setups
-         * (software_relay=off) the queue would start draining the
-         * instant audio was enqueued — kerchunk PTTing in the middle
-         * of the user's still-held transmission. */
-        int queue_paused = (!g_audio_state.queue_ptt &&
-                            (kerchunk_core_get()->is_receiving() || g_audio_state.relay_drain > 0));
-
-        /* Start PTT + delay when queue has items and we're not already playing */
-        if (!queue_paused && !g_audio_state.queue_ptt &&
-            (kerchunk_queue_depth() > 0 || kerchunk_queue_is_draining())) {
-            /* Check if PTT is already held (e.g., by mod_repeater during
-             * tail/hang, or by web_ptt) BEFORE we assert our own ref —
-             * otherwise get_ptt() always returns true. */
-            int ptt_already_held = kerchunk_core_get_ptt();
-            kerchunk_core_get()->request_ptt("queue");
-            g_audio_state.queue_ptt = 1;
-            g_audio_state.queue_fired_drain = 0;
-            if (ptt_already_held)
-                g_audio_state.tx_delay_rem = 0;
-            else
-                g_audio_state.tx_delay_rem = (g_sample_rate * g_audio_state.tx_delay_ms) / 1000;
-            g_audio_state.tx_tail_rem = -1;
-        }
-
-        /* TX delay: feed silence while radio keys up */
-        while (!queue_paused && g_audio_state.queue_ptt && g_audio_state.tx_delay_rem > 0 &&
-               kerchunk_audio_playback_writable() >= (size_t)g_frame_samples) {
-            int16_t silence[KERCHUNK_MAX_FRAME_SAMPLES];
-            memset(silence, 0, g_frame_samples * sizeof(int16_t));
-            int sn = g_audio_state.tx_delay_rem < g_frame_samples ?
-                     g_audio_state.tx_delay_rem : g_frame_samples;
-
-            kerchunk_audio_playback(silence, (size_t)sn);
-
-            /* Dispatch silence through playback tap so browser stream
-             * stays fed — prevents AudioWorklet de-priming during delay */
-            kerchevt_t delay_evt = {
-                .type = KERCHEVT_AUDIO_FRAME,
-                .audio = { .samples = silence, .n = (size_t)sn },
+        /* ── TX sub-tick: queue-pause gate, PTT assert, tx_delay,
+         *    queue drain, tx_tail, PTT release. Pure function
+         *    emits an action list; shell executes the list in
+         *    order. Up to 3 passes per tick to handle the tail-
+         *    cancel-on-requeue flow: first pass fires
+         *    QUEUE_COMPLETE at tail start, subscribers may enqueue
+         *    during the fire, second pass detects the new items
+         *    and cancels the tail, third pass drains the queue.
+         *    See src/kerchunk_audio_tick.c §TX and
+         *    PLAN-AUDIO-TICK.md Phase 3. */
+        for (int tx_pass = 0; tx_pass < 3; tx_pass++) {
+            kerchunk_audio_tick_tx_in_t tx_in = {
+                .relay_active      = kerchunk_core_get()->is_receiving(),
+                .ptt_held          = kerchunk_core_get_ptt(),
+                .queue_depth       = kerchunk_queue_depth(),
+                .queue_is_draining = kerchunk_queue_is_draining(),
+                .play_writable     = kerchunk_audio_playback_writable(),
+                .play_pending      = kerchunk_audio_playback_pending(),
+                .now_us            = tx_pass == 0 ? t0 : now_us(),
             };
-            kerchunk_core_dispatch_playback_taps(&delay_evt);
+            kerchunk_audio_tick_tx_out_t tx_out;
+            kerchunk_audio_tick_tx(&g_audio_state, &tx_in,
+                                   g_sample_rate, g_frame_samples,
+                                   &tx_out);
 
-            g_audio_state.tx_delay_rem -= sn;
-        }
+            for (int ai = 0; ai < tx_out.count; ai++) {
+                const kerchunk_tx_action_t *a = &tx_out.actions[ai];
+                switch (a->kind) {
+                case KERCHUNK_TX_ACT_ASSERT_PTT:
+                    kerchunk_core_get()->request_ptt("queue");
+                    break;
 
-        /* Drain exactly 1 frame per tick = real-time rate (50/sec).
-         * Both PortAudio and WebSocket get the same frame. No burst
-         * draining — keeps the browser ring stable and prevents the
-         * write pointer from lapping the read pointer. */
-        int frames_drained = 0;
-        if (!queue_paused && g_audio_state.queue_ptt && g_audio_state.tx_delay_rem <= 0 &&
-            !(kerchunk_core_get()->is_receiving() && !kerchunk_core_get_ptt())) {
-
-            int16_t play_buf[KERCHUNK_MAX_FRAME_SAMPLES];
-            int nplay = kerchunk_queue_drain(play_buf, g_frame_samples);
-            if (nplay > 0) {
-                frames_drained = 1;
-
-                /* Fire QUEUE_DRAIN on first audio frame */
-                if (!g_audio_state.queue_fired_drain) {
-                    g_audio_state.queue_fired_drain = 1;
-                    g_audio_state.queue_drain_start_us = t0;
+                case KERCHUNK_TX_ACT_FIRE_DRAIN: {
                     kerchevt_t qd = { .type = KERCHEVT_QUEUE_DRAIN,
-                                    .timestamp_us = t0 };
+                                      .timestamp_us = tx_in.now_us };
                     kerchevt_fire(&qd);
+                    break;
                 }
 
-                /* TX scrambler before CTCSS/DCS mix */
-                {
-                    void *scr_ctx;
-                    kerchunk_scrambler_fn scr_fn = kerchunk_core_get_tx_scrambler(&scr_ctx);
-                    if (scr_fn)
-                        scr_fn(play_buf, (size_t)nplay, scr_ctx);
-                }
-
-                kerchunk_audio_playback(play_buf, (size_t)nplay);
-
-                /* Dispatch to WebSocket via SPSC ring */
-                kerchevt_t play_evt = {
-                    .type = KERCHEVT_AUDIO_FRAME,
-                    .audio = { .samples = play_buf, .n = (size_t)nplay },
-                };
-                kerchunk_core_dispatch_playback_taps(&play_evt);
-            }
-        }
-
-        /* TX tail + PTT release when queue is empty */
-        if (!queue_paused && frames_drained == 0 && g_audio_state.queue_ptt && g_audio_state.tx_delay_rem <= 0 &&
-            kerchunk_queue_depth() == 0 && !kerchunk_queue_is_draining()) {
-            /* Start tail countdown on first empty tick */
-            if (g_audio_state.tx_tail_rem < 0) {
-                g_audio_state.tx_tail_rem = (g_sample_rate * g_audio_state.tx_tail_ms) / 1000;
-
-                /* Fire QUEUE_COMPLETE at tail start — gives the dashboard
-                 * time to show TAIL state before PTT drops */
-                if (g_audio_state.queue_fired_drain) {
-                    uint64_t end_us = now_us();
-                    uint32_t dur_ms = (uint32_t)((end_us - g_audio_state.queue_drain_start_us) / 1000);
+                case KERCHUNK_TX_ACT_FIRE_COMPLETE: {
                     kerchevt_t qc = { .type = KERCHEVT_QUEUE_COMPLETE,
-                                    .timestamp_us = end_us,
-                                    .queue = { .duration_ms = dur_ms } };
+                                      .timestamp_us = tx_in.now_us,
+                                      .queue = { .duration_ms = a->duration_ms } };
                     kerchevt_fire(&qc);
-                    g_audio_state.queue_fired_drain = 0;
+                    break;
                 }
-            }
 
-            /* Check if event handlers (courtesy tone) queued new items
-             * during the QUEUE_COMPLETE callback above.  If so, cancel
-             * the tail and resume draining — the new items will play
-             * before PTT releases. */
-            if (g_audio_state.tx_tail_rem >= 0 && kerchunk_queue_depth() > 0) {
-                KERCHUNK_LOG_D(LOG_MOD, "tail cancelled: %d new items in queue",
-                               kerchunk_queue_depth());
-                g_audio_state.tx_tail_rem = -1;
-                g_audio_state.queue_fired_drain = 1;
-                g_audio_state.ptt_hold_ticks = 0;
-                continue;  /* re-enter drain loop on next tick */
-            }
+                case KERCHUNK_TX_ACT_SILENCE: {
+                    int16_t silence[KERCHUNK_MAX_FRAME_SAMPLES];
+                    memset(silence, 0, a->samples * sizeof(int16_t));
+                    kerchunk_audio_playback(silence, (size_t)a->samples);
+                    /* Dispatch through playback tap so browser stream stays
+                     * fed — prevents AudioWorklet de-priming. */
+                    kerchevt_t evt = {
+                        .type = KERCHEVT_AUDIO_FRAME,
+                        .audio = { .samples = silence, .n = (size_t)a->samples },
+                    };
+                    kerchunk_core_dispatch_playback_taps(&evt);
+                    break;
+                }
 
-            /* Feed tail silence */
-            while (g_audio_state.tx_tail_rem > 0 &&
-                   kerchunk_audio_playback_writable() >= (size_t)g_frame_samples) {
-                int16_t silence[KERCHUNK_MAX_FRAME_SAMPLES];
-                memset(silence, 0, g_frame_samples * sizeof(int16_t));
-                int sn = g_audio_state.tx_tail_rem < g_frame_samples ?
-                         g_audio_state.tx_tail_rem : g_frame_samples;
+                case KERCHUNK_TX_ACT_DRAIN: {
+                    int16_t play_buf[KERCHUNK_MAX_FRAME_SAMPLES];
+                    int nplay = kerchunk_queue_drain(play_buf, a->samples);
+                    if (nplay > 0) {
+                        /* TX scrambler before CTCSS/DCS mix */
+                        void *scr_ctx;
+                        kerchunk_scrambler_fn scr_fn = kerchunk_core_get_tx_scrambler(&scr_ctx);
+                        if (scr_fn)
+                            scr_fn(play_buf, (size_t)nplay, scr_ctx);
 
-                kerchunk_audio_playback(silence, (size_t)sn);
+                        kerchunk_audio_playback(play_buf, (size_t)nplay);
 
-                /* Dispatch silence through playback tap so browser stream
-                 * stays fed — prevents AudioWorklet de-priming during tail */
-                kerchevt_t tail_evt = {
-                    .type = KERCHEVT_AUDIO_FRAME,
-                    .audio = { .samples = silence, .n = (size_t)sn },
-                };
-                kerchunk_core_dispatch_playback_taps(&tail_evt);
+                        kerchevt_t evt = {
+                            .type = KERCHEVT_AUDIO_FRAME,
+                            .audio = { .samples = play_buf, .n = (size_t)nplay },
+                        };
+                        kerchunk_core_dispatch_playback_taps(&evt);
+                    }
+                    break;
+                }
 
-                g_audio_state.tx_tail_rem -= sn;
-            }
-
-            /* Release PTT when tail is done AND playback ring is drained
-             * AND hardware has had time to flush its internal buffer.
-             * Hold PTT for 3 extra ticks (60ms) after the ring empties
-             * so PortAudio/ALSA can finish playing the CTCSS tail. */
-            if (g_audio_state.tx_tail_rem <= 0 &&
-                kerchunk_audio_playback_pending() == 0) {
-                if (++g_audio_state.ptt_hold_ticks >= 3) {
-                    g_audio_state.queue_ptt = 0;
-                    g_audio_state.tx_tail_rem = -1;
-                    g_audio_state.ptt_hold_ticks = 0;
+                case KERCHUNK_TX_ACT_RELEASE_PTT:
                     kerchunk_core_get()->release_ptt("queue");
+                    break;
+
+                case KERCHUNK_TX_ACT_NONE:
+                default:
+                    break;
                 }
-            } else {
-                g_audio_state.ptt_hold_ticks = 0;
+            }
+
+            if (!tx_out.rerun_this_tick) break;
+
+            if (tx_pass == 1) {
+                /* Pass 1 (from 0) just cancelled the tail — log once */
+                KERCHUNK_LOG_D(LOG_MOD,
+                    "tail cancelled: %d new items in queue",
+                    kerchunk_queue_depth());
             }
         }
 

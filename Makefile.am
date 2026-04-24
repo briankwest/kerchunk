@@ -343,6 +343,7 @@ test_kerchunk_SOURCES = \
 	tests/test_txactivity.c \
 	tests/test_audio_ring.c \
 	tests/test_audio_tick_rx.c \
+	tests/test_audio_tick_tx.c \
 	tests/test_stubs.c \
 	src/kerchunk_events.c \
 	src/kerchunk_config.c \

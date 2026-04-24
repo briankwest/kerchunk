@@ -133,6 +133,74 @@ void kerchunk_audio_tick_rx(kerchunk_audio_state_t *s,
                             int sample_rate,
                             kerchunk_audio_tick_rx_out_t *out);
 
+
+/*
+ * ── TX sub-tick (PLAN-AUDIO-TICK.md Phase 3) ─────────────────────
+ *
+ * Pure function over (state, in) → ordered list of actions the
+ * shell should perform this tick. Preserves the original TX block's
+ * ordering invariants:
+ *   - ASSERT_PTT comes first in a tick that transitions out of idle
+ *   - silence for tx_delay is written BEFORE drain
+ *   - drain is exactly one frame per tick (no burst)
+ *   - FIRE_QUEUE_DRAIN comes on the same tick as the first drain
+ *   - tail starts only when queue has truly drained
+ *   - FIRE_QUEUE_COMPLETE fires at tail start, before tail silence
+ *   - tail-cancel on requeue sets rerun_this_tick; shell re-enters
+ *     the loop body immediately
+ *   - RELEASE_PTT fires only when tx_tail_rem≤0 AND play_pending=0
+ *     AND ptt_hold_ticks has reached 3
+ *
+ * All I/O lives in the shell. Tests iterate out->actions[] and
+ * assert on the sequence.
+ */
+
+typedef struct kerchunk_audio_tick_tx_in_s {
+    int      queue_paused_unused;   /* reserved; compute inside the fn */
+    int      relay_active;          /* from core->is_receiving() */
+    int      ptt_held;              /* from core_get_ptt() snapshot */
+    int      queue_depth;           /* from kerchunk_queue_depth() */
+    int      queue_is_draining;     /* from kerchunk_queue_is_draining() */
+    size_t   play_writable;         /* from kerchunk_audio_playback_writable() */
+    size_t   play_pending;          /* from kerchunk_audio_playback_pending() */
+    uint64_t now_us;                /* for QUEUE_COMPLETE duration_ms */
+} kerchunk_audio_tick_tx_in_t;
+
+typedef enum {
+    KERCHUNK_TX_ACT_NONE = 0,
+    KERCHUNK_TX_ACT_ASSERT_PTT,     /* shell: request_ptt("queue") */
+    KERCHUNK_TX_ACT_FIRE_DRAIN,     /* shell: fire KERCHEVT_QUEUE_DRAIN */
+    KERCHUNK_TX_ACT_FIRE_COMPLETE,  /* shell: fire KERCHEVT_QUEUE_COMPLETE, dur_ms */
+    KERCHUNK_TX_ACT_SILENCE,        /* shell: write `samples` zeros to playback + tap */
+    KERCHUNK_TX_ACT_DRAIN,          /* shell: pull one frame from queue → scrambler → playback + tap */
+    KERCHUNK_TX_ACT_RELEASE_PTT,    /* shell: release_ptt("queue") */
+} kerchunk_tx_action_kind_t;
+
+typedef struct {
+    kerchunk_tx_action_kind_t kind;
+    int                       samples;      /* SILENCE / DRAIN */
+    uint32_t                  duration_ms;  /* FIRE_COMPLETE */
+} kerchunk_tx_action_t;
+
+#define KERCHUNK_TX_ACTIONS_MAX 8
+
+typedef struct kerchunk_audio_tick_tx_out_s {
+    kerchunk_tx_action_t actions[KERCHUNK_TX_ACTIONS_MAX];
+    int                  count;
+
+    /* Tail-cancellation signal: if 1, the shell should re-enter the
+     * tick loop body immediately (the original code used `continue`).
+     * The state has already been mutated so the next call takes the
+     * drain path. */
+    int rerun_this_tick;
+} kerchunk_audio_tick_tx_out_t;
+
+void kerchunk_audio_tick_tx(kerchunk_audio_state_t *s,
+                            const kerchunk_audio_tick_tx_in_t *in,
+                            int sample_rate,
+                            int frame_samples,
+                            kerchunk_audio_tick_tx_out_t *out);
+
 #ifdef __cplusplus
 }
 #endif
