@@ -226,6 +226,79 @@ void test_config(void)
     test_assert(kerchunk_config_get_duration_s(cfg, "test", "nope", 99) == 99, "missing = default");
     test_end();
 
+    /* ── [txactivity] + [dtmf] new-architecture config plumbing ── */
+
+    test_begin("config: [txactivity] end_silence_ms parses");
+    kerchunk_config_set(cfg, "txactivity", "end_silence_ms", "300");
+    test_assert(
+        kerchunk_config_get_duration_ms(cfg, "txactivity", "end_silence_ms", -1) == 300,
+        "end_silence_ms");
+    test_end();
+
+    test_begin("config: [txactivity] end_silence_dtmf_ms parses");
+    kerchunk_config_set(cfg, "txactivity", "end_silence_dtmf_ms", "1s");
+    test_assert(
+        kerchunk_config_get_duration_ms(cfg, "txactivity", "end_silence_dtmf_ms", -1) == 1000,
+        "end_silence_dtmf_ms suffix s");
+    test_end();
+
+    test_begin("config: [txactivity] dtmf_grace_ms parses");
+    kerchunk_config_set(cfg, "txactivity", "dtmf_grace_ms", "3s");
+    test_assert(
+        kerchunk_config_get_duration_ms(cfg, "txactivity", "dtmf_grace_ms", -1) == 3000,
+        "dtmf_grace_ms suffix s");
+    test_end();
+
+    test_begin("config: [txactivity] trust_cos_bit reads as int");
+    kerchunk_config_set(cfg, "txactivity", "trust_cos_bit", "1");
+    {
+        const char *v = kerchunk_config_get(cfg, "txactivity", "trust_cos_bit");
+        test_assert(v != NULL, "trust_cos_bit present");
+        test_assert(atoi(v) == 1, "trust_cos_bit = 1");
+    }
+    kerchunk_config_set(cfg, "txactivity", "trust_cos_bit", "0");
+    {
+        const char *v = kerchunk_config_get(cfg, "txactivity", "trust_cos_bit");
+        test_assert(atoi(v) == 0, "trust_cos_bit = 0");
+    }
+    test_end();
+
+    test_begin("config: back-compat [repeater] cor_drop_hold reads through");
+    {
+        kerchunk_config_t *bc = kerchunk_config_create();
+        kerchunk_config_set(bc, "repeater", "cor_drop_hold", "1s");
+        /* main.c reads end_silence_ms first then falls back to cor_drop_hold;
+         * verify the legacy key still parses to the same numeric value. */
+        test_assert(
+            kerchunk_config_get_duration_ms(bc, "repeater", "cor_drop_hold", -1) == 1000,
+            "cor_drop_hold = 1s -> 1000ms");
+        test_assert(
+            kerchunk_config_get_duration_ms(bc, "txactivity", "end_silence_ms", -1) == -1,
+            "no [txactivity] section -> default sentinel");
+        kerchunk_config_destroy(bc);
+    }
+    test_end();
+
+    test_begin("config: [dtmf] decoder threshold knobs read as int");
+    {
+        kerchunk_config_t *d = kerchunk_config_create();
+        kerchunk_config_set(d, "dtmf", "hits_to_begin",  "1");
+        kerchunk_config_set(d, "dtmf", "misses_to_end",  "3");
+        kerchunk_config_set(d, "dtmf", "min_off_frames", "1");
+        const char *v;
+        v = kerchunk_config_get(d, "dtmf", "hits_to_begin");
+        test_assert(v != NULL && atoi(v) == 1, "hits_to_begin = 1");
+        v = kerchunk_config_get(d, "dtmf", "misses_to_end");
+        test_assert(v != NULL && atoi(v) == 3, "misses_to_end = 3");
+        v = kerchunk_config_get(d, "dtmf", "min_off_frames");
+        test_assert(v != NULL && atoi(v) == 1, "min_off_frames = 1");
+        /* Defaults: missing key → NULL, caller picks its own default */
+        test_assert(kerchunk_config_get(d, "dtmf", "missing_knob") == NULL,
+            "absent knob returns NULL");
+        kerchunk_config_destroy(d);
+    }
+    test_end();
+
     kerchunk_config_destroy(cfg);
     unlink(path);
 }

@@ -63,6 +63,7 @@ extern void test_multirate(void);
 extern void test_repeater(void);
 extern void test_cwid(void);
 extern void test_resp(void);
+extern void test_txactivity(void);
 extern void test_integration(void);
 
 int main(void)
@@ -93,6 +94,9 @@ int main(void)
 
     printf("\nResponse system tests:\n");
     test_resp();
+
+    printf("\nTX-activity detector tests:\n");
+    test_txactivity();
 
     printf("\nIntegration tests:\n");
     test_integration();
