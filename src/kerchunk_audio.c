@@ -11,6 +11,7 @@
  */
 
 #include "kerchunk_audio.h"
+#include "kerchunk.h"  /* for KERCHUNK_MAX_FRAME_SAMPLES */
 #include "kerchunk_log.h"
 #include <portaudio.h>
 #include <string.h>
@@ -31,6 +32,13 @@
 static int     g_preemph_on;
 static float   g_preemph_alpha;
 static int16_t g_preemph_prev;
+
+/* Last good capture frame — used to fill ring under-runs with
+ * repeated samples instead of zeros so the DTMF decoder's hysteresis
+ * survives a missing tick mid-tone (and so the relay path / web
+ * stream / recordings don't get an audible click on under-runs). */
+static int16_t g_cap_last[KERCHUNK_MAX_FRAME_SAMPLES];
+static size_t  g_cap_last_n = 0;
 
 void kerchunk_audio_preemphasis(int16_t *buf, size_t n, float alpha)
 {
@@ -516,12 +524,52 @@ int kerchunk_audio_capture(int16_t *buf, size_t n)
     if (!buf) return -1;
     size_t got = ring_read(&g_cap_ring, buf, n);
     if (got == 0) return 0;  /* Nothing available — caller should skip */
-    if (got < n)
-        memset(buf + got, 0, (n - got) * sizeof(int16_t));
-    got = n;  /* Report full frame — buffer is zero-padded */
+    if (got < n) {
+        /* Partial read: instead of zero-padding the tail (which
+         * injects a hard silence frame and breaks the DTMF decoder's
+         * 2-block hysteresis lock-on, plus produces an audible click
+         * in the relay/web paths), repeat samples from the tail of
+         * the last good frame. The decoder sees "tone continues" and
+         * the audio path stays continuous. */
+        size_t miss = n - got;
+        if (g_cap_last_n >= miss) {
+            memcpy(buf + got, g_cap_last + (g_cap_last_n - miss),
+                   miss * sizeof(int16_t));
+        } else {
+            /* No prior frame yet — fall back to silence */
+            memset(buf + got, 0, miss * sizeof(int16_t));
+        }
+    } else if (n <= KERCHUNK_MAX_FRAME_SAMPLES) {
+        /* Only save as last-good on a COMPLETE ring read. Saving a
+         * partially-repeated buffer would make subsequent under-runs
+         * repeat-already-repeated samples, compounding distortion. */
+        memcpy(g_cap_last, buf, n * sizeof(int16_t));
+        g_cap_last_n = n;
+    }
     if (g_preemph_on)
-        kerchunk_audio_preemphasis(buf, got, g_preemph_alpha);
-    return (int)got;
+        kerchunk_audio_preemphasis(buf, n, g_preemph_alpha);
+    return (int)n;
+}
+
+void kerchunk_audio_capture_repeat_last(int16_t *buf, size_t n)
+{
+    if (!buf || n == 0) return;
+    if (g_cap_last_n == 0) {
+        memset(buf, 0, n * sizeof(int16_t));
+        return;
+    }
+    if (g_cap_last_n >= n) {
+        memcpy(buf, g_cap_last + (g_cap_last_n - n),
+               n * sizeof(int16_t));
+        return;
+    }
+    /* n exceeds what we have saved — tile the last frame across buf */
+    size_t pos = 0;
+    while (pos < n) {
+        size_t chunk = (n - pos) < g_cap_last_n ? (n - pos) : g_cap_last_n;
+        memcpy(buf + pos, g_cap_last, chunk * sizeof(int16_t));
+        pos += chunk;
+    }
 }
 
 int kerchunk_audio_playback(const int16_t *buf, size_t n)

@@ -31,9 +31,20 @@ int  kerchunk_audio_init(const kerchunk_audio_config_t *cfg);
 void kerchunk_audio_shutdown(void);
 
 /* Read samples from capture ring buffer (non-blocking).
- * Zero-fills if not enough data available yet.
- * Returns number of samples (always n). */
+ * On a partial read, fills the missing tail by repeating samples
+ * from the last good frame (rather than zeros) so the DTMF decoder's
+ * 2-block hysteresis isn't broken by an artificial silence dropout
+ * mid-tone. Returns 0 if the ring is completely empty so callers can
+ * detect under-runs; otherwise returns n. */
 int  kerchunk_audio_capture(int16_t *buf, size_t n);
+
+/* Fill buf with samples from the last good capture frame, tiling if
+ * n exceeds the saved frame length. Used by the audio thread when
+ * the capture ring is fully empty (kerchunk_audio_capture returned 0)
+ * to keep the DTMF decoder + audio taps fed with continuous-looking
+ * audio instead of an injected zero-pad. Falls back to silence if no
+ * frame has been captured yet. */
+void kerchunk_audio_capture_repeat_last(int16_t *buf, size_t n);
 
 /* Write samples into playback ring buffer (non-blocking).
  * Drops samples if ring is full.

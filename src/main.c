@@ -1009,7 +1009,13 @@ static void *audio_thread_fn(void *arg)
             nread = kerchunk_audio_capture(frame, g_frame_samples);
             if (nread <= 0) {
                 if (rxi > 0) break;  /* catchup: nothing left to drain */
-                memset(frame, 0, g_frame_samples * sizeof(int16_t));
+                /* Ring fully empty this tick — fill with repeated
+                 * last-good samples instead of zeros so the DTMF
+                 * decoder's hysteresis isn't broken across the gap
+                 * (zero-pad mid-tone observed dropping digits on
+                 * tight-squelch radios) and so the relay/web/recorder
+                 * paths stay click-free. */
+                kerchunk_audio_capture_repeat_last(frame, g_frame_samples);
                 nread = g_frame_samples;
             }
 
