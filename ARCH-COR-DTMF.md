@@ -494,18 +494,43 @@ Back-compat: if `[txactivity]` section absent, read legacy
 - libplcode DTMF decoder itself: `tools/decode_dtmf_wav` harness +
   libplcode's own test suite (make check in libplcode).
 
-**Not yet covered (audio-thread side):**
-- `kerchunk_audio_capture` repeat-last on partial-read / empty-ring
-  (requires PA stream init or a factored-out ring+history module).
-- `paInputUnderflow` drop path in `cap_cb` / `duplex_cb` (tight PA
-  callback, testing would require decoupling from PortAudio).
-- Queue-pause guard condition when `software_relay=off` (touches
-  audio-thread globals + PTT refcount state).
-- DTMF decoder reset-BEFORE-process ordering (integration-level
-  behavior inside the audio loop).
+**Now covered (PLAN-AUDIO-TICK.md, April 2026):**
 
-These were left as manual / on-radio tests because each would need
-non-trivial refactoring to become unit-testable and the
-kerchunk_txactivity extraction already covers the core fusion logic.
-If a regression shows up in any of these areas, the fix should
-include a test harness extraction too.
+All four items originally listed as uncovered have test coverage
+after the five-phase audio-tick refactor:
+
+- `paInputUnderflow` drop path — covered by
+  `tests/test_audio_ring.c` (8 cases) against the pure
+  `kerchunk_audio_ring_commit()` lifted out of `cap_cb`/`duplex_cb`
+  in Phase 1.
+- DTMF decoder reset-BEFORE-process ordering — covered by
+  `tests/test_audio_tick_rx.c` (10 cases) against the pure
+  `kerchunk_audio_tick_rx()` in Phase 2. The headline test
+  "COR-assert edge resets decoder" contaminates the decoder with
+  '7' state, simulates a user keying up and pressing '5', and
+  asserts the first DIGIT surfaced is '5' — the exact failure
+  mode the reset fix addressed.
+- Queue-pause guard software-relay-independent — covered by
+  `tests/test_audio_tick_tx.c` (14 cases) against the pure
+  `kerchunk_audio_tick_tx()` in Phase 3. Both `software_relay=on`
+  and `software_relay=off` variants of the paused-by-COR test.
+- `kerchunk_audio_capture` repeat-last on empty/partial ring —
+  covered by three new cases in `tests/test_audio_ring.c` against
+  the pure `kerchunk_audio_repeat_fill()` in Phase 4.
+
+Test suite total after the refactor: 318 cases (was 283 pre-refactor).
+
+**What still lives manual / on-radio:**
+
+- PortAudio actually calling the callbacks on real hardware (the
+  callbacks themselves are now thin wrappers that delegate to the
+  tested commit function).
+- The audio thread actually meeting its 20ms deadline under
+  production load.
+- Scrambler hooks being called in the right order relative to RX/TX
+  (the shell bracket around `kerchunk_audio_tick_rx()` handles this;
+  verified by integration behavior, not unit tests).
+- `clock_nanosleep` drift-free pacing.
+
+These are integration concerns, not logic concerns; each phase was
+validated on-radio before merge.

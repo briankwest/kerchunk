@@ -102,3 +102,30 @@ size_t kerchunk_audio_ring_commit(kerchunk_audio_ring_t *ring,
 
     return written;
 }
+
+void kerchunk_audio_repeat_fill(int16_t *dst, size_t dst_n,
+                                const int16_t *last_buf, size_t last_n)
+{
+    if (!dst || dst_n == 0) return;
+
+    if (last_n == 0 || !last_buf) {
+        memset(dst, 0, dst_n * sizeof(int16_t));
+        return;
+    }
+
+    if (last_n >= dst_n) {
+        /* Copy the TAIL of last_buf — gives contiguous phase with
+         * what would have come next if the ring hadn't run dry. */
+        memcpy(dst, last_buf + (last_n - dst_n),
+               dst_n * sizeof(int16_t));
+        return;
+    }
+
+    /* last_n < dst_n — tile from the start */
+    size_t pos = 0;
+    while (pos < dst_n) {
+        size_t chunk = (dst_n - pos) < last_n ? (dst_n - pos) : last_n;
+        memcpy(dst + pos, last_buf, chunk * sizeof(int16_t));
+        pos += chunk;
+    }
+}

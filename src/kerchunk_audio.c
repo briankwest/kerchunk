@@ -466,14 +466,8 @@ int kerchunk_audio_capture(int16_t *buf, size_t n)
          * in the relay/web paths), repeat samples from the tail of
          * the last good frame. The decoder sees "tone continues" and
          * the audio path stays continuous. */
-        size_t miss = n - got;
-        if (g_cap_last_n >= miss) {
-            memcpy(buf + got, g_cap_last + (g_cap_last_n - miss),
-                   miss * sizeof(int16_t));
-        } else {
-            /* No prior frame yet — fall back to silence */
-            memset(buf + got, 0, miss * sizeof(int16_t));
-        }
+        kerchunk_audio_repeat_fill(buf + got, n - got,
+                                   g_cap_last, g_cap_last_n);
     } else if (n <= KERCHUNK_MAX_FRAME_SAMPLES) {
         /* Only save as last-good on a COMPLETE ring read. Saving a
          * partially-repeated buffer would make subsequent under-runs
@@ -488,23 +482,10 @@ int kerchunk_audio_capture(int16_t *buf, size_t n)
 
 void kerchunk_audio_capture_repeat_last(int16_t *buf, size_t n)
 {
-    if (!buf || n == 0) return;
-    if (g_cap_last_n == 0) {
-        memset(buf, 0, n * sizeof(int16_t));
-        return;
-    }
-    if (g_cap_last_n >= n) {
-        memcpy(buf, g_cap_last + (g_cap_last_n - n),
-               n * sizeof(int16_t));
-        return;
-    }
-    /* n exceeds what we have saved — tile the last frame across buf */
-    size_t pos = 0;
-    while (pos < n) {
-        size_t chunk = (n - pos) < g_cap_last_n ? (n - pos) : g_cap_last_n;
-        memcpy(buf + pos, g_cap_last, chunk * sizeof(int16_t));
-        pos += chunk;
-    }
+    /* Thin wrapper over the pure helper in kerchunk_audio_ring.c —
+     * the helper gets unit-tested against scripted (last_buf, last_n)
+     * states that would be hard to reach through the PA callback. */
+    kerchunk_audio_repeat_fill(buf, n, g_cap_last, g_cap_last_n);
 }
 
 int kerchunk_audio_playback(const int16_t *buf, size_t n)

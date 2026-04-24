@@ -168,7 +168,49 @@ void test_audio_ring(void)
     }
     test_end();
 
-    /* 8. Ring fills to SIZE-1 (one sentinel slot). */
+    /* 8a. repeat_fill: empty last_buf → zero fill. */
+    test_begin("audio_ring: repeat_fill with last_n=0 → zeros");
+    {
+        int16_t dst[16];
+        for (int i = 0; i < 16; i++) dst[i] = 0x1234;  /* pre-fill */
+        kerchunk_audio_repeat_fill(dst, 16, NULL, 0);
+        int all_zero = 1;
+        for (int i = 0; i < 16; i++) if (dst[i] != 0) { all_zero = 0; break; }
+        test_assert(all_zero, "zeroed when no last_buf");
+    }
+    test_end();
+
+    /* 8b. repeat_fill: last_n >= dst_n → copy tail preserves phase. */
+    test_begin("audio_ring: repeat_fill copies tail of last_buf");
+    {
+        int16_t last[960];
+        for (int i = 0; i < 960; i++) last[i] = (int16_t)i;
+        int16_t dst[100];
+        memset(dst, 0, sizeof(dst));
+        kerchunk_audio_repeat_fill(dst, 100, last, 960);
+        /* Should equal last[860..959] — the last 100 samples */
+        int ok = 1;
+        for (int i = 0; i < 100; i++)
+            if (dst[i] != last[860 + i]) { ok = 0; break; }
+        test_assert(ok, "dst is tail 100 of last_buf (phase-preserved)");
+    }
+    test_end();
+
+    /* 8c. repeat_fill: last_n < dst_n → tile across dst. */
+    test_begin("audio_ring: repeat_fill tiles when dst_n > last_n");
+    {
+        int16_t last[4] = { 10, 20, 30, 40 };
+        int16_t dst[10];
+        memset(dst, 0, sizeof(dst));
+        kerchunk_audio_repeat_fill(dst, 10, last, 4);
+        /* Expect: 10,20,30,40, 10,20,30,40, 10,20 */
+        int16_t expect[10] = { 10,20,30,40, 10,20,30,40, 10,20 };
+        int ok = memcmp(dst, expect, sizeof(expect)) == 0;
+        test_assert(ok, "dst tiles last_buf from offset 0");
+    }
+    test_end();
+
+    /* 9. Ring fills to SIZE-1 (one sentinel slot). */
     test_begin("audio_ring: fills to SIZE-1 then refuses extra");
     {
         kerchunk_audio_ring_t *r = fresh_ring();

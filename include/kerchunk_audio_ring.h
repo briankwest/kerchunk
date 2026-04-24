@@ -68,6 +68,23 @@ size_t kerchunk_audio_ring_commit(kerchunk_audio_ring_t *ring,
                                   double *resample_pos,
                                   int underflow);
 
+/*
+ * Fill `dst` with samples repeated from `last_buf` — the primitive
+ * behind kerchunk_audio_capture_repeat_last() in kerchunk_audio.c.
+ *
+ * Cases:
+ *   - last_n == 0 → dst is zero-filled (no prior-good frame yet).
+ *   - last_n >= dst_n → copy the TAIL of last_buf (dst_n samples).
+ *   - last_n <  dst_n → tile last_buf[0..last_n] across dst until
+ *                       dst_n is covered.
+ *
+ * Pure function; no state. Audio-thread reuses this to avoid
+ * zero-padding capture under-runs, which would break the DTMF
+ * decoder's 2-block hysteresis across a silence injection.
+ */
+void kerchunk_audio_repeat_fill(int16_t *dst, size_t dst_n,
+                                const int16_t *last_buf, size_t last_n);
+
 #ifdef __cplusplus
 }
 #endif
