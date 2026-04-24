@@ -38,10 +38,16 @@ static int  g_timer = -1;
 
 /* ---- cached current conditions ---- */
 static float g_temp_f;
+static float g_feelslike_f;
 static float g_wind_mph;
 static char  g_wind_dir[16];
 static int   g_humidity;
 static char  g_condition[64];
+static char  g_icon[128];      /* weatherapi.com CDN URL, e.g.
+                                * "//cdn.weatherapi.com/weather/64x64/day/116.png".
+                                * Browser prepends protocol at render time. */
+static int   g_code;           /* weatherapi.com condition code (1000-1282) */
+static int   g_is_day;         /* 1 = daytime icons, 0 = night */
 static int   g_valid;
 
 /* ---- cached forecast ---- */
@@ -51,6 +57,8 @@ static int   g_fc_rain_pct;
 static int   g_fc_snow_pct;
 static int   g_fc_humidity;
 static char  g_fc_condition[64];
+static char  g_fc_icon[128];
+static int   g_fc_code;
 static int   g_fc_valid;
 
 /* ================================================================== */
@@ -137,14 +145,21 @@ static int weather_parse_json(const char *json)
     if (!cur) return -1;
 
     if (json_float(cur, "temp_f", &g_temp_f) < 0) return -1;
+    json_float(cur, "feelslike_f", &g_feelslike_f);
     json_float(cur, "wind_mph", &g_wind_mph);
     json_str(cur, "wind_dir", g_wind_dir, sizeof(g_wind_dir));
     json_int(cur, "humidity", &g_humidity);
+    json_int(cur, "is_day", &g_is_day);
 
-    /* condition.text — find the first "condition" after "current" */
+    /* condition: text + hosted icon URL + numeric code.
+     * weatherapi.com returns icon as "//cdn.weatherapi.com/...";
+     * the browser prepends protocol at render time. */
     const char *cond = strstr(cur, "\"condition\"");
-    if (cond)
+    if (cond) {
         json_str(cond, "text", g_condition, sizeof(g_condition));
+        json_str(cond, "icon", g_icon,      sizeof(g_icon));
+        json_int(cond, "code", &g_code);
+    }
 
     g_valid = 1;
 
@@ -160,8 +175,13 @@ static int weather_parse_json(const char *json)
             json_int(day, "avghumidity", &g_fc_humidity);
 
             const char *fc_cond = strstr(day, "\"condition\"");
-            if (fc_cond)
-                json_str(fc_cond, "text", g_fc_condition, sizeof(g_fc_condition));
+            if (fc_cond) {
+                json_str(fc_cond, "text", g_fc_condition,
+                                sizeof(g_fc_condition));
+                json_str(fc_cond, "icon", g_fc_icon,
+                                sizeof(g_fc_icon));
+                json_int(fc_cond, "code", &g_fc_code);
+            }
 
             g_fc_valid = 1;
         }
@@ -182,9 +202,13 @@ static void render_weather_resp(kerchunk_resp_t *r)
     resp_bool(r, "valid", g_valid);
     if (g_valid) {
         resp_float(r, "temp_f", (double)g_temp_f);
+        resp_float(r, "feelslike_f", (double)g_feelslike_f);
         resp_str(r, "wind_dir", g_wind_dir);
         resp_float(r, "wind_mph", (double)g_wind_mph);
         resp_str(r, "condition", g_condition);
+        resp_str(r, "icon", g_icon);
+        resp_int(r, "code", g_code);
+        resp_int(r, "is_day", g_is_day);
         resp_int(r, "humidity", g_humidity);
     }
     if (g_fc_valid) {
@@ -193,6 +217,9 @@ static void render_weather_resp(kerchunk_resp_t *r)
         resp_int(r, "forecast_rain_pct", g_fc_rain_pct);
         resp_int(r, "forecast_snow_pct", g_fc_snow_pct);
         resp_int(r, "forecast_humidity", g_fc_humidity);
+        resp_str(r, "forecast_condition", g_fc_condition);
+        resp_str(r, "forecast_icon", g_fc_icon);
+        resp_int(r, "forecast_code", g_fc_code);
     }
 }
 

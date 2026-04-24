@@ -287,21 +287,52 @@ function renderStreamTable() {
 /* ── Weather / NWS ──
  * Pushed via SSE (weather_updated, nws_updated). Snapshot-on-connect
  * delivers current values to each new SSE client — no HTTP polling. */
+function wxIcon(url, size) {
+  if (!url) return '';
+  const u = url.startsWith('//') ? 'https:' + url : url;
+  size = size || 48;
+  return '<img src="' + u + '" width="' + size + '" height="' + size +
+         '" alt="" style="vertical-align:middle;flex-shrink:0" loading="lazy">';
+}
+
 function renderWeather(d) {
   if (!d) return;
   const wt = document.getElementById('wx-table');
   const ft = document.getElementById('fc-table');
   if (d.valid) {
     let h = '';
-    h += tr('Condition', d.condition || '\u2014');
-    h += tr('Temperature', Math.round(d.temp_f) + '\u00b0F');
+    h += '<tr><td colspan="2" style="padding:4px 0">';
+    h += '<div style="display:flex;align-items:center;gap:12px">';
+    h += wxIcon(d.icon, 56);
+    h += '<div style="flex:1">';
+    h += '<div style="font-size:22px;font-weight:600;line-height:1.1">' +
+         Math.round(d.temp_f) + '\u00b0F</div>';
+    h += '<div style="font-size:12px;opacity:0.85">' +
+         (d.condition || '\u2014') + '</div>';
+    if (d.feelslike_f !== undefined && Math.abs(d.feelslike_f - d.temp_f) >= 2) {
+      h += '<div style="font-size:11px;opacity:0.65">Feels ' +
+           Math.round(d.feelslike_f) + '\u00b0F</div>';
+    }
+    h += '</div></div></td></tr>';
     h += tr('Wind', d.wind_dir + ' ' + Math.round(d.wind_mph) + ' mph');
     h += tr('Humidity', d.humidity + '%');
     wt.innerHTML = h;
   }
   if (d.forecast_high_f !== undefined) {
     let h = '';
-    h += tr('High / Low', Math.round(d.forecast_high_f) + '\u00b0 / ' + Math.round(d.forecast_low_f) + '\u00b0F');
+    const fIcon = d.forecast_icon || d.icon;
+    h += '<tr><td colspan="2" style="padding:4px 0">';
+    h += '<div style="display:flex;align-items:center;gap:12px">';
+    h += wxIcon(fIcon, 48);
+    h += '<div style="flex:1">';
+    h += '<div style="font-size:18px;font-weight:600;line-height:1.1">' +
+         Math.round(d.forecast_high_f) + '\u00b0 / ' +
+         Math.round(d.forecast_low_f) + '\u00b0F</div>';
+    if (d.forecast_condition) {
+      h += '<div style="font-size:12px;opacity:0.85">' +
+           d.forecast_condition + '</div>';
+    }
+    h += '</div></div></td></tr>';
     if (d.forecast_rain_pct > 0) h += tr('Rain', d.forecast_rain_pct + '%');
     if (d.forecast_snow_pct > 0) h += tr('Snow', d.forecast_snow_pct + '%');
     h += tr('Humidity', d.forecast_humidity + '%');
