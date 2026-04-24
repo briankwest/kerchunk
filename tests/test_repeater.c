@@ -36,17 +36,17 @@ static void timeout_handler(const kerchevt_t *evt, void *ud)
     g_timeout_fired++;
 }
 
-enum { RPT_IDLE, RPT_RECEIVING, RPT_TAIL_WAIT, RPT_HANG_WAIT, RPT_TIMEOUT };
+enum { RPT_IDLE, RPT_RECEIVING, RPT_TAIL_WAIT, RPT_HANG_WAIT, RPT_RX_TIMEOUT };
 
 void test_repeater(void)
 {
     kerchevt_init();
-    kerchevt_subscribe(KERCHEVT_STATE_CHANGE, state_handler, NULL);
+    kerchevt_subscribe(KERCHEVT_RX_STATE_CHANGE, state_handler, NULL);
     kerchevt_subscribe(KERCHEVT_TAIL_START, tail_handler, NULL);
-    kerchevt_subscribe(KERCHEVT_TIMEOUT, timeout_handler, NULL);
+    kerchevt_subscribe(KERCHEVT_RX_TIMEOUT, timeout_handler, NULL);
 
     test_begin("state change subscribers registered");
-    test_assert(kerchevt_subscriber_count(KERCHEVT_STATE_CHANGE) == 1, "sub count wrong");
+    test_assert(kerchevt_subscriber_count(KERCHEVT_RX_STATE_CHANGE) == 1, "sub count wrong");
     test_end();
 
     test_begin("COR_ASSERT event fires without crash");
@@ -62,7 +62,7 @@ void test_repeater(void)
     test_begin("state change event carries correct data");
     g_state_changes = 0;
     kerchevt_t sc = {
-        .type = KERCHEVT_STATE_CHANGE,
+        .type = KERCHEVT_RX_STATE_CHANGE,
         .state = { .old_state = RPT_IDLE, .new_state = RPT_RECEIVING },
     };
     kerchevt_fire(&sc);
@@ -80,7 +80,7 @@ void test_repeater(void)
 
     test_begin("TIMEOUT event propagates");
     g_timeout_fired = 0;
-    kerchevt_t timeout = { .type = KERCHEVT_TIMEOUT };
+    kerchevt_t timeout = { .type = KERCHEVT_RX_TIMEOUT };
     kerchevt_fire(&timeout);
     test_assert(g_timeout_fired == 1, "timeout not received");
     test_end();

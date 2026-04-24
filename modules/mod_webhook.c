@@ -43,7 +43,9 @@ static const evt_map_t g_event_map[] = {
     { "caller_cleared",   KERCHEVT_CALLER_CLEARED    },
     { "announcement",     KERCHEVT_ANNOUNCEMENT      },
     { "recording_saved",  KERCHEVT_RECORDING_SAVED   },
-    { "state_change",     KERCHEVT_STATE_CHANGE      },
+    { "rx_state_change",  KERCHEVT_RX_STATE_CHANGE   },
+    { "tx_state_change",  KERCHEVT_TX_STATE_CHANGE   },
+    { "rx_timeout",       KERCHEVT_RX_TIMEOUT        },
     { "shutdown",         KERCHEVT_SHUTDOWN           },
     { "config_reload",    KERCHEVT_CONFIG_RELOAD      },
 };

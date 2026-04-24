@@ -24,7 +24,7 @@ enum {
     RPT_RECEIVING,
     RPT_TAIL_WAIT,
     RPT_HANG_WAIT,
-    RPT_TIMEOUT,
+    RPT_RX_TIMEOUT,
 };
 
 static const char *state_name(int s)
@@ -34,7 +34,7 @@ static const char *state_name(int s)
     case RPT_RECEIVING: return "RECEIVING";
     case RPT_TAIL_WAIT: return "TAIL_WAIT";
     case RPT_HANG_WAIT: return "HANG_WAIT";
-    case RPT_TIMEOUT:   return "TIMEOUT";
+    case RPT_RX_TIMEOUT:   return "RX_TIMEOUT";
     default:            return "???";
     }
 }
@@ -72,7 +72,7 @@ static void change_state(int new_state)
                 state_name(old), state_name(new_state));
 
     kerchevt_t evt = {
-        .type = KERCHEVT_STATE_CHANGE,
+        .type = KERCHEVT_RX_STATE_CHANGE,
         .state = { .old_state = old, .new_state = new_state },
     };
     g_core->fire_event(&evt);
@@ -166,10 +166,10 @@ static void tot_expired(void *ud)
     g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "TOT fired!");
     g_core->queue_tone(g_tot_warn_hz, 1000, 8000, KERCHUNK_PRI_CRITICAL);
 
-    kerchevt_t evt = { .type = KERCHEVT_TIMEOUT };
+    kerchevt_t evt = { .type = KERCHEVT_RX_TIMEOUT };
     g_core->fire_event(&evt);
 
-    change_state(RPT_TIMEOUT);
+    change_state(RPT_RX_TIMEOUT);
 }
 
 /* ── Event handlers ── */
@@ -225,7 +225,7 @@ static void on_cor_assert(const kerchevt_t *evt, void *ud)
                                             tot_expired, NULL);
         break;
 
-    case RPT_TIMEOUT:
+    case RPT_RX_TIMEOUT:
         /* Ignore — user must unkey first */
         break;
 
@@ -260,7 +260,7 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
         g_core->fire_event(&tail_evt);
         break;
 
-    case RPT_TIMEOUT:
+    case RPT_RX_TIMEOUT:
         if (g_software_relay)
             g_core->release_ptt("repeater");
         change_state(RPT_IDLE);

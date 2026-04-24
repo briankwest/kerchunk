@@ -250,7 +250,7 @@ static int stats_load(kerchunk_core_t *core)
     core->subscribe(KERCHEVT_PTT_ASSERT,        on_ptt_assert, NULL);
     core->subscribe(KERCHEVT_PTT_DROP,          on_ptt_drop, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
-    core->subscribe(KERCHEVT_TIMEOUT,           on_timeout, NULL);
+    core->subscribe(KERCHEVT_RX_TIMEOUT,           on_timeout, NULL);
     core->subscribe(KERCHEVT_QUEUE_COMPLETE,    on_queue_complete, NULL);
     core->subscribe(KERCHEVT_RECORDING_SAVED,   on_recording_saved, NULL);
     core->subscribe(KERCHEVT_ANNOUNCEMENT,      on_announcement, NULL);
@@ -308,7 +308,7 @@ static void stats_unload(void)
     g_core->unsubscribe(KERCHEVT_PTT_ASSERT,        on_ptt_assert);
     g_core->unsubscribe(KERCHEVT_PTT_DROP,          on_ptt_drop);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
-    g_core->unsubscribe(KERCHEVT_TIMEOUT,           on_timeout);
+    g_core->unsubscribe(KERCHEVT_RX_TIMEOUT,           on_timeout);
     g_core->unsubscribe(KERCHEVT_QUEUE_COMPLETE,    on_queue_complete);
     g_core->unsubscribe(KERCHEVT_RECORDING_SAVED,   on_recording_saved);
     g_core->unsubscribe(KERCHEVT_ANNOUNCEMENT,      on_announcement);

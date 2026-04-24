@@ -323,7 +323,7 @@ function connectSSE() {
     sseEvents.onmessage = function(ev) {
       let e; try { e = JSON.parse(ev.data); } catch(_) { return; }
       switch (e.type) {
-        case 'state_change':
+        case 'rx_state_change':
           updateState(e.new_state);
           break;
         case 'ptt_assert':

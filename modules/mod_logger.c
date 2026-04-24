@@ -29,7 +29,7 @@ static const char *state_name(int s)
     case 1: return "RECEIVING";
     case 2: return "TAIL_WAIT";
     case 3: return "HANG_WAIT";
-    case 4: return "TIMEOUT";
+    case 4: return "RX_TIMEOUT";
     default: return "???";
     }
 }
@@ -56,10 +56,11 @@ static const char *event_name(kerchevt_type_t type)
     case KERCHEVT_COR_DROP:          return "COR_DROP";
     case KERCHEVT_PTT_ASSERT:        return "PTT_ASSERT";
     case KERCHEVT_PTT_DROP:          return "PTT_DROP";
-    case KERCHEVT_STATE_CHANGE:      return "STATE_CHANGE";
+    case KERCHEVT_RX_STATE_CHANGE:      return "RX_STATE_CHANGE";
+    case KERCHEVT_TX_STATE_CHANGE:      return "TX_STATE_CHANGE";
     case KERCHEVT_TAIL_START:        return "TAIL_START";
     case KERCHEVT_TAIL_EXPIRE:       return "TAIL_EXPIRE";
-    case KERCHEVT_TIMEOUT:           return "TIMEOUT";
+    case KERCHEVT_RX_TIMEOUT:           return "RX_TIMEOUT";
     case KERCHEVT_CALLER_IDENTIFIED: return "CALLER_IDENTIFIED";
     case KERCHEVT_CALLER_CLEARED:    return "CALLER_CLEARED";
     case KERCHEVT_QUEUE_DRAIN:       return "QUEUE_DRAIN";
@@ -167,7 +168,7 @@ static void log_event(const kerchevt_t *evt, void *ud)
         snprintf(detail, sizeof(detail), " transmitter unkeyed");
         break;
 
-    case KERCHEVT_STATE_CHANGE:
+    case KERCHEVT_RX_STATE_CHANGE:
         snprintf(detail, sizeof(detail), " %s → %s",
                  state_name(evt->state.old_state),
                  state_name(evt->state.new_state));
@@ -200,7 +201,7 @@ static void log_event(const kerchevt_t *evt, void *ud)
                  evt->preempt.items_flushed);
         break;
 
-    case KERCHEVT_TIMEOUT:
+    case KERCHEVT_RX_TIMEOUT:
         snprintf(detail, sizeof(detail), " TOT fired — user timed out");
         break;
 
@@ -277,7 +278,7 @@ static int logger_load(kerchunk_core_t *core)
     kerchevt_type_t types[] = {
         KERCHEVT_CTCSS_DETECT, KERCHEVT_DCS_DETECT, KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
         KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
-        KERCHEVT_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_TIMEOUT,
+        KERCHEVT_RX_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_RX_TIMEOUT,
         KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
         KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_QUEUE_PREEMPTED,
         KERCHEVT_ANNOUNCEMENT,
@@ -319,7 +320,7 @@ static int logger_configure(const kerchunk_config_t *cfg)
 static const kerchevt_type_t g_sub_types[] = {
     KERCHEVT_CTCSS_DETECT, KERCHEVT_DCS_DETECT, KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
     KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
-    KERCHEVT_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_TIMEOUT,
+    KERCHEVT_RX_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_RX_TIMEOUT,
     KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
     KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_QUEUE_PREEMPTED,
     KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN,

@@ -1082,7 +1082,7 @@ function connectSSE() {
           if (typeof s.ptt === 'boolean' && typeof updatePTT === 'function') updatePTT(s.ptt);
           break;
         }
-        case 'state_change':
+        case 'rx_state_change':
           updateState(evt.new_state);
           // Don't reset TX on RX state changes — TX has its own lifecycle.
           // TX only goes IDLE on ptt_drop.
@@ -1160,7 +1160,7 @@ function connectSSE() {
         case 'tail_expire':
           addLog('RX: tail expired','log-state');
           break;
-        case 'timeout':
+        case 'rx_timeout':
           addLog('TOT fired!','log-err');
           break;
         case 'ctcss_detect':

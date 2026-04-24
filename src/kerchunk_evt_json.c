@@ -19,7 +19,8 @@ static const char *state_name(int s)
     case 1: return "RECEIVING";
     case 2: return "TAIL_WAIT";
     case 3: return "HANG_WAIT";
-    case 4: return "TIMEOUT";
+    case 4: return "RX_TIMEOUT";    /* renamed Phase 2 — collides
+                                     * with TX tail timer otherwise */
     default: return "UNKNOWN";
     }
 }
@@ -66,9 +67,9 @@ int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max)
         return snprintf(buf, max,
             "{\"type\":\"ptt_drop\",\"ts\":%llu}", ts);
 
-    case KERCHEVT_STATE_CHANGE:
+    case KERCHEVT_RX_STATE_CHANGE:
         return snprintf(buf, max,
-            "{\"type\":\"state_change\",\"old_state\":\"%s\","
+            "{\"type\":\"rx_state_change\",\"old_state\":\"%s\","
             "\"new_state\":\"%s\",\"ts\":%llu}",
             state_name(evt->state.old_state),
             state_name(evt->state.new_state), ts);
@@ -91,9 +92,9 @@ int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max)
         return snprintf(buf, max,
             "{\"type\":\"tail_expire\",\"ts\":%llu}", ts);
 
-    case KERCHEVT_TIMEOUT:
+    case KERCHEVT_RX_TIMEOUT:
         return snprintf(buf, max,
-            "{\"type\":\"timeout\",\"ts\":%llu}", ts);
+            "{\"type\":\"rx_timeout\",\"ts\":%llu}", ts);
 
     case KERCHEVT_CALLER_IDENTIFIED:
         return snprintf(buf, max,

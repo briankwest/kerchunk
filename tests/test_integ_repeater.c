@@ -47,10 +47,10 @@ void test_integ_repeater(void)
     mock_reset();
     mock_init_core();
 
-    kerchevt_subscribe(KERCHEVT_STATE_CHANGE, t_state_handler, NULL);
+    kerchevt_subscribe(KERCHEVT_RX_STATE_CHANGE, t_state_handler, NULL);
     kerchevt_subscribe(KERCHEVT_TAIL_START,   t_tail_handler, NULL);
     kerchevt_subscribe(KERCHEVT_TAIL_EXPIRE,  t_expire_handler, NULL);
-    kerchevt_subscribe(KERCHEVT_TIMEOUT,      t_timeout_handler, NULL);
+    kerchevt_subscribe(KERCHEVT_RX_TIMEOUT,      t_timeout_handler, NULL);
 
     mod_repeater.load(&g_mock_core);
 
@@ -124,7 +124,7 @@ void test_integ_repeater(void)
     g_mock.tone_calls = 0;
     test_assert(g_state == RPT_RECEIVING, "setup");
     mock_fire_timer(g_tot_timer);
-    test_assert(g_state == RPT_TIMEOUT, "not TIMEOUT");
+    test_assert(g_state == RPT_RX_TIMEOUT, "not TIMEOUT");
     test_assert(g_mock.tone_calls >= 1, "no warning tone");
     test_assert(t_timeout_count == 1, "TIMEOUT event not fired");
     test_end();
@@ -132,7 +132,7 @@ void test_integ_repeater(void)
     /* 8. COR assert ignored during TIMEOUT */
     test_begin("repeater: COR ignored during TIMEOUT");
     mock_fire_simple(KERCHEVT_COR_ASSERT);
-    test_assert(g_state == RPT_TIMEOUT, "state changed");
+    test_assert(g_state == RPT_RX_TIMEOUT, "state changed");
     test_end();
 
     /* 9. COR drop during TIMEOUT → IDLE */
@@ -210,7 +210,7 @@ void test_integ_repeater(void)
     mock_reset();
     mock_init_core();
 
-    kerchevt_subscribe(KERCHEVT_STATE_CHANGE, t_state_handler, NULL);
+    kerchevt_subscribe(KERCHEVT_RX_STATE_CHANGE, t_state_handler, NULL);
 
     kerchunk_config_t *cfg2 = kerchunk_config_create();
     kerchunk_config_set(cfg2, "repeater", "require_identification", "on");
@@ -315,7 +315,7 @@ void test_integ_repeater(void)
     test_end();
 
     mod_repeater.unload();
-    kerchevt_unsubscribe(KERCHEVT_STATE_CHANGE, t_state_handler);
+    kerchevt_unsubscribe(KERCHEVT_RX_STATE_CHANGE, t_state_handler);
     kerchevt_shutdown();
     kerchunk_config_destroy(cfg2);
 }

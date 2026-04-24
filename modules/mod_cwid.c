@@ -457,7 +457,7 @@ static int cwid_load(kerchunk_core_t *core)
 {
     g_core = core;
     core->subscribe(KERCHEVT_TAIL_START, on_tail_start, NULL);
-    core->subscribe(KERCHEVT_STATE_CHANGE, on_state_change, NULL);
+    core->subscribe(KERCHEVT_RX_STATE_CHANGE, on_state_change, NULL);
     core->subscribe(KERCHEVT_QUEUE_PREEMPTED, on_queue_preempted, NULL);
     return 0;
 }
@@ -568,7 +568,7 @@ static int cwid_configure(const kerchunk_config_t *cfg)
 static void cwid_unload(void)
 {
     g_core->unsubscribe(KERCHEVT_TAIL_START, on_tail_start);
-    g_core->unsubscribe(KERCHEVT_STATE_CHANGE, on_state_change);
+    g_core->unsubscribe(KERCHEVT_RX_STATE_CHANGE, on_state_change);
     g_core->unsubscribe(KERCHEVT_QUEUE_PREEMPTED, on_queue_preempted);
     if (g_sched_id >= 0) {
         g_core->schedule_cancel(g_sched_id);

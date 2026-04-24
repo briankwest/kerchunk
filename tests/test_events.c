@@ -91,7 +91,7 @@ void test_events(void)
     test_end();
 
     test_begin("fire with no subscribers (no crash)");
-    kerchevt_t lonely = { .type = KERCHEVT_TIMEOUT };
+    kerchevt_t lonely = { .type = KERCHEVT_RX_TIMEOUT };
     kerchevt_fire(&lonely);
     test_end();
 

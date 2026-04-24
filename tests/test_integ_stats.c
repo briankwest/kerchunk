@@ -123,7 +123,7 @@ void test_integ_stats(void)
 
     /* 6. TOT events counted */
     test_begin("stats: TOT counted");
-    mock_fire_simple(KERCHEVT_TIMEOUT);
+    mock_fire_simple(KERCHEVT_RX_TIMEOUT);
     test_assert(c->tot_events == 1, "tot count wrong");
     test_end();
 

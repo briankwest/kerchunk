@@ -78,7 +78,7 @@ void test_integ_cwid_module(void)
     g_mock.ptt_requested = 0;
     {
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 1, .new_state = 0 }, /* 0 = IDLE */
         };
         kerchevt_fire(&e);
@@ -93,7 +93,7 @@ void test_integ_cwid_module(void)
     g_mock.buffer_calls = 0;
     {
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 1, .new_state = 0 },
         };
         kerchevt_fire(&e);
@@ -153,7 +153,7 @@ void test_integ_cwid_module(void)
     g_mock.ptt_requested = 0;
     {
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 1, .new_state = 0 },
         };
         kerchevt_fire(&e);
@@ -210,7 +210,7 @@ void test_integ_cwid_module(void)
     g_mock.buffer_calls = 0;
     {
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 0, .new_state = 1 },
         };
         kerchevt_fire(&e);
@@ -228,7 +228,7 @@ void test_integ_cwid_module(void)
     g_mock.buffer_calls = 0;
     {
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 1, .new_state = 0 },
         };
         kerchevt_fire(&e);
@@ -244,7 +244,7 @@ void test_integ_cwid_module(void)
     g_mock.buffer_calls = 0;
     {
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 0, .new_state = 1 },
         };
         kerchevt_fire(&e);
@@ -260,7 +260,7 @@ void test_integ_cwid_module(void)
     g_mock.buffer_calls = 0;
     {
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 1, .new_state = 0 },
         };
         kerchevt_fire(&e);
@@ -275,7 +275,7 @@ void test_integ_cwid_module(void)
     g_mock.receiving = 1;
     {
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 0, .new_state = 1 },
         };
         kerchevt_fire(&e);
@@ -295,7 +295,7 @@ void test_integ_cwid_module(void)
     g_mock.buffer_calls = 0;
     {
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 1, .new_state = 0 },
         };
         kerchevt_fire(&e);
@@ -320,7 +320,7 @@ void test_integ_cwid_module(void)
     {
         /* Fire a tick — nothing should happen */
         kerchevt_t e = {
-            .type = KERCHEVT_STATE_CHANGE,
+            .type = KERCHEVT_RX_STATE_CHANGE,
             .state = { .old_state = 0, .new_state = 0 },
         };
         kerchevt_fire(&e);
