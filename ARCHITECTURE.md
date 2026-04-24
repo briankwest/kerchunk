@@ -225,10 +225,11 @@ Shutdown proceeds in strict order to avoid use-after-free and ensure clean teard
 | `COR_DROP` | Main loop | repeater, dtmfcmd, caller, recorder, courtesy, logger, web, stats |
 | `PTT_ASSERT` | Core (request_ptt) | recorder, logger, web, stats |
 | `PTT_DROP` | Core (release_ptt) | recorder, logger, web, stats |
-| `STATE_CHANGE` | mod_repeater | cwid, logger, web, stats |
+| `RX_STATE_CHANGE` | mod_repeater | cwid, logger, web, stats |
+| `TX_STATE_CHANGE` | Audio thread (TX FSM) | logger, web |
 | `TAIL_START` | mod_repeater | cwid, courtesy, logger, web |
 | `TAIL_EXPIRE` | mod_repeater | logger, web |
-| `TIMEOUT` | mod_repeater | logger, web, stats |
+| `RX_TIMEOUT` | mod_repeater | logger, web, stats |
 | `CALLER_IDENTIFIED` | mod_caller | repeater, recorder, logger, web |
 | `CALLER_CLEARED` | mod_caller | repeater, recorder, logger, web |
 | `QUEUE_DRAIN` | Audio thread | logger, web |

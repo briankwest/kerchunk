@@ -441,12 +441,14 @@ let audioCtx = null, audioGain = null, audioNode = null;
 let audioWs = null, audioLastDir = -1;
 
 /* ── Live state via SSE ──
- * /api/events is the single source of truth for RX state and PTT. The
- * server fires KERCHEVT_STATE_CHANGE on every mod_repeater transition
- * so we mirror evt.new_state directly into the state badge — no
- * guessing, no synthetic labels, no per-event refreshStatus. We only
- * hit /api/status on (1) page bootstrap, (2) SSE open/reopen so we
- * pick up any transitions that happened while we were disconnected. */
+ * /api/events is the single source of truth for RX and TX state, PTT,
+ * and listener count. The server fires KERCHEVT_RX_STATE_CHANGE on
+ * every mod_repeater transition and KERCHEVT_TX_STATE_CHANGE on every
+ * audio-thread TX FSM transition. A cached `status` snapshot event is
+ * replayed to new subscribers and re-published on WS connect/disconnect
+ * and every state event, so the UI only mirrors authoritative state —
+ * no guessing, no synthetic labels. /api/status is a CLI/bootstrap
+ * helper; it is not needed for live UI updates. */
 let sseEvents = null;
 let sseConnected = false;
 function connectSSE() {

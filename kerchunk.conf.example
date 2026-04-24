@@ -614,7 +614,11 @@ time_skew = 1                    ; Accept +/- N time steps (each 30s)
 ;                                ; Comma-separated list of events to fire on:
 ;                                ; cor_assert, cor_drop, ptt_assert, ptt_drop,
 ;                                ; caller_identified, caller_cleared, announcement,
-;                                ; recording_saved, state_change, config_reload, shutdown
+;                                ; recording_saved, rx_state_change, tx_state_change,
+;                                ; rx_timeout, tail_start, tail_expire, ctcss_detect,
+;                                ; dcs_detect, dtmf_digit, dtmf_end, queue_drain,
+;                                ; queue_complete, queue_preempted, vcor_assert,
+;                                ; vcor_drop, heartbeat, config_reload, shutdown
 ; timeout_ms = 5s                ; HTTP request timeout
 ; retry_count = 2                ; Retry failed requests (0 = no retry)
 

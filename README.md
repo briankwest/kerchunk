@@ -583,7 +583,7 @@ kerchunk> aprs beacon                # Force APRS beacon
 ./kerchunk -j stats | jq .channel.duty_pct
 
 ./kerchunk -e -j                   # Structured event stream (NDJSON)
-./kerchunk -e -j | jq 'select(.type=="state_change")'
+./kerchunk -e -j | jq 'select(.type=="rx_state_change" or .type=="tx_state_change")'
 ```
 
 ### Simulation Commands
@@ -1205,10 +1205,11 @@ The public dashboard (`index.html`) includes a GMRS coverage map. The full cover
 | `VCOR_DROP` | Virtual carrier — network caller released |
 | `PTT_ASSERT` | Transmitter keyed |
 | `PTT_DROP` | Transmitter unkeyed |
-| `STATE_CHANGE` | RX state transition |
+| `RX_STATE_CHANGE` | RX FSM state transition (mod_repeater) |
+| `TX_STATE_CHANGE` | TX FSM state transition (audio thread) |
 | `TAIL_START` | Tail timer started |
 | `TAIL_EXPIRE` | Tail timer expired |
-| `TIMEOUT` | TOT fired |
+| `RX_TIMEOUT` | Time-out timer fired |
 | `CALLER_IDENTIFIED` | Caller identified |
 | `CALLER_CLEARED` | Caller cleared |
 | `CTCSS_DETECT` | CTCSS tone detected/lost |
