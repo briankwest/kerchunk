@@ -40,26 +40,41 @@ static int  g_timer = -1;
 static float g_temp_f;
 static float g_feelslike_f;
 static float g_wind_mph;
+static float g_gust_mph;       /* max gust */
 static char  g_wind_dir[16];
 static int   g_humidity;
+static float g_pressure_in;    /* barometric pressure, inches Hg */
+static float g_uv;             /* UV index */
 static char  g_condition[64];
 static char  g_icon[128];      /* weatherapi.com CDN URL, e.g.
                                 * "//cdn.weatherapi.com/weather/64x64/day/116.png".
                                 * Browser prepends protocol at render time. */
 static int   g_code;           /* weatherapi.com condition code (1000-1282) */
 static int   g_is_day;         /* 1 = daytime icons, 0 = night */
+static long  g_last_updated;   /* observation epoch (UTC) from API */
 static int   g_valid;
 
-/* ---- cached forecast ---- */
-static float g_fc_high_f;
-static float g_fc_low_f;
-static int   g_fc_rain_pct;
-static int   g_fc_snow_pct;
-static int   g_fc_humidity;
-static char  g_fc_condition[64];
-static char  g_fc_icon[128];
-static int   g_fc_code;
-static int   g_fc_valid;
+/* ---- cached 3-day forecast (free-plan allotment) ---- */
+#define MAX_FORECAST_DAYS 3
+
+typedef struct {
+    char  date[16];            /* "2026-04-24" — for the weekday label */
+    float high_f;
+    float low_f;
+    int   rain_pct;
+    int   snow_pct;
+    int   humidity;
+    float uv;
+    char  condition[64];
+    char  icon[128];
+    int   code;
+    char  sunrise[16];         /* "06:42 AM" */
+    char  sunset[16];          /* "08:03 PM" */
+} forecast_day_t;
+
+static forecast_day_t g_forecast[MAX_FORECAST_DAYS];
+static int            g_forecast_count;
+static int            g_fc_valid;
 
 /* ================================================================== */
 /*  libcurl helpers                                                    */
@@ -145,11 +160,19 @@ static int weather_parse_json(const char *json)
     if (!cur) return -1;
 
     if (json_float(cur, "temp_f", &g_temp_f) < 0) return -1;
-    json_float(cur, "feelslike_f", &g_feelslike_f);
-    json_float(cur, "wind_mph", &g_wind_mph);
-    json_str(cur, "wind_dir", g_wind_dir, sizeof(g_wind_dir));
-    json_int(cur, "humidity", &g_humidity);
-    json_int(cur, "is_day", &g_is_day);
+    json_float(cur, "feelslike_f",  &g_feelslike_f);
+    json_float(cur, "wind_mph",     &g_wind_mph);
+    json_float(cur, "gust_mph",     &g_gust_mph);
+    json_float(cur, "pressure_in",  &g_pressure_in);
+    json_float(cur, "uv",           &g_uv);
+    json_str(cur,   "wind_dir",      g_wind_dir, sizeof(g_wind_dir));
+    json_int(cur,   "humidity",     &g_humidity);
+    json_int(cur,   "is_day",       &g_is_day);
+    {
+        float lu = 0;
+        if (json_float(cur, "last_updated_epoch", &lu) == 0)
+            g_last_updated = (long)lu;
+    }
 
     /* condition: text + hosted icon URL + numeric code.
      * weatherapi.com returns icon as "//cdn.weatherapi.com/...";
@@ -163,28 +186,62 @@ static int weather_parse_json(const char *json)
 
     g_valid = 1;
 
-    /* --- forecast (in "forecast" → "forecastday" → [0] → "day") --- */
-    const char *fc = strstr(json, "\"forecastday\"");
-    if (fc) {
-        const char *day = strstr(fc, "\"day\"");
-        if (day) {
-            json_float(day, "maxtemp_f", &g_fc_high_f);
-            json_float(day, "mintemp_f", &g_fc_low_f);
-            json_int(day, "daily_chance_of_rain", &g_fc_rain_pct);
-            json_int(day, "daily_chance_of_snow", &g_fc_snow_pct);
-            json_int(day, "avghumidity", &g_fc_humidity);
+    /* --- 3-day forecast --- Free plan returns 3 forecastday entries.
+     * Iterate by scanning for successive "date":"YYYY-MM-DD" keys —
+     * that's the first field of each forecastday entry (and uniquely
+     * distinguishes it from hourly entries, which use "time":). Scope
+     * each day's parsing to the block between this "date" key and
+     * the next one. */
+    g_forecast_count = 0;
+    const char *fc_root = strstr(json, "\"forecastday\"");
+    if (fc_root) {
+        const char *p = fc_root;
+        while (g_forecast_count < MAX_FORECAST_DAYS) {
+            const char *date_key = strstr(p, "\"date\":");
+            if (!date_key) break;
+            /* Block boundary = next "date" or end. */
+            const char *next = strstr(date_key + 1, "\"date\":");
+            size_t blen = next ? (size_t)(next - date_key)
+                                : strlen(date_key);
+            char *block = malloc(blen + 1);
+            if (!block) break;
+            memcpy(block, date_key, blen);
+            block[blen] = '\0';
 
-            const char *fc_cond = strstr(day, "\"condition\"");
-            if (fc_cond) {
-                json_str(fc_cond, "text", g_fc_condition,
-                                sizeof(g_fc_condition));
-                json_str(fc_cond, "icon", g_fc_icon,
-                                sizeof(g_fc_icon));
-                json_int(fc_cond, "code", &g_fc_code);
+            forecast_day_t *fd = &g_forecast[g_forecast_count];
+            memset(fd, 0, sizeof(*fd));
+            json_str(block, "date", fd->date, sizeof(fd->date));
+
+            const char *day = strstr(block, "\"day\"");
+            if (day) {
+                json_float(day, "maxtemp_f",           &fd->high_f);
+                json_float(day, "mintemp_f",           &fd->low_f);
+                json_int  (day, "daily_chance_of_rain",&fd->rain_pct);
+                json_int  (day, "daily_chance_of_snow",&fd->snow_pct);
+                json_int  (day, "avghumidity",         &fd->humidity);
+                json_float(day, "uv",                  &fd->uv);
+                const char *dcond = strstr(day, "\"condition\"");
+                if (dcond) {
+                    json_str(dcond, "text", fd->condition, sizeof(fd->condition));
+                    json_str(dcond, "icon", fd->icon,      sizeof(fd->icon));
+                    json_int(dcond, "code", &fd->code);
+                }
             }
 
-            g_fc_valid = 1;
+            const char *astro = strstr(block, "\"astro\"");
+            if (astro) {
+                json_str(astro, "sunrise", fd->sunrise, sizeof(fd->sunrise));
+                json_str(astro, "sunset",  fd->sunset,  sizeof(fd->sunset));
+            }
+
+            free(block);
+            g_forecast_count++;
+            if (!next) break;
+            /* Advance past current "date" occurrence so strstr on the
+             * next iteration doesn't re-match it. */
+            p = next;
         }
+        g_fc_valid = (g_forecast_count > 0);
     }
 
     return 0;
@@ -201,25 +258,63 @@ static void render_weather_resp(kerchunk_resp_t *r)
     resp_str(r, "api_key", g_api_key[0] ? "configured" : "NOT SET");
     resp_bool(r, "valid", g_valid);
     if (g_valid) {
-        resp_float(r, "temp_f", (double)g_temp_f);
-        resp_float(r, "feelslike_f", (double)g_feelslike_f);
-        resp_str(r, "wind_dir", g_wind_dir);
-        resp_float(r, "wind_mph", (double)g_wind_mph);
-        resp_str(r, "condition", g_condition);
-        resp_str(r, "icon", g_icon);
-        resp_int(r, "code", g_code);
-        resp_int(r, "is_day", g_is_day);
-        resp_int(r, "humidity", g_humidity);
+        resp_float(r, "temp_f",       (double)g_temp_f);
+        resp_float(r, "feelslike_f",  (double)g_feelslike_f);
+        resp_str  (r, "wind_dir",      g_wind_dir);
+        resp_float(r, "wind_mph",     (double)g_wind_mph);
+        resp_float(r, "gust_mph",     (double)g_gust_mph);
+        resp_float(r, "pressure_in",  (double)g_pressure_in);
+        resp_float(r, "uv",           (double)g_uv);
+        resp_str  (r, "condition",     g_condition);
+        resp_str  (r, "icon",          g_icon);
+        resp_int  (r, "code",          g_code);
+        resp_int  (r, "is_day",        g_is_day);
+        resp_int  (r, "humidity",      g_humidity);
+        resp_int64(r, "last_updated",  (int64_t)g_last_updated);
     }
-    if (g_fc_valid) {
-        resp_float(r, "forecast_high_f", (double)g_fc_high_f);
-        resp_float(r, "forecast_low_f", (double)g_fc_low_f);
-        resp_int(r, "forecast_rain_pct", g_fc_rain_pct);
-        resp_int(r, "forecast_snow_pct", g_fc_snow_pct);
-        resp_int(r, "forecast_humidity", g_fc_humidity);
-        resp_str(r, "forecast_condition", g_fc_condition);
-        resp_str(r, "forecast_icon", g_fc_icon);
-        resp_int(r, "forecast_code", g_fc_code);
+    if (g_fc_valid && g_forecast_count > 0) {
+        /* Today's astro flattened onto the top object so the
+         * current-conditions card can show "Rise 6:42 AM / Set 8:03 PM"
+         * without diving into the forecast array. */
+        if (g_forecast[0].sunrise[0]) resp_str(r, "sunrise", g_forecast[0].sunrise);
+        if (g_forecast[0].sunset[0])  resp_str(r, "sunset",  g_forecast[0].sunset);
+
+        /* Day-0 compatibility fields — kept so existing code paths
+         * that check `forecast_high_f` etc. still work alongside the
+         * new `forecast[]` array. */
+        const forecast_day_t *f0 = &g_forecast[0];
+        resp_float(r, "forecast_high_f",   (double)f0->high_f);
+        resp_float(r, "forecast_low_f",    (double)f0->low_f);
+        resp_int  (r, "forecast_rain_pct",         f0->rain_pct);
+        resp_int  (r, "forecast_snow_pct",         f0->snow_pct);
+        resp_int  (r, "forecast_humidity",         f0->humidity);
+        resp_str  (r, "forecast_condition",        f0->condition);
+        resp_str  (r, "forecast_icon",             f0->icon);
+        resp_int  (r, "forecast_code",             f0->code);
+
+        /* Full 3-day array — emit as a raw JSON fragment so the
+         * dashboard can iterate. */
+        if (!r->jfirst) resp_json_raw(r, ",");
+        resp_json_raw(r, "\"forecast\":[");
+        for (int i = 0; i < g_forecast_count; i++) {
+            const forecast_day_t *f = &g_forecast[i];
+            char frag[1024];
+            snprintf(frag, sizeof(frag),
+                "%s{\"date\":\"%s\","
+                 "\"high_f\":%.1f,\"low_f\":%.1f,"
+                 "\"rain_pct\":%d,\"snow_pct\":%d,"
+                 "\"humidity\":%d,\"uv\":%.1f,"
+                 "\"condition\":\"%s\",\"icon\":\"%s\",\"code\":%d,"
+                 "\"sunrise\":\"%s\",\"sunset\":\"%s\"}",
+                i == 0 ? "" : ",",
+                f->date, (double)f->high_f, (double)f->low_f,
+                f->rain_pct, f->snow_pct, f->humidity, (double)f->uv,
+                f->condition, f->icon, f->code,
+                f->sunrise, f->sunset);
+            resp_json_raw(r, frag);
+        }
+        resp_json_raw(r, "]");
+        r->jfirst = 0;
     }
 }
 
@@ -248,11 +343,18 @@ static int weather_fetch(void)
     if (!curl) return -1;
 
     char url[512];
+    /* days=3 is the free-plan maximum; each day brings a full "day"
+     * block + an "astro" block (sunrise/sunset/moon) + 24 hourly
+     * entries (which we ignore). Upping this past 3 requires a paid
+     * key — the API will return an error rather than more days. */
     snprintf(url, sizeof(url),
-             "https://api.weatherapi.com/v1/forecast.json?key=%s&q=%s&days=1&aqi=no",
+             "https://api.weatherapi.com/v1/forecast.json?key=%s&q=%s&days=3&aqi=no",
              g_api_key, g_location);
 
-    curl_buf_t buf = { .data = malloc(8192), .len = 0, .cap = 8192 };
+    /* 3-day forecast JSON is ~24-32 KB (three days × full hourly
+     * arrays). Start at 32 KB so the write callback doesn't have
+     * to realloc three times. */
+    curl_buf_t buf = { .data = malloc(32768), .len = 0, .cap = 32768 };
     if (!buf.data) {
         curl_easy_cleanup(curl);
         return -1;
@@ -279,12 +381,16 @@ static int weather_fetch(void)
     free(buf.data);
 
     if (rc == 0) {
+        const forecast_day_t *f0 = (g_forecast_count > 0) ? &g_forecast[0] : NULL;
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                      "current: %.0fF wind %s %.0f mph %s | "
                      "forecast: hi %.0f lo %.0f rain %d%% snow %d%% humidity %d%%",
                      g_temp_f, g_wind_dir, g_wind_mph, g_condition,
-                     g_fc_high_f, g_fc_low_f, g_fc_rain_pct,
-                     g_fc_snow_pct, g_fc_humidity);
+                     f0 ? (double)f0->high_f : 0.0,
+                     f0 ? (double)f0->low_f  : 0.0,
+                     f0 ? f0->rain_pct       : 0,
+                     f0 ? f0->snow_pct       : 0,
+                     f0 ? f0->humidity       : 0);
 
         /* Push the fresh sample to every SSE subscriber (public + admin)
          * and refresh the snapshot cache. This is the single point that
@@ -459,7 +565,8 @@ static void weather_announce(void)
 /* *94# — today's forecast */
 static void forecast_announce(void)
 {
-    if (!g_fc_valid) return;
+    if (!g_fc_valid || g_forecast_count <= 0) return;
+    const forecast_day_t *f0 = &g_forecast[0];
 
     /* TTS path */
     if (g_core->tts_speak) {
@@ -467,42 +574,42 @@ static void forecast_announce(void)
         int off = 0;
         off += snprintf(text + off, sizeof(text) - off,
                         "Today's forecast. %s.",
-                        g_fc_condition[0] ? g_fc_condition : "");
+                        f0->condition[0] ? f0->condition : "");
         off += snprintf(text + off, sizeof(text) - off,
                         " High %d, low %d degrees.",
-                        (int)roundf(g_fc_high_f), (int)roundf(g_fc_low_f));
-        if (g_fc_rain_pct > 0)
+                        (int)roundf(f0->high_f), (int)roundf(f0->low_f));
+        if (f0->rain_pct > 0)
             off += snprintf(text + off, sizeof(text) - off,
-                            " %d percent chance of rain.", g_fc_rain_pct);
-        if (g_fc_snow_pct > 0)
+                            " %d percent chance of rain.", f0->rain_pct);
+        if (f0->snow_pct > 0)
             off += snprintf(text + off, sizeof(text) - off,
-                            " %d percent chance of snow.", g_fc_snow_pct);
+                            " %d percent chance of snow.", f0->snow_pct);
         off += snprintf(text + off, sizeof(text) - off,
-                        " Humidity %d percent.", g_fc_humidity);
+                        " Humidity %d percent.", f0->humidity);
         (void)off;
         g_core->tts_speak(text, KERCHUNK_PRI_ELEVATED);
     } else {
         /* WAV fallback */
         speak_wav("weather/wx_forecast");
-        const char *cw = map_condition(g_fc_condition);
+        const char *cw = map_condition(f0->condition);
         if (cw) speak_wav(cw);
         speak_wav("weather/wx_high");
-        speak_number((int)roundf(g_fc_high_f));
+        speak_number((int)roundf(f0->high_f));
         speak_wav("weather/wx_low");
-        speak_number((int)roundf(g_fc_low_f));
+        speak_number((int)roundf(f0->low_f));
         speak_wav("weather/wx_degrees");
-        if (g_fc_rain_pct > 0) {
+        if (f0->rain_pct > 0) {
             speak_wav("weather/wx_chance_of_rain");
-            speak_number(g_fc_rain_pct);
+            speak_number(f0->rain_pct);
             speak_wav("weather/wx_percent");
         }
-        if (g_fc_snow_pct > 0) {
+        if (f0->snow_pct > 0) {
             speak_wav("weather/wx_chance_of_snow");
-            speak_number(g_fc_snow_pct);
+            speak_number(f0->snow_pct);
             speak_wav("weather/wx_percent");
         }
         speak_wav("weather/wx_humidity");
-        speak_number(g_fc_humidity);
+        speak_number(f0->humidity);
         speak_wav("weather/wx_percent");
     }
 

@@ -295,6 +295,23 @@ function wxIcon(url, size) {
          '" alt="" style="vertical-align:middle;flex-shrink:0" loading="lazy">';
 }
 
+function wxAgo(epochSec) {
+  if (!epochSec) return '';
+  const age = Math.max(0, Math.floor(Date.now()/1000 - epochSec));
+  if (age < 60)    return 'just now';
+  if (age < 3600)  return Math.floor(age/60)  + ' min ago';
+  if (age < 86400) return Math.floor(age/3600)+ ' h ago';
+  return Math.floor(age/86400) + ' d ago';
+}
+function wxWeekday(isoDate, offset) {
+  if (offset === 0) return 'Today';
+  if (offset === 1) return 'Tomorrow';
+  if (!isoDate) return '';
+  const dt = new Date(isoDate + 'T12:00:00');
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  return days[dt.getDay()] + ' ' + (dt.getMonth()+1) + '/' + dt.getDate();
+}
+
 function renderWeather(d) {
   if (!d) return;
   const wt = document.getElementById('wx-table');
@@ -314,11 +331,44 @@ function renderWeather(d) {
            Math.round(d.feelslike_f) + '\u00b0F</div>';
     }
     h += '</div></div></td></tr>';
-    h += tr('Wind', d.wind_dir + ' ' + Math.round(d.wind_mph) + ' mph');
+    let windStr = d.wind_dir + ' ' + Math.round(d.wind_mph) + ' mph';
+    if (d.gust_mph && d.gust_mph > d.wind_mph + 1)
+      windStr += ' (gusts ' + Math.round(d.gust_mph) + ')';
+    h += tr('Wind', windStr);
     h += tr('Humidity', d.humidity + '%');
+    if (d.pressure_in) h += tr('Pressure', d.pressure_in.toFixed(2) + ' in');
+    if (d.uv !== undefined && d.uv > 0) h += tr('UV index', Math.round(d.uv));
+    if (d.sunrise || d.sunset) {
+      h += tr('Sun',
+        '\u2600 ' + (d.sunrise || '\u2014') + ' / ' + (d.sunset || '\u2014'));
+    }
+    if (d.last_updated) {
+      h += '<tr><td colspan="2" style="font-size:10px;opacity:0.55;text-align:right;padding-top:6px">' +
+           'Updated ' + wxAgo(d.last_updated) + '</td></tr>';
+    }
     wt.innerHTML = h;
   }
-  if (d.forecast_high_f !== undefined) {
+
+  const days = Array.isArray(d.forecast) ? d.forecast : null;
+  if (days && days.length > 0) {
+    let h = '<tr><td colspan="2" style="padding:4px 0">';
+    h += '<div style="display:flex;gap:6px;justify-content:space-between;flex-wrap:wrap">';
+    days.slice(0, 3).forEach(function(f, i) {
+      h += '<div style="flex:1 1 0;min-width:70px;text-align:center;padding:4px;border:1px solid var(--border);border-radius:4px">';
+      h += '<div style="font-size:11px;font-weight:600;opacity:0.85">' +
+           wxWeekday(f.date, i) + '</div>';
+      h += '<div style="margin:2px 0">' + wxIcon(f.icon, 44) + '</div>';
+      h += '<div style="font-size:13px;font-weight:600">' +
+           Math.round(f.high_f) + '\u00b0 / ' + Math.round(f.low_f) + '\u00b0</div>';
+      if (f.rain_pct > 0)
+        h += '<div style="font-size:10px;opacity:0.75">\ud83d\udca7 ' + f.rain_pct + '%</div>';
+      else if (f.snow_pct > 0)
+        h += '<div style="font-size:10px;opacity:0.75">\u2744 ' + f.snow_pct + '%</div>';
+      h += '</div>';
+    });
+    h += '</div></td></tr>';
+    ft.innerHTML = h;
+  } else if (d.forecast_high_f !== undefined) {
     let h = '';
     const fIcon = d.forecast_icon || d.icon;
     h += '<tr><td colspan="2" style="padding:4px 0">';
@@ -328,10 +378,8 @@ function renderWeather(d) {
     h += '<div style="font-size:18px;font-weight:600;line-height:1.1">' +
          Math.round(d.forecast_high_f) + '\u00b0 / ' +
          Math.round(d.forecast_low_f) + '\u00b0F</div>';
-    if (d.forecast_condition) {
-      h += '<div style="font-size:12px;opacity:0.85">' +
-           d.forecast_condition + '</div>';
-    }
+    if (d.forecast_condition)
+      h += '<div style="font-size:12px;opacity:0.85">' + d.forecast_condition + '</div>';
     h += '</div></div></td></tr>';
     if (d.forecast_rain_pct > 0) h += tr('Rain', d.forecast_rain_pct + '%');
     if (d.forecast_snow_pct > 0) h += tr('Snow', d.forecast_snow_pct + '%');
