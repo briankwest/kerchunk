@@ -461,28 +461,34 @@ on-radio soak.
 
 ---
 
-## 8. Open questions
+## 8. Decisions (locked before kickoff)
 
-1. Should `TX_HOLD` be its own state or merged into `TX_TAIL`?
-   Argument for separate: operator can see "we finished tail,
-   now we're waiting for hardware to flush." Argument against:
-   HOLD lasts 60 ms — probably too fast to be visible on a 500
-   ms SSE round-trip anyway. **Decide at Phase 1 design.**
+1. **TX_HOLD is its own state.** Operator visibility into
+   "tail done, waiting for hardware flush" is worth the 60 ms
+   window. Accept that fast-cycling UIs may skip rendering it;
+   the journal and snapshot still carry it.
 
-2. For software relay during COR-chop (the Retevis case where
-   COS flaps during DTMF), the `RELAY` state will flicker. Add
-   hysteresis (linger 500 ms after COR drop before `RELAY →
-   TAIL`)? Or let it flicker and accept the UI churn?
-   **Decide at Phase 1.**
+2. **Add hysteresis to `RELAY`.** When software-relay mode is
+   active and COR flaps during a session (Retevis CTCSS chop),
+   the `RELAY` → `TAIL` transition needs a grace window so the
+   UI doesn't flicker. Implementation: when `cor_flapped_session`
+   is set on the txactivity detector, hold `RELAY` for a
+   configurable linger window (default 500 ms) before
+   transitioning to `TAIL`. When COR comes back up within that
+   window, stay in `RELAY`. Reuses the existing flap-detection
+   signal from `kerchunk_txactivity_t`.
 
-3. Should `mod_repeater`'s `TIMEOUT` be renamed to `RX_TIMEOUT`
-   or `TOT`? Today the name collides semantically with TX tail
-   timer. **Decide at Phase 2 rename.**
+3. **Rename `TIMEOUT` → `RX_TIMEOUT`.** Collides semantically
+   with TX tail timers. Done as part of Phase 2 in the same
+   event-rename commit. `KERCHEVT_TIMEOUT` →
+   `KERCHEVT_RX_TIMEOUT`, `RPT_TIMEOUT` → `RPT_RX_TIMEOUT` in
+   mod_repeater, and the state-name string table updated.
 
-4. Public dashboard: add a single "transmitting / idle" TX
-   indicator? Current design is RX-only. Trivial to add; UX
-   question. **Decide at Phase 3.**
+4. **Public dashboard gets a minimalist TX indicator.** A single
+   "transmitting / idle" dot alongside the existing RX badge.
+   Driven by `tx_state != TX_IDLE`. Public-safe; no sensitive
+   detail leaked. Part of Phase 3.
 
 ---
 
-*End of plan. Approve, revise, or shelve.*
+*End of plan. Ready to execute on branch `state-model`.*
