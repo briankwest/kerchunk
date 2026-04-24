@@ -48,7 +48,8 @@ kerchunkd_SOURCES = \
 	src/kerchunk_evt_json.c \
 	src/kerchunk_console.c \
 	src/kerchunk_rrd.c \
-	src/kerchunk_txactivity.c
+	src/kerchunk_txactivity.c \
+	src/kerchunk_tx_state.c
 
 kerchunkd_CFLAGS = $(AM_CFLAGS) \
 		   -Icli \
@@ -344,6 +345,7 @@ test_kerchunk_SOURCES = \
 	tests/test_audio_ring.c \
 	tests/test_audio_tick_rx.c \
 	tests/test_audio_tick_tx.c \
+	tests/test_tx_state.c \
 	tests/test_stubs.c \
 	src/kerchunk_events.c \
 	src/kerchunk_config.c \
@@ -359,7 +361,8 @@ test_kerchunk_SOURCES = \
 	src/kerchunk_rrd.c \
 	src/kerchunk_txactivity.c \
 	src/kerchunk_audio_ring.c \
-	src/kerchunk_audio_tick.c
+	src/kerchunk_audio_tick.c \
+	src/kerchunk_tx_state.c
 
 test_kerchunk_CFLAGS = $(AM_CFLAGS) \
 		       $(PORTAUDIO_CFLAGS) \

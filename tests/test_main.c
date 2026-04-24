@@ -67,6 +67,7 @@ extern void test_txactivity(void);
 extern void test_audio_ring(void);
 extern void test_audio_tick_rx(void);
 extern void test_audio_tick_tx(void);
+extern void test_tx_state(void);
 extern void test_integration(void);
 
 int main(void)
@@ -109,6 +110,9 @@ int main(void)
 
     printf("\nAudio TX sub-tick tests:\n");
     test_audio_tick_tx();
+
+    printf("\nTX state machine tests:\n");
+    test_tx_state();
 
     printf("\nIntegration tests:\n");
     test_integration();

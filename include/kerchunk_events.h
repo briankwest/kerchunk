@@ -26,7 +26,15 @@ typedef enum {
     KERCHEVT_PTT_DROP,
 
     /* Repeater state events */
-    KERCHEVT_STATE_CHANGE,
+    KERCHEVT_STATE_CHANGE,      /* RX state (mod_repeater).
+                                 * Renamed to KERCHEVT_RX_STATE_CHANGE
+                                 * in Phase 2 — still named STATE_CHANGE
+                                 * here during Phase 1 to avoid touching
+                                 * every subscriber in this commit. */
+    KERCHEVT_TX_STATE_CHANGE,   /* TX state (audio thread).
+                                 * Payload uses the state union below,
+                                 * with old_state/new_state populated
+                                 * from kerchunk_tx_state_t. */
     KERCHEVT_TAIL_START,
     KERCHEVT_TAIL_EXPIRE,
     KERCHEVT_TIMEOUT,

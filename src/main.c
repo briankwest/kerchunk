@@ -13,6 +13,7 @@
 #include "kerchunk_console.h"
 #include "kerchunk_txactivity.h"
 #include "kerchunk_audio_tick.h"
+#include "kerchunk_tx_state.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,10 +84,8 @@ static void usage(const char *prog)
  *  CLI command handlers (called from main thread via socket)
  * ════════════════════════════════════════════════════════════════════ */
 
-/* Forward declaration — defined after audio globals. Also exposed
- * via include/kerchunk.h for modules (mod_web snapshot emitter). */
-const char *kerchunk_get_tx_state(void);
-static const char *get_tx_state(void) { return kerchunk_get_tx_state(); }
+/* kerchunk_get_tx_state() is defined further down (near the audio
+ * globals) and declared in kerchunk.h; no forward decl needed here. */
 
 /* Expose RX state from mod_repeater for the unified status endpoint.
  * mod_repeater's g_state is static, but the module's CLI handler returns
@@ -935,23 +934,16 @@ static _Atomic int g_tx_dtmf_active;   /* 1 when decoder is detecting */
 
 int kerchunk_tx_dtmf_active(void) { return atomic_load(&g_tx_dtmf_active); }
 
-/* Derive current TX state for the status API. Exposed as a public
- * symbol (via kerchunk.h) so modules can read the current label
- * without going through the event bus or CLI dispatch. */
+/* Current TX state — computed each audio tick by the FSM in
+ * src/kerchunk_tx_state.c and stored here. Atomic so the web-thread
+ * snapshot builder and CLI status command can read lock-free. */
+static _Atomic kerchunk_tx_state_t g_tx_state = KERCHUNK_TX_IDLE;
+
+/* Public accessor — returns the stringified current TX state.
+ * Exposed via kerchunk.h for modules (mod_web snapshot emitter). */
 const char *kerchunk_get_tx_state(void)
 {
-    int cor = kerchunk_core_get()->is_receiving();
-    if (cor && g_audio_state.software_relay)
-        return "TX_RELAY";
-    if (g_audio_state.relay_drain > 0)
-        return "TX_TAIL";
-    if (g_audio_state.queue_ptt && g_audio_state.tx_delay_rem > 0)
-        return "TX_QUEUE";
-    if (g_audio_state.queue_ptt)
-        return "TX_QUEUE";
-    if (kerchunk_core_get_ptt() && !cor)
-        return "TX_TAIL";
-    return "TX_IDLE";
+    return kerchunk_tx_state_name(atomic_load(&g_tx_state));
 }
 
 /* Audio thread.
@@ -1277,18 +1269,37 @@ static void *audio_thread_fn(void *arg)
             }
         }
 
-        /* TX state transitions — mirror mod_repeater's RX state logs so
-         * operators can see "kerchunkd started transmitting" / "released
-         * PTT" in the journal, not just infer it from PTT refs. Label
-         * comes from get_tx_state() which is the same string the web
-         * dashboard uses. Logged on change only. */
+        /* ── TX state FSM ──
+         *
+         * Pure function over scripted inputs — see
+         * src/kerchunk_tx_state.c and PLAN-STATE-MODEL.md §2.2.
+         * On transition: update atomic (for cross-thread reads by
+         * the web snapshot builder + /api/status), fire
+         * KERCHEVT_TX_STATE_CHANGE, log the transition. */
         {
-            static const char *prev_tx_state = "TX_IDLE";
-            const char *cur_tx_state = get_tx_state();
-            if (strcmp(cur_tx_state, prev_tx_state) != 0) {
+            kerchunk_tx_state_inputs_t tx_in = {
+                .cor_active     = kerchunk_core_get()->is_receiving(),
+                .software_relay = g_audio_state.software_relay,
+                .queue_ptt      = g_audio_state.queue_ptt,
+                .tx_delay_rem   = g_audio_state.tx_delay_rem,
+                .tx_tail_rem    = g_audio_state.tx_tail_rem,
+                .relay_drain    = g_audio_state.relay_drain,
+                .ptt_held       = kerchunk_core_get_ptt(),
+            };
+            kerchunk_tx_state_t next = kerchunk_tx_state_compute(&tx_in);
+            kerchunk_tx_state_t prev = atomic_load(&g_tx_state);
+            if (next != prev) {
+                atomic_store(&g_tx_state, next);
                 KERCHUNK_LOG_I(LOG_MOD, "tx state: %s -> %s",
-                               prev_tx_state, cur_tx_state);
-                prev_tx_state = cur_tx_state;
+                               kerchunk_tx_state_name(prev),
+                               kerchunk_tx_state_name(next));
+                kerchevt_t evt = {
+                    .type = KERCHEVT_TX_STATE_CHANGE,
+                    .timestamp_us = t0,
+                    .state = { .old_state = (int)prev,
+                               .new_state = (int)next },
+                };
+                kerchevt_fire(&evt);
             }
         }
 

@@ -8,6 +8,7 @@
 
 #include "kerchunk.h"
 #include "kerchunk_log.h"
+#include "kerchunk_tx_state.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -71,6 +72,16 @@ int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max)
             "\"new_state\":\"%s\",\"ts\":%llu}",
             state_name(evt->state.old_state),
             state_name(evt->state.new_state), ts);
+
+    case KERCHEVT_TX_STATE_CHANGE:
+        return snprintf(buf, max,
+            "{\"type\":\"tx_state_change\",\"old_state\":\"%s\","
+            "\"new_state\":\"%s\",\"ts\":%llu}",
+            kerchunk_tx_state_name(
+                (kerchunk_tx_state_t)evt->state.old_state),
+            kerchunk_tx_state_name(
+                (kerchunk_tx_state_t)evt->state.new_state),
+            ts);
 
     case KERCHEVT_TAIL_START:
         return snprintf(buf, max,
