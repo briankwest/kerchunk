@@ -194,4 +194,14 @@ void kerchunk_core_set_users_config(kerchunk_config_t *cfg);
 void kerchunk_core_lock_config(void);
 void kerchunk_core_unlock_config(void);
 
+/* PTT state accessor — returns 1 if any module is holding PTT. */
+int kerchunk_core_get_ptt(void);
+
+/* State accessors — exposed for mod_web's snapshot builder.
+ * RX state comes from mod_repeater (CLI dispatch internally).
+ * TX state is derived from g_audio_state. Both return a pointer
+ * to static storage; don't free. */
+const char *kerchunk_get_rx_state(void);
+const char *kerchunk_get_tx_state(void);
+
 #endif /* KERCHUNK_H */

@@ -2537,12 +2537,74 @@ static void emit_snapshot_burst(struct mg_connection *c, int admin)
     pthread_mutex_unlock(&g_sse_snap_mutex);
 }
 
+/* Build and publish the current status snapshot.
+ *
+ * Every field the dashboard needs to render "what is the repeater
+ * doing right now" lives here. Published via sse_publish_impl under
+ * the "status" type; that function caches the latest payload per
+ * type so new SSE clients always see the current picture on connect
+ * via emit_snapshot_burst() — no /api/status poll needed.
+ *
+ * Safe to call from any event-handler thread (sse_publish_impl takes
+ * its own mutex). Rate-limiting isn't needed because we only call
+ * on state-affecting events, not per-tick.
+ *
+ * Public-safe: nothing in the payload is admin-sensitive. */
+static void publish_status_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+
+    const char *rx = kerchunk_get_rx_state();
+    const char *tx = kerchunk_get_tx_state();
+    int cor = g_core->is_receiving ? g_core->is_receiving() : 0;
+    int ptt = kerchunk_core_get_ptt();
+    int q   = g_core->queue_depth ? g_core->queue_depth() : 0;
+    int em  = kerchunk_core_get_emergency();
+
+    char payload[256];
+    int n = snprintf(payload, sizeof(payload),
+        "{\"rx_state\":\"%s\",\"tx_state\":\"%s\","
+        "\"cor\":%s,\"ptt\":%s,\"emergency\":%s,"
+        "\"queue_depth\":%d}",
+        rx ? rx : "IDLE",
+        tx ? tx : "TX_IDLE",
+        cor ? "true" : "false",
+        ptt ? "true" : "false",
+        em  ? "true" : "false",
+        q);
+    if (n <= 0 || (size_t)n >= sizeof(payload)) return;
+
+    g_core->sse_publish("status", payload, 0 /* public-safe */);
+}
+
 static void web_event_handler(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
     if (evt->type == KERCHEVT_AUDIO_FRAME || evt->type == KERCHEVT_TICK ||
         evt->type == KERCHEVT_CTCSS_DETECT || evt->type == KERCHEVT_DCS_DETECT)
         return;
+
+    /* Any event that might have changed the visible status image
+     * triggers a snapshot republish. Done BEFORE the g_sse_count
+     * short-circuit because sse_publish_impl caches the payload
+     * unconditionally — so the first SSE client to connect later
+     * still gets the current snapshot in their emit_snapshot_burst. */
+    switch (evt->type) {
+    case KERCHEVT_COR_ASSERT:
+    case KERCHEVT_COR_DROP:
+    case KERCHEVT_PTT_ASSERT:
+    case KERCHEVT_PTT_DROP:
+    case KERCHEVT_STATE_CHANGE:
+    case KERCHEVT_QUEUE_DRAIN:
+    case KERCHEVT_QUEUE_COMPLETE:
+    case KERCHEVT_QUEUE_PREEMPTED:
+    case KERCHEVT_TIMEOUT:
+        publish_status_snapshot();
+        break;
+    default:
+        break;
+    }
+
     if (atomic_load(&g_sse_count) <= 0)
         return;
 
@@ -2839,6 +2901,13 @@ static int web_configure(const kerchunk_config_t *cfg)
                 g_bind, g_port,
                 g_auth_password[0] ? " (auth required)" : "",
                 g_public_only ? " (public only)" : "");
+
+    /* Seed the "status" snapshot cache with the current state so the
+     * very first SSE client gets the right picture on their
+     * emit_snapshot_burst — no poll needed, no "everything is IDLE"
+     * default until the first event fires. */
+    publish_status_snapshot();
+
     return 0;
 }
 

@@ -1067,6 +1067,21 @@ function connectSSE() {
     try {
       const evt=JSON.parse(e.data);
       switch(evt.type){
+        case 'status': {
+          // Authoritative snapshot from the daemon. Published on every
+          // state-affecting event and cached in mod_web for SSE replay
+          // on connect, so this fires both as the very first message
+          // after we open the stream AND on every rx/tx/cor/ptt change.
+          // Treat this as the source of truth; the case-specific
+          // handlers below still fire for event-driven UI (log lines,
+          // counters) but the underlying state markers come from here.
+          const s = evt.data || {};
+          if (typeof s.rx_state === 'string') updateState(s.rx_state);
+          if (typeof s.tx_state === 'string') updateTxState(s.tx_state);
+          if (typeof s.cor === 'boolean') updateCOR(s.cor);
+          if (typeof s.ptt === 'boolean' && typeof updatePTT === 'function') updatePTT(s.ptt);
+          break;
+        }
         case 'state_change':
           updateState(evt.new_state);
           // Don't reset TX on RX state changes — TX has its own lifecycle.

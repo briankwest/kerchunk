@@ -83,12 +83,16 @@ static void usage(const char *prog)
  *  CLI command handlers (called from main thread via socket)
  * ════════════════════════════════════════════════════════════════════ */
 
-static const char *get_tx_state(void);  /* Forward declaration — defined after audio globals */
+/* Forward declaration — defined after audio globals. Also exposed
+ * via include/kerchunk.h for modules (mod_web snapshot emitter). */
+const char *kerchunk_get_tx_state(void);
+static const char *get_tx_state(void) { return kerchunk_get_tx_state(); }
 
 /* Expose RX state from mod_repeater for the unified status endpoint.
  * mod_repeater's g_state is static, but the module's CLI handler returns
- * the state string. We call it via dispatch. */
-static const char *get_rx_state(void)
+ * the state string. We call it via dispatch. Also exposed to modules
+ * via kerchunk_get_rx_state in kerchunk.h. */
+const char *kerchunk_get_rx_state(void)
 {
     kerchunk_resp_t tmp;
     resp_init(&tmp);
@@ -118,8 +122,8 @@ static int cmd_status(int argc, const char **argv, kerchunk_resp_t *r)
     const kerchunk_config_t *cfg = kerchunk_core_get_config();
 
     resp_str(r, "version", KERCHUNK_VERSION_STRING);
-    resp_str(r, "rx_state", get_rx_state());
-    resp_str(r, "tx_state", get_tx_state());
+    resp_str(r, "rx_state", kerchunk_get_rx_state());
+    resp_str(r, "tx_state", kerchunk_get_tx_state());
     resp_bool(r, "ptt", ptt);
     resp_bool(r, "cor", cor);
     resp_int(r, "queue", kerchunk_queue_depth());
@@ -931,8 +935,10 @@ static _Atomic int g_tx_dtmf_active;   /* 1 when decoder is detecting */
 
 int kerchunk_tx_dtmf_active(void) { return atomic_load(&g_tx_dtmf_active); }
 
-/* Derive current TX state for the status API */
-static const char *get_tx_state(void)
+/* Derive current TX state for the status API. Exposed as a public
+ * symbol (via kerchunk.h) so modules can read the current label
+ * without going through the event bus or CLI dispatch. */
+const char *kerchunk_get_tx_state(void)
 {
     int cor = kerchunk_core_get()->is_receiving();
     if (cor && g_audio_state.software_relay)
