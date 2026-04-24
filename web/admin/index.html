@@ -1017,10 +1017,55 @@ function renderSys(d) {
 function renderAlerts(d) {
   const el=document.getElementById('alerts');
   if(!d||!d.alerts||d.alerts.length===0){el.textContent='None';return;}
-  el.innerHTML=d.alerts.map(a=>
-    '<div class="alert'+(a.severity==="MODERATE"?" moderate":"")+'">'+
-    '<strong>'+a.event+'</strong> ['+a.severity+']</div>'
-  ).join('');
+
+  /* Plain-text escaper — all alert fields come from NWS; treat as
+   * untrusted text even though we fetched over HTTPS. Also preserve
+   * embedded newlines in descriptions as <br> for readability. */
+  const esc = s => {
+    if (!s) return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML.replace(/\n/g, '<br>');
+  };
+  const fmtTime = unix => {
+    if (!unix) return '';
+    const dt = new Date(unix * 1000);
+    return dt.toLocaleString();
+  };
+
+  el.innerHTML = d.alerts.map(a => {
+    const sevClass = (a.severity === 'MODERATE') ? ' moderate' :
+                     (a.severity === 'MINOR')    ? ' moderate' : '';
+    let h = '<div class="alert' + sevClass + '" data-alert-id="' + esc(a.id) + '">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">';
+    h += '<div><strong>' + esc(a.event) + '</strong> <span style="opacity:0.8;font-size:11px">[' + esc(a.severity) + ']</span></div>';
+    if (a.sender) h += '<div style="font-size:11px;opacity:0.7">' + esc(a.sender) + '</div>';
+    h += '</div>';
+    if (a.headline) h += '<div style="margin-top:4px;font-size:12px">' + esc(a.headline) + '</div>';
+    if (a.area_desc) h += '<div style="margin-top:4px;font-size:11px;opacity:0.85"><em>Area:</em> ' + esc(a.area_desc) + '</div>';
+    if (a.effective || a.expires) {
+      h += '<div style="margin-top:4px;font-size:11px;opacity:0.7">';
+      if (a.effective) h += '<em>Effective:</em> ' + fmtTime(a.effective);
+      if (a.effective && a.expires) h += ' &middot; ';
+      if (a.expires)   h += '<em>Expires:</em> ' + fmtTime(a.expires);
+      h += '</div>';
+    }
+    if (a.description) {
+      /* Collapsed by default — long bodies would push the rest of
+       * the dashboard off-screen otherwise. */
+      h += '<details style="margin-top:6px">';
+      h += '<summary style="cursor:pointer;font-size:12px;opacity:0.85">Full text</summary>';
+      h += '<div style="margin-top:6px;font-size:12px;line-height:1.45;white-space:normal">' + esc(a.description) + '</div>';
+      if (a.instruction) {
+        h += '<div style="margin-top:8px;padding:6px 8px;background:rgba(210,153,34,0.08);border-left:2px solid var(--yellow);font-size:12px;line-height:1.45">';
+        h += '<strong>Instructions:</strong><br>' + esc(a.instruction);
+        h += '</div>';
+      }
+      h += '</details>';
+    }
+    h += '</div>';
+    return h;
+  }).join('');
 }
 
 function renderWeather(d) {

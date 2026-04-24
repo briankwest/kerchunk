@@ -38,12 +38,25 @@
 #define ALERT_ID_LEN   128
 #define ALERT_EVT_LEN  64
 #define ALERT_HDL_LEN  256
+#define ALERT_DESC_LEN 4096   /* full alert body — NWS descriptions
+                               * commonly run 1-3 KB, occasionally 8+.
+                               * 4 KB holds the vast majority; anything
+                               * longer truncates cleanly mid-paragraph. */
+#define ALERT_INST_LEN 1024   /* "Recommended action" text */
+#define ALERT_AREA_LEN 512    /* comma-separated county/zone list */
+#define ALERT_SEND_LEN 64     /* e.g. "NWS Tulsa OK" */
 
 typedef struct {
     int    active;
     char   id[ALERT_ID_LEN];
     char   event[ALERT_EVT_LEN];
     char   headline[ALERT_HDL_LEN];
+    char   description[ALERT_DESC_LEN];   /* full alert body */
+    char   instruction[ALERT_INST_LEN];   /* "what to do" text; may be empty */
+    char   area_desc[ALERT_AREA_LEN];     /* affected counties / zones */
+    char   sender[ALERT_SEND_LEN];        /* e.g. "NWS Tulsa OK" */
+    time_t effective;                      /* alert start (unix seconds) */
+    time_t expires;                        /* alert stop */
     int    severity;
     time_t first_seen;
     time_t last_announced;
@@ -152,23 +165,99 @@ static char *nws_fetch(void)
  * mongoose). Acceptable here because process_alerts() works on isolated
  * per-"properties" blocks, limiting the scope for false matches.
  */
+/* Decode a JSON string value for `key` out of `json`, unescaping
+ * standard escape sequences (\n \r \t \" \\ \/) and truncating
+ * cleanly on buffer overflow. \uXXXX sequences are preserved
+ * verbatim rather than Unicode-decoded; NWS text rarely uses them
+ * and proper decoding would need UTF-8 emit logic we don't have.
+ * Returns 0 on success, -1 if the key wasn't found (out[] cleared). */
 static int json_str(const char *json, const char *key, char *out, size_t max)
 {
+    if (!out || max == 0) return -1;
+    out[0] = '\0';
+
     char needle[64];
     snprintf(needle, sizeof(needle), "\"%s\":", key);
     const char *p = strstr(json, needle);
     if (!p) return -1;
     p += strlen(needle);
-    while (*p == ' ' || *p == '\n' || *p == '\r') p++;
+    while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') p++;
     if (*p != '"') return -1;
     p++;
-    const char *end = strchr(p, '"');
-    if (!end) return -1;
-    size_t len = (size_t)(end - p);
-    if (len >= max) len = max - 1;
-    memcpy(out, p, len);
-    out[len] = '\0';
+
+    size_t w = 0;
+    while (*p && *p != '"') {
+        if (*p == '\\' && p[1]) {
+            char c = p[1];
+            char decoded;
+            switch (c) {
+                case 'n':  decoded = '\n'; break;
+                case 'r':  decoded = '\r'; break;
+                case 't':  decoded = '\t'; break;
+                case '"':  decoded = '"';  break;
+                case '\\': decoded = '\\'; break;
+                case '/':  decoded = '/';  break;
+                case 'u':
+                    /* Preserve raw \uXXXX — saves writing UTF-8 emit. */
+                    if (p[2] && p[3] && p[4] && p[5]) {
+                        if (w + 6 < max) {
+                            memcpy(out + w, p, 6);
+                            w += 6;
+                        }
+                        p += 6;
+                        continue;
+                    }
+                    /* Malformed — drop the backslash and continue. */
+                    p++;
+                    continue;
+                default:   decoded = c;    break;
+            }
+            if (w + 1 < max) out[w++] = decoded;
+            p += 2;
+        } else {
+            if (w + 1 < max) out[w++] = *p;
+            p++;
+        }
+    }
+    out[w] = '\0';
     return 0;
+}
+
+/* Parse a subset of ISO 8601 timestamps: YYYY-MM-DDTHH:MM:SS then
+ * either 'Z', '±HH:MM', or nothing. Returns Unix seconds or 0 on
+ * parse failure. */
+static time_t parse_iso8601(const char *s)
+{
+    if (!s || !*s) return 0;
+    int Y, Mo, D, H, Mi, S;
+    if (sscanf(s, "%d-%d-%dT%d:%d:%d", &Y, &Mo, &D, &H, &Mi, &S) < 6)
+        return 0;
+    struct tm tm = {0};
+    tm.tm_year = Y - 1900;
+    tm.tm_mon  = Mo - 1;
+    tm.tm_mday = D;
+    tm.tm_hour = H;
+    tm.tm_min  = Mi;
+    tm.tm_sec  = S;
+
+    const char *tz = s;
+    /* Skip past YYYY-MM-DDTHH:MM:SS — minimum 19 chars. */
+    size_t slen = strlen(s);
+    if (slen < 19) return 0;
+    tz += 19;
+
+    int tz_off_sec = 0;
+    if (*tz == '+' || *tz == '-') {
+        int sign = (*tz == '+') ? 1 : -1;
+        int th = 0, tm_ = 0;
+        sscanf(tz + 1, "%d:%d", &th, &tm_);
+        tz_off_sec = sign * (th * 3600 + tm_ * 60);
+    }
+    /* 'Z' or empty → UTC → tz_off_sec stays 0. */
+
+    time_t t = timegm(&tm);
+    if (t == (time_t)-1) return 0;
+    return t - tz_off_sec;
 }
 
 /* ── Severity parsing ── */
@@ -289,15 +378,31 @@ static tracked_alert_t *find_alert(const char *id)
 }
 
 static tracked_alert_t *add_alert(const char *id, const char *event,
-                                   const char *headline, int severity)
+                                   const char *headline, int severity,
+                                   const char *description,
+                                   const char *instruction,
+                                   const char *area_desc,
+                                   const char *sender,
+                                   time_t effective, time_t expires)
 {
     for (int i = 0; i < MAX_ALERTS; i++) {
         if (!g_alerts[i].active) {
             tracked_alert_t *a = &g_alerts[i];
+            memset(a, 0, sizeof(*a));
             a->active = 1;
             snprintf(a->id, sizeof(a->id), "%s", id);
             snprintf(a->event, sizeof(a->event), "%s", event);
             snprintf(a->headline, sizeof(a->headline), "%s", headline);
+            if (description) snprintf(a->description, sizeof(a->description),
+                                      "%s", description);
+            if (instruction) snprintf(a->instruction, sizeof(a->instruction),
+                                      "%s", instruction);
+            if (area_desc)   snprintf(a->area_desc,   sizeof(a->area_desc),
+                                      "%s", area_desc);
+            if (sender)      snprintf(a->sender,      sizeof(a->sender),
+                                      "%s", sender);
+            a->effective = effective;
+            a->expires   = expires;
             a->severity = severity;
             a->first_seen = time(NULL);
             a->last_announced = 0;
@@ -344,22 +449,43 @@ static void process_alerts(const char *json)
         char severity[32] = "";
         char headline[ALERT_HDL_LEN] = "";
         char status[16] = "";
+        /* Larger-buffer fields — heap to avoid blowing the main-loop
+         * stack when we're processing a batch of alerts. */
+        char *description = calloc(1, ALERT_DESC_LEN);
+        char *instruction = calloc(1, ALERT_INST_LEN);
+        char *area_desc   = calloc(1, ALERT_AREA_LEN);
+        char  sender[ALERT_SEND_LEN] = "";
+        char  effective[48] = "";
+        char  expires[48]   = "";
 
         json_str(block, "id", id, sizeof(id));
         json_str(block, "event", event, sizeof(event));
         json_str(block, "severity", severity, sizeof(severity));
         json_str(block, "headline", headline, sizeof(headline));
         json_str(block, "status", status, sizeof(status));
+        if (description) json_str(block, "description", description, ALERT_DESC_LEN);
+        if (instruction) json_str(block, "instruction", instruction, ALERT_INST_LEN);
+        if (area_desc)   json_str(block, "areaDesc",    area_desc,   ALERT_AREA_LEN);
+        json_str(block, "senderName", sender, sizeof(sender));
+        json_str(block, "effective",  effective,  sizeof(effective));
+        json_str(block, "expires",    expires,    sizeof(expires));
 
         free(block);
 
         /* Skip non-actual, empty, or below-threshold */
-        if (strcmp(status, "Actual") != 0 || id[0] == '\0')
+        if (strcmp(status, "Actual") != 0 || id[0] == '\0') {
+            free(description); free(instruction); free(area_desc);
             goto next;
+        }
 
         int sev = parse_severity(severity);
-        if (sev < g_min_severity)
+        if (sev < g_min_severity) {
+            free(description); free(instruction); free(area_desc);
             goto next;
+        }
+
+        time_t t_eff = parse_iso8601(effective);
+        time_t t_exp = parse_iso8601(expires);
 
         /* Check if we already track this alert */
         tracked_alert_t *existing = find_alert(id);
@@ -368,9 +494,15 @@ static void process_alerts(const char *json)
             for (int i = 0; i < MAX_ALERTS; i++) {
                 if (&g_alerts[i] == existing) { seen[i] = 1; break; }
             }
+            free(description); free(instruction); free(area_desc);
         } else {
             /* New alert */
-            tracked_alert_t *a = add_alert(id, event, headline, sev);
+            tracked_alert_t *a = add_alert(id, event, headline, sev,
+                                            description ? description : "",
+                                            instruction ? instruction : "",
+                                            area_desc   ? area_desc   : "",
+                                            sender, t_eff, t_exp);
+            free(description); free(instruction); free(area_desc);
             if (a) {
                 for (int i = 0; i < MAX_ALERTS; i++) {
                     if (&g_alerts[i] == a) { seen[i] = 1; break; }
@@ -419,19 +551,57 @@ static void render_nws_resp(kerchunk_resp_t *r)
     for (int i = 0; i < MAX_ALERTS; i++) {
         if (!g_alerts[i].active) continue;
         if (!jfirst) resp_json_raw(r, ",");
-        char e_id[ALERT_ID_LEN * 2], e_event[ALERT_EVT_LEN * 2];
-        char e_headline[ALERT_HDL_LEN * 2];
-        nws_json_escape(g_alerts[i].id, e_id, sizeof(e_id));
-        nws_json_escape(g_alerts[i].event, e_event, sizeof(e_event));
-        nws_json_escape(g_alerts[i].headline, e_headline, sizeof(e_headline));
-        char frag[1024];
-        snprintf(frag, sizeof(frag),
-                 "{\"id\":\"%s\",\"event\":\"%s\",\"severity\":\"%s\","
-                 "\"headline\":\"%s\"}",
-                 e_id, e_event,
-                 severity_str(g_alerts[i].severity),
-                 e_headline);
-        resp_json_raw(r, frag);
+
+        /* Escape every string field. Description can be ~4 KB, so the
+         * worst case is ~8 KB (full escape doubles size); heap these
+         * to keep the main-loop stack sane when MAX_ALERTS are live. */
+        char  e_id[ALERT_ID_LEN  * 2];
+        char  e_event[ALERT_EVT_LEN * 2];
+        char  e_headline[ALERT_HDL_LEN * 2];
+        char *e_description = malloc(ALERT_DESC_LEN * 2);
+        char *e_instruction = malloc(ALERT_INST_LEN * 2);
+        char *e_area        = malloc(ALERT_AREA_LEN * 2);
+        char  e_sender[ALERT_SEND_LEN * 2];
+        if (!e_description || !e_instruction || !e_area) {
+            free(e_description); free(e_instruction); free(e_area);
+            continue;
+        }
+
+        nws_json_escape(g_alerts[i].id,          e_id,          sizeof(e_id));
+        nws_json_escape(g_alerts[i].event,       e_event,       sizeof(e_event));
+        nws_json_escape(g_alerts[i].headline,    e_headline,    sizeof(e_headline));
+        nws_json_escape(g_alerts[i].description, e_description, ALERT_DESC_LEN * 2);
+        nws_json_escape(g_alerts[i].instruction, e_instruction, ALERT_INST_LEN * 2);
+        nws_json_escape(g_alerts[i].area_desc,   e_area,        ALERT_AREA_LEN * 2);
+        nws_json_escape(g_alerts[i].sender,      e_sender,      sizeof(e_sender));
+
+        /* Fragment size: JSON field names + escaped payloads. Heap
+         * for similar reasons — on-stack would be 16 KB+. */
+        size_t fraglen = ALERT_DESC_LEN * 2 + ALERT_INST_LEN * 2 +
+                         ALERT_AREA_LEN * 2 + 2048;
+        char *frag = malloc(fraglen);
+        if (frag) {
+            snprintf(frag, fraglen,
+                "{\"id\":\"%s\","
+                 "\"event\":\"%s\","
+                 "\"severity\":\"%s\","
+                 "\"headline\":\"%s\","
+                 "\"description\":\"%s\","
+                 "\"instruction\":\"%s\","
+                 "\"area_desc\":\"%s\","
+                 "\"sender\":\"%s\","
+                 "\"effective\":%lld,"
+                 "\"expires\":%lld}",
+                e_id, e_event,
+                severity_str(g_alerts[i].severity),
+                e_headline, e_description, e_instruction,
+                e_area, e_sender,
+                (long long)g_alerts[i].effective,
+                (long long)g_alerts[i].expires);
+            resp_json_raw(r, frag);
+            free(frag);
+        }
+        free(e_description); free(e_instruction); free(e_area);
         jfirst = 0;
     }
     resp_json_raw(r, "]");

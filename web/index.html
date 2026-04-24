@@ -307,9 +307,48 @@ function renderWeather(d) {
 function renderAlerts(d) {
   const el = document.getElementById('alerts');
   if (!d || !d.alerts || d.alerts.length === 0) { el.textContent = 'None'; return; }
+
+  const esc = function(s) {
+    if (!s) return '';
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML.replace(/\n/g, '<br>');
+  };
+  const fmtTime = function(unix) {
+    if (!unix) return '';
+    return new Date(unix * 1000).toLocaleString();
+  };
+
   el.innerHTML = d.alerts.map(function(a) {
-    return '<div class="alert' + (a.severity === 'MODERATE' ? ' moderate' : '') + '">' +
-           '<strong>' + a.event + '</strong> [' + a.severity + ']</div>';
+    const sevClass = (a.severity === 'MODERATE' || a.severity === 'MINOR')
+                     ? ' moderate' : '';
+    let h = '<div class="alert' + sevClass + '">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">';
+    h += '<div><strong>' + esc(a.event) + '</strong> <span style="opacity:0.8;font-size:11px">[' + esc(a.severity) + ']</span></div>';
+    if (a.sender) h += '<div style="font-size:11px;opacity:0.7">' + esc(a.sender) + '</div>';
+    h += '</div>';
+    if (a.headline)  h += '<div style="margin-top:4px;font-size:12px">' + esc(a.headline) + '</div>';
+    if (a.area_desc) h += '<div style="margin-top:4px;font-size:11px;opacity:0.85"><em>Area:</em> ' + esc(a.area_desc) + '</div>';
+    if (a.effective || a.expires) {
+      h += '<div style="margin-top:4px;font-size:11px;opacity:0.7">';
+      if (a.effective) h += '<em>Effective:</em> ' + fmtTime(a.effective);
+      if (a.effective && a.expires) h += ' &middot; ';
+      if (a.expires)   h += '<em>Expires:</em> ' + fmtTime(a.expires);
+      h += '</div>';
+    }
+    if (a.description) {
+      h += '<details style="margin-top:6px">';
+      h += '<summary style="cursor:pointer;font-size:12px;opacity:0.85">Full text</summary>';
+      h += '<div style="margin-top:6px;font-size:12px;line-height:1.45">' + esc(a.description) + '</div>';
+      if (a.instruction) {
+        h += '<div style="margin-top:8px;padding:6px 8px;background:rgba(210,153,34,0.08);border-left:2px solid #d29922;font-size:12px;line-height:1.45">';
+        h += '<strong>Instructions:</strong><br>' + esc(a.instruction);
+        h += '</div>';
+      }
+      h += '</details>';
+    }
+    h += '</div>';
+    return h;
   }).join('');
 }
 
