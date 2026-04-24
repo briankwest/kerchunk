@@ -23,9 +23,12 @@ jobs:
             libcjson-dev \
             libfst-dev g++
 
-      - name: Build and install libplcode
+      # All sibling libs track main here so kerchunk CI catches any
+      # cross-repo breakage at the moment it lands. Release builds
+      # pin tagged versions in release.yml separately.
+      - name: Build and install libplcode (main)
         run: |
-          git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
+          git clone --depth 1 https://github.com/briankwest/libplcode.git /tmp/libplcode
           cd /tmp/libplcode
           autoreconf -fi
           ./configure
@@ -34,9 +37,9 @@ jobs:
           sudo make install
           sudo ldconfig
 
-      - name: Build and install libnemo-normalize
+      - name: Build and install libnemo-normalize (main)
         run: |
-          git clone --branch v1.0.1 --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
+          git clone --depth 1 https://github.com/briankwest/libnemo_normalize.git /tmp/libnemo_normalize
           cd /tmp/libnemo_normalize
           autoreconf -fi
           ./configure
@@ -44,7 +47,7 @@ jobs:
           sudo make install
           sudo ldconfig
 
-      - name: Build and install libwyoming
+      - name: Build and install libwyoming (main)
         run: |
           git clone --depth 1 https://github.com/briankwest/libwyoming.git /tmp/libwyoming
           cd /tmp/libwyoming
@@ -54,7 +57,7 @@ jobs:
           sudo make install
           sudo ldconfig
 
-      - name: Build and install paging/PoC libs
+      - name: Build and install paging/PoC libs (main)
         run: |
           for lib in libpocsag libflex libaprs libpoc; do
             git clone --depth 1 https://github.com/briankwest/$lib.git /tmp/$lib
