@@ -33,11 +33,6 @@ static int  g_pos;
 static int  g_timeout_timer = -1;
 static int  g_timeout_ms = 3000;
 
-/* COR gate: suppress DTMF during squelch transients */
-static int  g_cor_gate_active;
-static int  g_cor_gate_timer = -1;
-static int  g_cor_gate_ms = 200;
-
 /* Deferred command: wait for COR drop before dispatching */
 static int  g_pending_dispatch;
 
@@ -152,35 +147,18 @@ static int dispatch_command(void)
     return -1;
 }
 
-static void cor_gate_expired(void *ud)
-{
-    (void)ud;
-    g_cor_gate_timer = -1;
-    g_cor_gate_active = 0;
-}
-
-static void on_cor_assert(const kerchevt_t *evt, void *ud)
-{
-    (void)evt; (void)ud;
-    if (g_cor_gate_ms <= 0) return;
-    g_cor_gate_active = 1;
-    if (g_cor_gate_timer >= 0)
-        g_core->timer_cancel(g_cor_gate_timer);
-    g_cor_gate_timer = g_core->timer_create(g_cor_gate_ms, 0, cor_gate_expired, NULL);
-}
-
 static void on_cor_drop(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
-    /* COR gate on drop too (some radios send spurious DTMF on squelch close) */
-    if (g_cor_gate_ms > 0) {
-        g_cor_gate_active = 1;
-        if (g_cor_gate_timer >= 0)
-            g_core->timer_cancel(g_cor_gate_timer);
-        g_cor_gate_timer = g_core->timer_create(g_cor_gate_ms, 0, cor_gate_expired, NULL);
-    }
-
-    /* Dispatch deferred command now that user unkeyed */
+    /* Dispatch deferred command now that user unkeyed.
+     *
+     * Note: we no longer run a 200 ms COR gate on transitions.
+     * The main.c cor_drop_hold (default 1 s) already absorbs squelch
+     * transients at the raw-HID layer before KERCHEVT_COR_DROP even
+     * fires, and libplcode's 2-block (40 ms) DTMF hysteresis + SNR +
+     * twist checks reject anything a squelch pop could produce. The
+     * old gate also blocked legitimate late-trailing digits during
+     * the relay_drain window. */
     if (g_pending_dispatch) {
         g_pending_dispatch = 0;
         dispatch_command();
@@ -192,10 +170,6 @@ static void on_dtmf_digit(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
     char d = evt->dtmf.digit;
-
-    /* Suppress digits during COR gate (squelch transient protection) */
-    if (g_cor_gate_active && d != '*' && d != '#')
-        return;
 
     if (d == '*') {
         /* Start new command */
@@ -257,7 +231,6 @@ static int dtmfcmd_load(kerchunk_core_t *core)
     core->dtmf_unregister = dtmf_unregister_cmd;
 
     core->subscribe(KERCHEVT_DTMF_DIGIT, on_dtmf_digit, NULL);
-    core->subscribe(KERCHEVT_COR_ASSERT, on_cor_assert, NULL);
     core->subscribe(KERCHEVT_COR_DROP, on_cor_drop, NULL);
     return 0;
 }
@@ -265,7 +238,6 @@ static int dtmfcmd_load(kerchunk_core_t *core)
 static int dtmfcmd_configure(const kerchunk_config_t *cfg)
 {
     g_timeout_ms = kerchunk_config_get_duration_ms(cfg, "dtmf", "inter_digit_timeout", 3000);
-    g_cor_gate_ms = kerchunk_config_get_duration_ms(cfg, "dtmf", "cor_gate_ms", 200);
 
     /* Check for pattern overrides from [dtmf] config section */
     for (int i = 0; i < g_cmd_count; i++) {
@@ -286,13 +258,8 @@ static int dtmfcmd_configure(const kerchunk_config_t *cfg)
 static void dtmfcmd_unload(void)
 {
     g_core->unsubscribe(KERCHEVT_DTMF_DIGIT, on_dtmf_digit);
-    g_core->unsubscribe(KERCHEVT_COR_ASSERT, on_cor_assert);
     g_core->unsubscribe(KERCHEVT_COR_DROP, on_cor_drop);
     cancel_timeout();
-    if (g_cor_gate_timer >= 0) {
-        g_core->timer_cancel(g_cor_gate_timer);
-        g_cor_gate_timer = -1;
-    }
     g_core->dtmf_register   = NULL;
     g_core->dtmf_unregister = NULL;
 }
@@ -336,8 +303,8 @@ usage:
         "    it triggers. Also shows whether a command is being accumulated\n"
         "    and the current digit buffer.\n\n"
         "    DTMF commands are entered on-air as *<digits># sequences.\n"
-        "    Inter-digit timeout and COR gate are configurable.\n\n"
-        "Config: [dtmf] inter_digit_timeout, cor_gate_ms, <pattern overrides>\n");
+        "    Inter-digit timeout is configurable.\n\n"
+        "Config: [dtmf] inter_digit_timeout, <pattern overrides>\n");
     resp_str(r, "error", "usage: dtmfcmd [help]");
     resp_finish(r);
     return -1;
