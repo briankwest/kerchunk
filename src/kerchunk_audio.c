@@ -130,10 +130,12 @@ static int duplex_cb(const void *in, void *out, unsigned long n,
                      const PaStreamCallbackTimeInfo *ti,
                      PaStreamCallbackFlags fl, void *ud)
 {
-    (void)ti; (void)fl; (void)ud;
+    (void)ti; (void)ud;
 
-    /* Capture side */
-    if (in) {
+    /* Capture side — skip if PA flagged input underflow (zero-filled
+     * buffer); the audio thread's repeat-last path covers the gap.
+     * Same rationale as cap_cb. */
+    if (in && !(fl & paInputUnderflow)) {
         const int16_t *src = (const int16_t *)in;
         if (g_hw_rate == g_rate) {
             ring_write(&g_cap_ring, src, n);
@@ -188,15 +190,12 @@ static int cap_cb(const void *in, void *out, unsigned long n,
     (void)out; (void)ti; (void)ud;
     if (!in) return paContinue;
 
-    /* PortAudio sets paInputUnderflow when the audio device couldn't
-     * deliver fresh data and PA filled the callback buffer with zeros.
-     * Pushing those zeros into the capture ring puts a mid-stream
-     * silence dropout in everything downstream — recordings get
-     * 21 ms gaps, the relay clicks, the DTMF decoder's hysteresis
-     * breaks. Drop the buffer and let the audio thread's empty-ring
-     * path repeat-last instead. Observed in practice on Pi 5 +
-     * CM108AH USB audio: ~40% of an idle-period recording was these
-     * 1024-sample zero frames. */
+    /* PortAudio sets paInputUnderflow when the input device couldn't
+     * deliver fresh samples for this callback period. Drop the
+     * (zero-filled) buffer rather than push it into the capture ring,
+     * so the audio thread's empty-ring path uses repeat-last to keep
+     * the DTMF decoder + audio taps fed with continuous-looking audio
+     * instead of an injected silence dropout. */
     if (fl & paInputUnderflow) {
         return paContinue;
     }
@@ -237,8 +236,19 @@ static int play_cb(const void *in, void *out, unsigned long n,
                    const PaStreamCallbackTimeInfo *ti,
                    PaStreamCallbackFlags fl, void *ud)
 {
-    (void)in; (void)ti; (void)fl; (void)ud;
+    (void)in; (void)ti; (void)ud;
     int16_t *dst = (int16_t *)out;
+
+    /* paOutputUnderflow: PA pulled samples from us but we couldn't
+     * fill in time — hardware sent silence (or PA's last samples)
+     * for that callback. Not data-corrupting like the input side
+     * (no garbage flows back into our DSP), but it's a useful
+     * signal that the audio thread isn't keeping up with the
+     * playback clock. Log at DEBUG so it's visible only when
+     * actively diagnosing scheduling problems. */
+    if (fl & paOutputUnderflow) {
+        KERCHUNK_LOG_D(LOG_MOD, "PA output underflow: n=%lu", n);
+    }
 
     if (g_hw_rate == g_rate) {
         size_t got = ring_read(&g_play_ring, dst, n);
