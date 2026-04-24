@@ -48,14 +48,25 @@ pid_file = /run/kerchunk/kerchunkd.pid     ; PID file path
 module_path = /usr/lib/kerchunk   ; Directory containing .so module files
 
 ; Comma-separated list of modules to load (order matters — dependencies first)
-; mod_tts should load before mod_nws and mod_asr so TTS/ASR are available
-; Optional modules (require external libraries, detected at build time):
-;   mod_pocsag — requires libpocsag
-;   mod_flex   — requires libflex
-;   mod_aprs   — requires libaprs
-;   mod_poc    — requires libpoc (PoC radio bridge)
-;   mod_asr    — requires libwyoming (speech recognition)
+; mod_tts should load before mod_nws, mod_asr, and mod_ai so TTS is available.
+;
+; Optional modules (require external libraries or specific contexts):
+;   mod_pocsag     — requires libpocsag
+;   mod_flex       — requires libflex
+;   mod_aprs       — requires libaprs
+;   mod_poc        — requires libpoc (PoC radio bridge)
+;   mod_asr        — requires libwyoming (speech recognition)
+;   mod_freeswitch — ham-only (FCC 97) — phone autopatch via FreeSWITCH ESL
+;   mod_ai         — requires libcurl + libcjson + mod_asr + mod_tts;
+;                    needs a reachable OpenAI-compatible LLM endpoint
+;
+; mod_ai must load AFTER mod_asr and mod_tts so its configure() can
+; resolve those hooks. mod_freeswitch has no dependency order
+; constraint — add it anywhere after mod_repeater.
 load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_asr,mod_nws,mod_stats,mod_sysstats,mod_webhook,mod_scrambler,mod_sdr,mod_web,mod_pocsag,mod_flex,mod_aprs,mod_poc
+;
+; Ham / AI variant — add to the line above if you want them:
+;   ,mod_freeswitch,mod_ai
 
 ; ----------------------------------------------------------------------------
 ; Audio device (PortAudio)
@@ -83,6 +94,15 @@ preemphasis = off                ; on | off (RT-97L handles this in hardware)
 speaker_volume = 150             ; Speaker playback volume (0-151, 150 ≈ -0.1 dB)
 mic_volume = 12                  ; Mic capture volume (0-16, 12 ≈ +18 dB)
 agc = off                        ; Auto Gain Control (off recommended — interferes with CTCSS)
+
+; Under-run handling (no knob, informational):
+;   When PortAudio flags paInputUnderflow (the USB sound card couldn't
+;   deliver fresh samples for a callback period), kerchunkd drops that
+;   zero-filled buffer instead of committing it to the capture ring. The
+;   audio thread's empty-ring path then fills the missing frame with the
+;   last-good sample tail. This keeps the DTMF decoder's hysteresis
+;   intact and prevents audible clicks on the relay/web/recorder paths.
+;   See src/kerchunk_audio_ring.c for the implementation.
 
 ; ----------------------------------------------------------------------------
 ; USB HID interface (RIM-Lite v2 / CM119)
@@ -428,8 +448,21 @@ timeout = 30m                    ; Auto-deactivate timeout
 [parrot]
 ; enabled = on                   ; on | off (default: on)
 max_duration = 10s               ; Max recording length (capped at 30s)
-; audio_report = on              ; TTS audio quality report after playback
-;                                ; Stats are always logged regardless of this setting
+; audio_report = on              ; on | off — also SPEAK the audio report
+;                                ; via TTS after playback. Regardless of
+;                                ; this setting, mod_parrot always LOGS:
+;                                ;   * Peak sample level (dBFS) — the
+;                                ;     loudest sample across the recording
+;                                ;   * Speech-active average RMS (dBFS) —
+;                                ;     average power across frames above
+;                                ;     ~-40 dBFS. Long silent gaps don't
+;                                ;     dilute the reading, so you get a
+;                                ;     meaningful number even if the user
+;                                ;     paused while talking.
+;                                ; Use these as a cheap on-radio audio-
+;                                ; level check: if your peak is below
+;                                ; -12 dBFS, raise TX audio on the
+;                                ; interface.
 
 ; ----------------------------------------------------------------------------
 ; Call Detail Records (CDR)
@@ -511,6 +544,9 @@ directory = /var/lib/kerchunk/cdr  ; Output directory
 ; language = en                  ; Language code (or empty for auto-detect)
 ; max_capture = 30               ; Max seconds to capture per transmission
 ; min_duration = 500             ; Min duration (ms) to transcribe (skip kerchunks)
+; normalize_far_dir =            ; Path to NeMo FAR grammar files (optional).
+;                                ; Same FARs as [tts] — normalizes transcript
+;                                ; output before downstream dispatch (mod_ai).
 
 ; ----------------------------------------------------------------------------
 ; National Weather Service alert monitor
@@ -584,6 +620,14 @@ time_skew = 1                    ; Accept +/- N time steps (each 30s)
 ; Connects radio users to phone calls via FreeSWITCH.
 ; Dial: *0<digits># to call, *0# to hang up.
 ; Requires FreeSWITCH with ESL enabled and a SIP trunk configured.
+;
+; ESL connection resilience: if the FreeSWITCH server is unreachable at
+; startup or drops mid-session, mod_freeswitch retries with exponential
+; backoff (1 s, 2 s, 4 s, 8 s, 16 s, 30 s cap, 16 attempts max). After
+; the cap it stops retrying until a manual `freeswitch enable` or
+; config reload. This prevents a stopped FreeSWITCH from flooding the
+; log with reconnect warnings. The backoff constants are hardcoded —
+; not tunable via config — because they're already conservative.
 ; ----------------------------------------------------------------------------
 [freeswitch]
 ; enabled = off
