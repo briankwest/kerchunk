@@ -185,8 +185,21 @@ static int cap_cb(const void *in, void *out, unsigned long n,
                   const PaStreamCallbackTimeInfo *ti,
                   PaStreamCallbackFlags fl, void *ud)
 {
-    (void)out; (void)ti; (void)fl; (void)ud;
+    (void)out; (void)ti; (void)ud;
     if (!in) return paContinue;
+
+    /* PortAudio sets paInputUnderflow when the audio device couldn't
+     * deliver fresh data and PA filled the callback buffer with zeros.
+     * Pushing those zeros into the capture ring puts a mid-stream
+     * silence dropout in everything downstream — recordings get
+     * 21 ms gaps, the relay clicks, the DTMF decoder's hysteresis
+     * breaks. Drop the buffer and let the audio thread's empty-ring
+     * path repeat-last instead. Observed in practice on Pi 5 +
+     * CM108AH USB audio: ~40% of an idle-period recording was these
+     * 1024-sample zero frames. */
+    if (fl & paInputUnderflow) {
+        return paContinue;
+    }
 
     const int16_t *src = (const int16_t *)in;
 
