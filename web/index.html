@@ -19,7 +19,12 @@ body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
        background: var(--bg); color: var(--text); padding: 16px; max-width: 960px; margin: 0 auto; }
 header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 header h1 { font-size: 20px; }
-.badge { font-size: 12px; padding: 2px 10px; border-radius: 12px; font-weight: 600; }
+/* Stable badge sizing: every state/TX/PTT indicator gets the same
+ * min-width so the header doesn't jitter as labels change length
+ * between "IDLE" (4), "RECEIVING" (9), "RX_TIMEOUT" (10), etc. */
+.badge { font-size: 12px; padding: 2px 10px; border-radius: 12px; font-weight: 600;
+         display: inline-block; text-align: center; min-width: 10ch;
+         white-space: nowrap; }
 .badge-idle { background: var(--green); color: #000; }
 .badge-rx { background: var(--accent); color: #000; animation: pulse 1s infinite; }
 .badge-tx { background: var(--yellow); color: #000; }

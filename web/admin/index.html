@@ -19,7 +19,12 @@ header nav { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; width:
 header nav .btn { text-decoration: none; white-space: nowrap; flex: 1; text-align: center;
                   padding: 5px 10px; }
 header .sub { color: var(--dim); font-size: 14px; }
-.badge { font-size: 12px; padding: 2px 10px; border-radius: 12px; font-weight: 600; }
+/* Stable badge sizing: every state/TX/PTT indicator gets the same
+ * min-width so the header doesn't jitter as labels change length
+ * between "IDLE" (4), "RECEIVING" (9), "RX_TIMEOUT" (10), etc. */
+.badge { font-size: 12px; padding: 2px 10px; border-radius: 12px; font-weight: 600;
+         display: inline-block; text-align: center; min-width: 10ch;
+         white-space: nowrap; }
 .badge-idle { background: var(--green); color: #000; }
 .badge-rx { background: var(--accent); color: #000; animation: pulse 1s infinite; }
 .badge-tx { background: var(--yellow); color: #000; }
@@ -144,6 +149,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 <header>
   <h1 id="callsign">Repeater</h1>
   <span id="state-badge" class="badge badge-idle">IDLE</span>
+  <span id="tx-badge" class="badge badge-off" title="Kerchunk transmitting">TX idle</span>
   <span id="ptt-badge" class="badge badge-off">PTT off</span>
   <nav>
     <a href="/admin/" class="btn" style="border-color:var(--accent);color:var(--accent)">Admin</a>
@@ -518,8 +524,17 @@ function toggleCOR(btn) {
 }
 
 function updateTxState(txstate) {
+  /* Flow-diagram marker (card body) */
   document.querySelectorAll('[data-tx]').forEach(el=>
     el.classList.toggle('active',el.dataset.tx===txstate));
+  /* Header TX badge — minimalist "TX <phase>" / "TX idle", matches
+   * public page so both headers stay consistent. */
+  const b = document.getElementById('tx-badge');
+  if (!b) return;
+  const active = typeof txstate === 'string' && txstate !== 'TX_IDLE';
+  b.textContent = active ? 'TX ' + txstate.replace(/^TX_/, '').toLowerCase()
+                         : 'TX idle';
+  b.className = 'badge ' + (active ? 'badge-tx' : 'badge-off');
 }
 
 function addDtmf(d) {
