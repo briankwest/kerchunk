@@ -1049,18 +1049,6 @@ static void *audio_thread_fn(void *arg)
         kerchevt_fire(&audio_evt);
         kerchunk_core_dispatch_taps(&audio_evt);
 
-        /* ── Frame RMS for the DTMF debug trace ── */
-        int frame_rms;
-        {
-            int64_t sq = 0;
-            for (int k = 0; k < nread; k++)
-                sq += (int64_t)frame[k] * frame[k];
-            int32_t rms_i = 0;
-            int64_t meansq = nread > 0 ? sq / nread : 0;
-            while ((int64_t)rms_i * rms_i < meansq) rms_i++;
-            frame_rms = (int)rms_i;
-        }
-
         /* Reset DTMF decoder on COR assert BEFORE processing this
          * tick's audio — otherwise the first frame of a new
          * transmission is fed into a decoder still holding Goertzel
@@ -1081,26 +1069,8 @@ static void *audio_thread_fn(void *arg)
             plcode_dtmf_dec_process(ctx->dtmf_dec, frame, (size_t)nread, &dtmf_res);
 
             /* Publish DTMF-active to the fused TX-activity detector in
-             * the main thread (one of its three presence inputs). */
+             * the main thread (one of the two presence inputs). */
             atomic_store(&g_tx_dtmf_active, dtmf_res.detected ? 1 : 0);
-
-            /* Per-frame decoder trace — lets us correlate missed digits to
-             * weak audio, state flips, or zero-padded frames. Only when
-             * the state changed OR the frame is holding a tone so logs
-             * don't drown in 50 Hz empty-frame chatter. */
-            {
-                int det = dtmf_res.detected ? 1 : 0;
-                if (det || prev_dtmf || frame_rms > 1000) {
-                    KERCHUNK_LOG_D(LOG_MOD,
-                        "dtmf frame: det=%d dig=%c rms=%d prev=%d cor=%d drain=%d",
-                        det,
-                        det ? dtmf_res.digit : '-',
-                        frame_rms,
-                        prev_dtmf,
-                        relay_active,
-                        g_relay_drain);
-                }
-            }
 
             if (dtmf_res.detected && !prev_dtmf) {
                 KERCHUNK_LOG_I(LOG_MOD, "DTMF: %c", dtmf_res.digit);

@@ -476,3 +476,36 @@ Back-compat: if `[txactivity]` section absent, read legacy
 - `prev_cor`, `cor_drop_hold`, `cor_drop_hold_ms`, `cor_drop_hold_ticks` locals in main.c
 - The COR: drop seen / reassert / hold timer expired log lines (replaced by the new detector's simpler logging)
 - `[repeater] cor_drop_hold` config key (documented as deprecated alias)
+
+---
+
+## 12. Test coverage (post-merge state)
+
+**Covered:**
+- `kerchunk_txactivity` pure-function API (11 tests in
+  `tests/test_txactivity.c`) — init + clamp, single-channel edges,
+  cos_bit sticky across HID -1, voice vs dtmf-patient timing, grace
+  expiry, `trust_cos_bit` off, dtmf sustains over cos chop, reassert
+  reset, NULL-safe.
+- `[txactivity]` + `[dtmf]` config plumbing (6 tests in
+  `tests/test_config.c`) — duration parsing of all new keys, back-
+  compat read of `[repeater] cor_drop_hold`, `[dtmf]` decoder
+  thresholds.
+- libplcode DTMF decoder itself: `tools/decode_dtmf_wav` harness +
+  libplcode's own test suite (make check in libplcode).
+
+**Not yet covered (audio-thread side):**
+- `kerchunk_audio_capture` repeat-last on partial-read / empty-ring
+  (requires PA stream init or a factored-out ring+history module).
+- `paInputUnderflow` drop path in `cap_cb` / `duplex_cb` (tight PA
+  callback, testing would require decoupling from PortAudio).
+- Queue-pause guard condition when `software_relay=off` (touches
+  audio-thread globals + PTT refcount state).
+- DTMF decoder reset-BEFORE-process ordering (integration-level
+  behavior inside the audio loop).
+
+These were left as manual / on-radio tests because each would need
+non-trivial refactoring to become unit-testable and the
+kerchunk_txactivity extraction already covers the core fusion logic.
+If a regression shows up in any of these areas, the fix should
+include a test harness extraction too.
