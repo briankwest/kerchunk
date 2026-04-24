@@ -1111,6 +1111,31 @@ function fmtDuration(sec){
   return s+'s';
 }
 
+/* Emergency banner: only renders when status.emergency is true.
+ * Mounts a fixed-position strip across the top with the remaining
+ * countdown driven by emergency_expires_at. */
+function renderEmergency(s){
+  let el = document.getElementById('emergency-banner');
+  if (!s || !s.emergency){
+    if (el) el.remove();
+    return;
+  }
+  if (!el){
+    el = document.createElement('div');
+    el.id = 'emergency-banner';
+    el.style.cssText =
+      'position:fixed;top:0;left:0;right:0;z-index:1000;'+
+      'background:var(--red);color:#fff;padding:6px 12px;'+
+      'text-align:center;font-weight:600;font-size:13px;'+
+      'box-shadow:0 2px 6px rgba(0,0,0,0.4)';
+    document.body.prepend(el);
+  }
+  const exp = s.emergency_expires_at || 0;
+  const sec = exp ? Math.max(0, exp - Math.floor(Date.now()/1000)) : 0;
+  el.textContent = '⚠ EMERGENCY MODE ACTIVE' +
+    (sec ? ' — auto-deactivates in '+fmtRemaining(sec) : '');
+}
+
 /* OTP elevated-sessions snapshot render — empty list when nobody
  * holds elevated access, otherwise one row per active session. */
 function renderOtpSessions(d){
@@ -1459,6 +1484,7 @@ function connectSSE() {
             streamServerStats.listeners = s.audio_listeners;
             renderStreamTable();
           }
+          renderEmergency(s);
           // First authoritative payload since (re)connect — clear the
           // disconnection overlay.
           document.body.classList.remove('sse-disconnected');

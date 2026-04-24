@@ -32,8 +32,13 @@ static int g_ptt_active;
 static int g_ptt_refcount;
 static int g_cor_active;
 
-/* Emergency flag (set by mod_emergency, read by other modules) */
-static int g_emergency_active;
+/* Emergency flag (set by mod_emergency, read by other modules).
+ * g_emergency_expires_at is the wall-clock time (epoch seconds) at
+ * which the auto-deactivate timer is scheduled to fire — 0 when no
+ * timer is armed. mod_emergency owns both writes; everyone else
+ * reads via the getters. */
+static int    g_emergency_active;
+static time_t g_emergency_expires_at;
 
 /* Audio tap (capture) — accessed from audio thread (dispatch) and
  * main thread (register/unregister). Protected by mutex + snapshot. */
@@ -405,11 +410,22 @@ kerchunk_scrambler_fn kerchunk_core_get_tx_scrambler(void **ctx)
 void kerchunk_core_set_emergency(int active)
 {
     g_emergency_active = active;
+    if (!active) g_emergency_expires_at = 0;
 }
 
 int kerchunk_core_get_emergency(void)
 {
     return g_emergency_active;
+}
+
+void kerchunk_core_set_emergency_expires_at(time_t when)
+{
+    g_emergency_expires_at = when;
+}
+
+time_t kerchunk_core_get_emergency_expires_at(void)
+{
+    return g_emergency_expires_at;
 }
 
 /* OTP elevated session state — decoupled from user count.

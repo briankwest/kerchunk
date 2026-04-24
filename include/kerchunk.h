@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include <time.h>
 
 /* ── Response object — defined before module.h needs it ── */
 
@@ -177,6 +178,11 @@ kerchunk_scrambler_fn kerchunk_core_get_tx_scrambler(void **ctx);
 /* Core emergency flag */
 void kerchunk_core_set_emergency(int active);
 int  kerchunk_core_get_emergency(void);
+/* Wall-clock epoch at which mod_emergency's auto-deactivate timer
+ * is scheduled to fire. 0 when no timer is armed. mod_emergency is
+ * the sole writer; mod_web reads to expose a countdown. */
+void   kerchunk_core_set_emergency_expires_at(time_t when);
+time_t kerchunk_core_get_emergency_expires_at(void);
 
 /* Core OTP elevated session state */
 void kerchunk_core_set_otp_elevated(int user_id, int elevated);

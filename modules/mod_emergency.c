@@ -71,6 +71,7 @@ static void on_emergency_on(const kerchevt_t *evt, void *ud)
     }
 
     kerchunk_core_set_emergency(1);
+    kerchunk_core_set_emergency_expires_at(time(NULL) + g_timeout_ms / 1000);
 
     /* Start auto-deactivate timer */
     if (g_timer >= 0)

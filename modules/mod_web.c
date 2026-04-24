@@ -2572,18 +2572,21 @@ static void publish_status_snapshot(void)
     int ptt = kerchunk_core_get_ptt();
     int q   = g_core->queue_depth ? g_core->queue_depth() : 0;
     int em  = kerchunk_core_get_emergency();
+    long long em_exp = (long long)kerchunk_core_get_emergency_expires_at();
     int listeners = atomic_load(&g_ws_audio_count);
 
-    char payload[256];
+    char payload[320];
     int n = snprintf(payload, sizeof(payload),
         "{\"rx_state\":\"%s\",\"tx_state\":\"%s\","
-        "\"cor\":%s,\"ptt\":%s,\"emergency\":%s,"
+        "\"cor\":%s,\"ptt\":%s,"
+        "\"emergency\":%s,\"emergency_expires_at\":%lld,"
         "\"queue_depth\":%d,\"audio_listeners\":%d}",
         rx ? rx : "IDLE",
         tx ? tx : "TX_IDLE",
         cor ? "true" : "false",
         ptt ? "true" : "false",
         em  ? "true" : "false",
+        em_exp,
         q, listeners);
     if (n <= 0 || (size_t)n >= sizeof(payload)) return;
 
@@ -2614,6 +2617,15 @@ static void web_event_handler(const kerchevt_t *evt, void *ud)
     case KERCHEVT_QUEUE_PREEMPTED:
     case KERCHEVT_RX_TIMEOUT:
         publish_status_snapshot();
+        break;
+    case KERCHEVT_ANNOUNCEMENT:
+        /* Refresh the snapshot when emergency mode flips so the
+         * dashboard's emergency_expires_at field tracks the active
+         * timer. Other announcement sources don't change the
+         * status image. */
+        if (evt->announcement.source &&
+            strcmp(evt->announcement.source, "emergency") == 0)
+            publish_status_snapshot();
         break;
     default:
         break;
@@ -2870,7 +2882,7 @@ static int web_configure(const kerchunk_config_t *cfg)
         KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
         KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
         KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_QUEUE_PREEMPTED,
-        KERCHEVT_RECORDING_SAVED,
+        KERCHEVT_RECORDING_SAVED, KERCHEVT_ANNOUNCEMENT,
         KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN, KERCHEVT_HEARTBEAT,
     };
     for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
@@ -2937,7 +2949,7 @@ static void web_unload(void)
         KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
         KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
         KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_QUEUE_PREEMPTED,
-        KERCHEVT_RECORDING_SAVED,
+        KERCHEVT_RECORDING_SAVED, KERCHEVT_ANNOUNCEMENT,
         KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN, KERCHEVT_HEARTBEAT,
     };
     for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
