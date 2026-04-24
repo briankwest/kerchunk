@@ -352,8 +352,48 @@ let dtmfTimer = null;
 const CRED = {credentials:'same-origin'};
 async function fetchJSON(p) { return (await fetch(API+p, CRED)).json(); }
 
-async function cmd(c) {
-  await fetch(API+'/api/cmd',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
+async function cmd(c, opts) {
+  const r = await fetch(API+'/api/cmd',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
+  let body = null;
+  try { body = await r.json(); } catch(_) {}
+  /* For "verb" commands like ASR Status, surface the response in a
+   * small overlay so the user gets feedback. Skip for trivial
+   * {ok:true} responses that carry no info worth showing. */
+  if (opts && opts.show && body) {
+    const interesting = Object.keys(body).some(k => !['ok','id'].includes(k));
+    if (interesting) showCmdResult(c, body);
+  }
+  return body;
+}
+
+/* Floating overlay used by `cmd(..., {show:true})` to display a
+ * command's JSON response. Auto-dismisses after 8 s; click to
+ * dismiss sooner. Only one overlay at a time. */
+function showCmdResult(label, body){
+  let el = document.getElementById('cmd-result');
+  if (el) el.remove();
+  el = document.createElement('div');
+  el.id = 'cmd-result';
+  el.style.cssText =
+    'position:fixed;bottom:16px;right:16px;z-index:1000;'+
+    'max-width:420px;max-height:50vh;overflow:auto;'+
+    'background:var(--card);border:1px solid var(--border);'+
+    'border-radius:6px;padding:10px;font-size:11px;'+
+    'box-shadow:0 4px 12px rgba(0,0,0,0.4);cursor:pointer';
+  let html = '<div style="color:var(--accent);font-weight:600;margin-bottom:6px">'+
+             label+'</div>';
+  for (const [k,v] of Object.entries(body)){
+    const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    html += '<div style="display:flex;justify-content:space-between;gap:10px;'+
+            'border-bottom:1px solid var(--border);padding:2px 0">'+
+            '<span style="color:var(--dim)">'+k+'</span>'+
+            '<span style="font-family:monospace;text-align:right;'+
+            'word-break:break-all">'+val+'</span></div>';
+  }
+  el.innerHTML = html;
+  el.onclick = () => el.remove();
+  document.body.appendChild(el);
+  setTimeout(() => { if (el && el.parentNode) el.remove(); }, 8000);
 }
 
 
@@ -451,8 +491,10 @@ async function buildDynamicControls() {
       groups[cat].forEach(c => {
         const fid = 'dform-' + (formId++);
         if (c.ui_type === 1) {
-          /* BUTTON */
-          buttons += '<button class="btn" onclick="cmd(\'' + c.ui_command + '\')">'
+          /* BUTTON — display the response so status-y buttons
+           * (ASR Status, version, uptime…) actually show feedback
+           * instead of looking inert. */
+          buttons += '<button class="btn" onclick="cmd(\'' + c.ui_command + '\',{show:true})">'
                    + c.ui_label + '</button>';
         } else if (c.ui_type === 2) {
           /* FORM — button in row, form expands below */
@@ -466,6 +508,17 @@ async function buildDynamicControls() {
                 forms += '<select data-field="' + f.name + '">';
                 f.options.split(',').forEach(o => { forms += '<option>' + o + '</option>'; });
                 forms += '</select>';
+              } else if (f.type === 'sound') {
+                /* Populated by populateAsyncSelect() below from
+                 * /admin/api/sounds — sounds tree, .wav stripped. */
+                forms += '<select data-field="' + f.name +
+                         '" data-async="sounds">'+
+                         '<option value="">— loading… —</option></select>';
+              } else if (f.type === 'module') {
+                /* Populated from /api/modules. */
+                forms += '<select data-field="' + f.name +
+                         '" data-async="modules">'+
+                         '<option value="">— loading… —</option></select>';
               } else if (f.type === 'number') {
                 forms += '<input type="number" data-field="' + f.name + '" placeholder="'
                        + (f.placeholder || '') + '">';
@@ -493,7 +546,40 @@ async function buildDynamicControls() {
     });
 
     document.getElementById('dynamic-controls').innerHTML = html;
+    populateAsyncSelects();
   } catch(e) { /* commands endpoint unavailable */ }
+}
+
+/* Fill any <select data-async="..."> elements injected by
+ * buildDynamicControls. Called once after the controls render so a
+ * single fetch per source covers every form on the page. */
+async function populateAsyncSelects() {
+  const sources = {
+    sounds:  { url: '/admin/api/sounds',  key: 'sounds',  placeholder: '— pick a sound —' },
+    modules: { url: '/admin/api/modules', key: 'modules', placeholder: '— pick a module —' },
+  };
+  for (const [name, src] of Object.entries(sources)) {
+    const targets = document.querySelectorAll('select[data-async="'+name+'"]');
+    if (!targets.length) continue;
+    let items = [];
+    try {
+      const d = await fetchJSON(src.url);
+      const raw = d[src.key];
+      /* Normalize to plain string array: handles both ["x","y"]
+       * and [{name:"x",...},...] shapes. */
+      if (Array.isArray(raw))
+        items = raw.map(v => typeof v === 'string' ? v : (v.name || String(v)));
+      else if (raw && typeof raw === 'object')
+        items = Object.keys(raw);
+      items.sort();
+    } catch(e) { /* leave with placeholder */ }
+
+    const opts = '<option value="">'+src.placeholder+'</option>' +
+                 items.map(v =>
+                   '<option value="'+v+'">'+v+'</option>'
+                 ).join('');
+    targets.forEach(sel => { sel.innerHTML = opts; });
+  }
 }
 
 function fmtMs(ms) {

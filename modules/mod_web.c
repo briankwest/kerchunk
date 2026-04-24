@@ -29,6 +29,7 @@
 #include <fcntl.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <errno.h>
 #include <time.h>
 #include <ctype.h>
@@ -1906,6 +1907,71 @@ static void handle_api_register(struct mg_connection *c,
     free(username); free(name_str); free(email_str); free(callsign_str);
 }
 
+/* ── Sounds-tree listing for the Play File picker ──
+ * Recursively walks <sounds_dir> and emits relative paths (with
+ * the .wav extension stripped) so the admin dashboard can populate
+ * a <select> instead of a freeform text input. Skips the cache/
+ * subtree (TTS cache, transient and large) and dotfiles. Output
+ * order matches readdir order; the frontend sorts alphabetically. */
+static void walk_sounds(const char *base, const char *rel,
+                         char *buf, size_t *len, size_t max, int *first)
+{
+    char path[768];
+    snprintf(path, sizeof(path), "%s%s%s",
+             base, rel[0] ? "/" : "", rel);
+    DIR *d = opendir(path);
+    if (!d) return;
+
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        if (rel[0] == '\0' && strcmp(e->d_name, "cache") == 0) continue;
+
+        char child_rel[512];
+        snprintf(child_rel, sizeof(child_rel), "%s%s%s",
+                 rel, rel[0] ? "/" : "", e->d_name);
+
+        char child_full[1024];
+        snprintf(child_full, sizeof(child_full), "%s/%s", base, child_rel);
+
+        struct stat st;
+        if (stat(child_full, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            walk_sounds(base, child_rel, buf, len, max, first);
+        } else if (S_ISREG(st.st_mode)) {
+            size_t nlen = strlen(child_rel);
+            if (nlen < 4 || strcmp(child_rel + nlen - 4, ".wav") != 0) continue;
+            /* Trim ".wav" — module call sites pass paths without it. */
+            int trim_len = (int)(nlen - 4);
+            int n = snprintf(buf + *len, max - *len,
+                             "%s\"%.*s\"",
+                             *first ? "" : ",",
+                             trim_len, child_rel);
+            if (n <= 0 || (size_t)(*len + n) >= max) break;
+            *len += (size_t)n;
+            *first = 0;
+        }
+    }
+    closedir(d);
+}
+
+static void handle_admin_api_sounds(struct mg_connection *c)
+{
+    const kerchunk_config_t *cfg = kerchunk_core_get_config();
+    const char *sdir = cfg ? kerchunk_config_get(cfg, "general", "sounds_dir")
+                           : NULL;
+    if (!sdir || !sdir[0]) sdir = "/usr/share/kerchunk/sounds";
+
+    char buf[16384];
+    size_t len = (size_t)snprintf(buf, sizeof(buf), "{\"sounds\":[");
+    int first = 1;
+    walk_sounds(sdir, "", buf, &len, sizeof(buf) - 4, &first);
+    len += (size_t)snprintf(buf + len, sizeof(buf) - len, "]}");
+
+    mg_http_reply(c, 200, API_HEADERS, "%s", buf);
+}
+
 /* ── Admin status handler — appends sensitive fields to standard status ── */
 
 static void handle_admin_api_status(struct mg_connection *c,
@@ -2001,6 +2067,13 @@ static void handle_admin_api(struct mg_connection *c,
         else
             mg_http_reply(c, 405, API_HEADERS,
                           "{\"error\":\"Method not allowed\"}");
+        return;
+    }
+
+    /* /admin/api/sounds — sounds-tree listing for Play File picker */
+    if (mg_match(hm->method, mg_str("GET"), NULL) &&
+        mg_match(hm->uri, mg_str("/admin/api/sounds"), NULL)) {
+        handle_admin_api_sounds(c);
         return;
     }
 
