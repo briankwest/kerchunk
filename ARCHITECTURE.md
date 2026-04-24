@@ -97,7 +97,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
   ├── Config reload (SIGHUP)
   └── Module tick events
 
-  Thread 2: Audio Thread (20ms tick, clock_nanosleep)
+  Thread 2: Audio Thread (20ms tick, clock_nanosleep, SCHED_FIFO prio=20)
   ├── Capture frame from PortAudio ring (repeat-last on under-run)
   ├── CTCSS/DCS decoders (on raw frame)
   ├── RX descrambler (in-place)

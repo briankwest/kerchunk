@@ -23,6 +23,8 @@
 #include <getopt.h>
 #include <limits.h>
 #include <pthread.h>
+#include <sched.h>   /* SCHED_FIFO / sched_param for audio-thread RT priority */
+#include <errno.h>
 #include <stdatomic.h>
 #include <sys/stat.h>
 
@@ -909,6 +911,7 @@ typedef struct {
     plcode_ctcss_dec_t *ctcss_dec;
     plcode_dcs_dec_t   *dcs_dec;
     plcode_dtmf_dec_t  *dtmf_dec;
+    int                 rt_priority;   /* SCHED_FIFO prio; 0 = keep SCHED_OTHER */
 } audio_thread_ctx_t;
 
 /* Audio-thread-owned state. See include/kerchunk_audio_tick.h for the
@@ -978,6 +981,37 @@ static void *audio_thread_fn(void *arg)
     audio_thread_ctx_t *ctx = (audio_thread_ctx_t *)arg;
 
     kerchunk_audio_tick_rx_state_t rx_tick = { .prev_dtmf = 0 };
+
+    /* Promote this thread to SCHED_FIFO so it isn't preempted by the
+     * other kerchunk threads (TTS / ASR / AI worker / web) when the
+     * Pi gets loaded. A 20 ms tick deadline can't tolerate a scheduler
+     * miss — PA output under-runs are the audible symptom. Per-thread
+     * (not process-wide) so only the audio loop runs RT; the other
+     * threads stay SCHED_OTHER.
+     *
+     * Requires CAP_SYS_NICE — granted via AmbientCapabilities in the
+     * systemd unit. On failure (no capability, typically when running
+     * from a shell without systemd), log a WARN and keep going with
+     * the default scheduler. Not a fatal condition — just means the
+     * daemon is vulnerable to scheduler jitter under load. */
+    if (ctx->rt_priority > 0) {
+        struct sched_param sp = { .sched_priority = ctx->rt_priority };
+        int rc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+        if (rc == 0) {
+            KERCHUNK_LOG_I(LOG_MOD,
+                "audio thread: SCHED_FIFO prio=%d (real-time)",
+                ctx->rt_priority);
+        } else {
+            KERCHUNK_LOG_W(LOG_MOD,
+                "audio thread: SCHED_FIFO prio=%d denied: %s — "
+                "running SCHED_OTHER (PA underflows possible under load). "
+                "Needs CAP_SYS_NICE; check systemd unit or run as root.",
+                ctx->rt_priority, strerror(rc));
+        }
+    } else {
+        KERCHUNK_LOG_I(LOG_MOD,
+            "audio thread: SCHED_OTHER ([audio] rt_priority=0)");
+    }
 
     KERCHUNK_LOG_I(LOG_MOD, "audio thread started (tick=%dus)", AUDIO_TICK_US);
 
@@ -1467,8 +1501,18 @@ int main(int argc, char **argv)
                  g_audio_state.tx_delay_ms, g_audio_state.tx_tail_ms, g_audio_state.software_relay ? "on" : "off",
                  g_audio_state.relay_drain_ms);
 
-    /* Create decoders */
-    audio_thread_ctx_t audio_ctx = { NULL, NULL, NULL };
+    /* Create decoders + configure audio thread scheduling.
+     * rt_priority: SCHED_FIFO priority for the audio thread (1-30).
+     *   Set to 0 to disable and keep default SCHED_OTHER.
+     *   Default 20 matches PipeWire's audio-engine priority. Values
+     *   above 30 are clamped (don't starve kernel RT threads).
+     *   The LimitRTPRIO=30 directive in the systemd unit also caps
+     *   this from the outside. */
+    int rt_prio = kerchunk_config_get_int(cfg, "audio", "rt_priority", 20);
+    if (rt_prio < 0)  rt_prio = 0;
+    if (rt_prio > 30) rt_prio = 30;
+
+    audio_thread_ctx_t audio_ctx = { NULL, NULL, NULL, rt_prio };
     /* DTMF decoder thresholds — exposed as [dtmf] config knobs so radios
      * with different audio characteristics can be tuned without a
      * rebuild. Defaults are *looser* than libplcode's library defaults

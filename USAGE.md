@@ -471,6 +471,9 @@ Order matters for dependencies:
 | `mic_volume` | `-1` | ALSA mic volume (0-16, -1 = don't set) |
 | `agc` | (unset) | ALSA AGC switch (`on` or `off`, unset = don't change) |
 | `preemphasis` | `off` | Pre-emphasis filter (RT-97L handles this in hardware) |
+| `rt_priority` | `20` | SCHED_FIFO priority for the audio thread (0–30). 0 disables. Requires `CAP_SYS_NICE` — granted by the bundled systemd unit. |
+
+**Real-time scheduling:** the audio thread is promoted to `SCHED_FIFO` at `rt_priority` so it isn't preempted by TTS/ASR/AI workers on a loaded Pi. Only that one thread runs RT; all the other kerchunk threads stay `SCHED_OTHER`. Check on the running daemon with `ps -eLo pid,tid,cls,rtprio,comm | grep kerchunkd` — the audio thread should show `FF` / `20`. If the journal shows `audio thread: SCHED_FIFO prio=... denied`, you're running outside systemd and the process lacks `CAP_SYS_NICE`; either launch via `systemctl start` or set the capability manually.
 
 **Under-run handling:** when the USB sound card fails to deliver fresh samples for a PortAudio callback period (the `paInputUnderflow` flag), the audio engine drops that zero-filled buffer instead of writing silence into the capture ring. The audio thread's empty-ring path then fills the missing frame with repeat-last-sample, so the DTMF decoder's hysteresis and the relay/web/recorder paths see continuous audio. This is a silent mechanism — you won't see log lines unless audio is broken; if you're debugging jitter check `journalctl -u kerchunkd | grep -i underflow`.
 
@@ -1212,6 +1215,9 @@ The event logger (`mod_logger`) automatically rotates the log file when it reach
 
 **Audio cuts off mid-word:**
 - Increase `relay_drain` in `[repeater]` (default 500ms). This controls how long the repeater continues relaying after the carrier drops.
+
+**TX audio stutters / journal shows `PA output underflow`:**
+- The audio thread missed a 20 ms tick deadline because it got preempted. With the bundled systemd unit, the audio thread runs `SCHED_FIFO` at `[audio] rt_priority` (default 20) — preemption by other kerchunk threads (TTS, ASR, AI worker) should be impossible. If you see the WARN line anyway, something outside kerchunk is hogging the CPU or USB: check `journalctl` for Ollama/Wyoming spikes, check `iostat` for disk contention, check `lsusb -t` + `dmesg | grep -i usb` for the CM119 under stress. If `audio thread: SCHED_FIFO ... denied` shows in the startup log, the process doesn't have `CAP_SYS_NICE` — you're launching kerchunkd outside systemd or the unit was overridden. Start via `systemctl start kerchunkd` and verify with `ps -eLo pid,tid,cls,rtprio,comm | grep kerchunkd` — the audio thread should read `FF 20`.
 
 **Session stays open / tail never fires / repeater thinks you're still keyed up after DTMF:**
 - This is the Retevis-class behavior where DTMF tones drop COS. Check the `[txactivity]` section: `end_silence_dtmf_ms` (default 1000) is how long after a tone ends before TX_END fires. If you see `TX_END: silent for N ticks` logs immediately after a tone, that's working correctly. If TX_END is taking much longer, raise `end_silence_ms` (voice mode) not `end_silence_dtmf_ms`. See `ARCH-COR-DTMF.md` §12 for the detector design.

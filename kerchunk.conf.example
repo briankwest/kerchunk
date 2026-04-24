@@ -95,6 +95,25 @@ speaker_volume = 150             ; Speaker playback volume (0-151, 150 ≈ -0.1 
 mic_volume = 12                  ; Mic capture volume (0-16, 12 ≈ +18 dB)
 agc = off                        ; Auto Gain Control (off recommended — interferes with CTCSS)
 
+; Real-time scheduling for the audio thread.
+;
+; The audio loop runs on a 20 ms tick; missing a deadline produces
+; PA output under-runs (audible stutter on TX). On a loaded Pi
+; (Ollama, Wyoming ASR, mod_ai worker) the default SCHED_OTHER
+; scheduler occasionally misses. rt_priority promotes JUST the audio
+; thread to SCHED_FIFO at this priority; the other kerchunk threads
+; stay SCHED_OTHER.
+;
+; Requires CAP_SYS_NICE — granted by the bundled systemd unit via
+; AmbientCapabilities=CAP_SYS_NICE + LimitRTPRIO=30. If you launch
+; kerchunkd from a shell without that, the setschedparam call fails
+; gracefully (daemon logs a WARN and continues SCHED_OTHER).
+;
+; Range: 0 (disabled, keep SCHED_OTHER) .. 30 (code clamps above).
+; Default 20 matches PipeWire's audio-engine priority. Don't raise
+; above 30 or you risk starving kernel RT interrupt threads.
+; rt_priority = 20
+
 ; Under-run handling (no knob, informational):
 ;   When PortAudio flags paInputUnderflow (the USB sound card couldn't
 ;   deliver fresh samples for a callback period), kerchunkd drops that

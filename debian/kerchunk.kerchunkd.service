@@ -27,5 +27,29 @@ ProtectHome=true
 # Allow access to USB HID and audio devices
 SupplementaryGroups=audio plugdev
 
+# Real-time scheduling for the audio thread.
+#
+# kerchunkd's audio loop runs on a 20 ms tick — missing a deadline
+# produces PA output under-runs (audible stutter on TX). When the Pi
+# is also running Ollama / Wyoming / ASR workers the normal
+# scheduler doesn't guarantee we'll hit that cadence. Grant
+# CAP_SYS_NICE ambient so the daemon can promote just the audio
+# thread to SCHED_FIFO at startup (other threads stay SCHED_OTHER).
+#
+# LimitRTPRIO=30 — hard cap on the RT priority the daemon can
+#   request. Matches the upper bound enforced in main.c and stays
+#   well below the kernel's RT interrupt threads (50+).
+# LimitNICE=40   — allows nice() from 0 down to -20 (systemd
+#   encodes as 20-nice, so 40 == -20). Not currently used by the
+#   code but keeps niceness available for future use.
+#
+# NoNewPrivileges=true above is compatible with AmbientCapabilities:
+# the caps are granted at exec time by systemd and can't be expanded
+# afterwards — the hardening still applies.
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
+LimitRTPRIO=30
+LimitNICE=40
+
 [Install]
 WantedBy=multi-user.target
