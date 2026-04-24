@@ -76,10 +76,12 @@ static size_t     g_tx_cap;
 #ifdef HAVE_LIBWYOMING
 static wyoming_conn_t       *g_stream_conn;
 static wyoming_audio_format_t g_stream_fmt;
-#endif
-static atomic_int             g_streaming_active;
 static size_t                 g_stream_samples;   /* total samples sent */
 static uint64_t               g_stream_start_us;
+#endif
+/* g_streaming_active is read in non-libwyoming code paths
+ * (status reporting), so it stays unconditional. */
+static atomic_int             g_streaming_active;
 
 /* Transcript history */
 typedef struct {
@@ -268,12 +270,14 @@ static void *batch_worker(void *arg)
     return NULL;
 }
 
-/* ── Streaming mode: connect on COR, feed chunks in real-time ── */
-
+/* ── Streaming mode: connect on COR, feed chunks in real-time ──
+ * Only compiled when libwyoming is present; the on_cor_assert /
+ * on_cor_drop handlers fall back to batch mode otherwise so the
+ * stream tap is genuinely unreachable at that point. */
+#ifdef HAVE_LIBWYOMING
 static void stream_audio_tap(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-#ifdef HAVE_LIBWYOMING
     if (!g_streaming_active || !evt->audio.samples || !g_stream_conn)
         return;
 
@@ -295,10 +299,8 @@ static void stream_audio_tap(const kerchevt_t *evt, void *ud)
         /* Connection broken — stop streaming, will be cleaned up on COR drop */
         g_streaming_active = 0;
     }
-#else
-    (void)evt;
-#endif
 }
+#endif
 
 /* ── Event handlers ── */
 
@@ -399,6 +401,7 @@ static void on_vcor_drop(const kerchevt_t *evt, void *ud)
 static void on_cor_assert(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
+    (void)evt;  /* only used by streaming branch (HAVE_LIBWYOMING) */
     if (!g_enabled) return;
 
     g_caller_id = 0;

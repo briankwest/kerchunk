@@ -20,6 +20,7 @@ jobs:
             autoconf automake libtool autoconf-archive \
             portaudio19-dev libcurl4-openssl-dev \
             libssl-dev librtlsdr-dev libasound2-dev \
+            libcjson-dev \
             libfst-dev g++
 
       - name: Build and install libplcode
@@ -41,6 +42,24 @@ jobs:
           ./configure
           make
           sudo make install
+          sudo ldconfig
+
+      - name: Build and install libwyoming
+        run: |
+          git clone --depth 1 https://github.com/briankwest/libwyoming.git /tmp/libwyoming
+          cd /tmp/libwyoming
+          autoreconf -fi
+          ./configure
+          make
+          sudo make install
+          sudo ldconfig
+
+      - name: Build and install paging/PoC libs
+        run: |
+          for lib in libpocsag libflex libaprs libpoc; do
+            git clone --depth 1 https://github.com/briankwest/$lib.git /tmp/$lib
+            (cd /tmp/$lib && autoreconf -fi && ./configure && make && sudo make install)
+          done
           sudo ldconfig
 
       - name: Build kerchunk
