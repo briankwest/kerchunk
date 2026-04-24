@@ -1193,8 +1193,15 @@ static void *audio_thread_fn(void *arg)
         /* Pause queue drain for live relay — but NOT if the queue already
          * holds PTT.  When queue is transmitting (g_queue_ptt=1), any COR
          * is likely TX-to-RX feedback from our own transmission and must
-         * not stall the drain, or PTT gets stuck forever. */
-        int queue_paused = (g_software_relay && !g_queue_ptt &&
+         * not stall the drain, or PTT gets stuck forever.
+         *
+         * The wait-for-COR-clear behavior applies regardless of
+         * software_relay mode. Originally the guard was conditioned on
+         * g_software_relay, which meant on hardware-relay setups
+         * (software_relay=off) the queue would start draining the
+         * instant audio was enqueued — kerchunk PTTing in the middle
+         * of the user's still-held transmission. */
+        int queue_paused = (!g_queue_ptt &&
                             (kerchunk_core_get()->is_receiving() || g_relay_drain > 0));
 
         /* Start PTT + delay when queue has items and we're not already playing */
