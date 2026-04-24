@@ -554,9 +554,10 @@ async function buildDynamicControls() {
  * buildDynamicControls. Called once after the controls render so a
  * single fetch per source covers every form on the page. */
 async function populateAsyncSelects() {
+  /* fetchJSON prepends API ('/admin') automatically. */
   const sources = {
-    sounds:  { url: '/admin/api/sounds',  key: 'sounds',  placeholder: '— pick a sound —' },
-    modules: { url: '/admin/api/modules', key: 'modules', placeholder: '— pick a module —' },
+    sounds:  { url: '/api/sounds',  key: 'sounds',  placeholder: '— pick a sound —' },
+    modules: { url: '/api/modules', key: 'modules', placeholder: '— pick a module —' },
   };
   for (const [name, src] of Object.entries(sources)) {
     const targets = document.querySelectorAll('select[data-async="'+name+'"]');

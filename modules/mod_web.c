@@ -908,9 +908,6 @@ static void handle_api_post_cmd(struct mg_connection *c,
         while (*f && *f != '"' && ci < 2047) cmd[ci++] = *f++;
         cmd[ci] = '\0';
 
-        /* Send OK first, then dispatch */
-        mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
-
         char cmd_copy[2048];
         snprintf(cmd_copy, sizeof(cmd_copy), "%s", cmd);
         const char *argv[32];
@@ -934,12 +931,12 @@ static void handle_api_post_cmd(struct mg_connection *c,
             resp_init(&resp);
             kerchunk_dispatch_command(argc, argv, &resp);
             resp_finish(&resp);
+            mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
+        } else {
+            mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
         }
         return;
     }
-
-    /* Send OK first, then dispatch */
-    mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
 
     char cmd_copy[2048];
     snprintf(cmd_copy, sizeof(cmd_copy), "%s", p);
@@ -961,10 +958,17 @@ static void handle_api_post_cmd(struct mg_connection *c,
         if (*cp) *cp++ = '\0';
     }
     if (argc > 0) {
+        /* Dispatch synchronously and return the command's own JSON
+         * response so the dashboard can surface ASR Status, version,
+         * etc. The dispatcher is in-process and bounded; no async
+         * work is initiated here that the OK-first reply was guarding. */
         kerchunk_resp_t resp;
         resp_init(&resp);
         kerchunk_dispatch_command(argc, argv, &resp);
         resp_finish(&resp);
+        mg_http_reply(c, 200, API_HEADERS, "%s", resp.json);
+    } else {
+        mg_http_reply(c, 200, API_HEADERS, "{\"ok\":true}");
     }
 }
 
