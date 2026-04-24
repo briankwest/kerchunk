@@ -202,6 +202,93 @@ static int cmd_ptt(int argc, const char **argv, kerchunk_resp_t *r)
     return 0;
 }
 
+/* Resolve a user-supplied path to an absolute, canonical path that
+ * is contained within the configured sounds_dir. Returns 0 on
+ * success and writes the canonical path to `out`; non-zero on any
+ * rejection, with `*err` pointing at a static error string the
+ * caller can hand back to the user.
+ *
+ * Containment is enforced via realpath() on both sides, so symlinks,
+ * "..", trailing slashes, and absolute paths that happen to share
+ * a prefix with sounds_dir but live outside its tree all get
+ * rejected. The candidate file must exist for realpath() to succeed.
+ *
+ * If `append_wav` is set and a candidate without an extension does
+ * not resolve, the resolver tries again with ".wav" appended so the
+ * dashboard's Play picker can pass "time/tm_eastern" without having
+ * to spell out the extension. */
+static int resolve_under_sounds_dir(const char *input, int append_wav,
+                                     char *out, size_t out_size,
+                                     const char **err)
+{
+    if (!input || !input[0]) { *err = "empty path"; return -1; }
+
+    const kerchunk_config_t *cfg = kerchunk_core_get_config();
+    const char *sdir_cfg = cfg ? kerchunk_config_get(cfg, "general",
+                                                      "sounds_dir") : NULL;
+    if (!sdir_cfg || !sdir_cfg[0]) sdir_cfg = "/usr/share/kerchunk/sounds";
+
+    char sdir_real[PATH_MAX];
+    if (!realpath(sdir_cfg, sdir_real)) {
+        *err = "sounds_dir does not resolve";
+        return -1;
+    }
+    size_t sdir_len = strlen(sdir_real);
+
+    /* Build candidate path. Relative inputs are anchored to
+     * sdir_real; absolute inputs are taken as-is and validated
+     * by the containment check below. */
+    char candidate[PATH_MAX];
+    int n;
+    if (input[0] == '/') {
+        n = snprintf(candidate, sizeof(candidate), "%s", input);
+    } else {
+        n = snprintf(candidate, sizeof(candidate), "%s/%s", sdir_real, input);
+    }
+    if (n <= 0 || (size_t)n >= sizeof(candidate)) {
+        *err = "path too long";
+        return -1;
+    }
+
+    char real[PATH_MAX];
+    if (!realpath(candidate, real)) {
+        /* Optional .wav fallback so the Play picker's extension-
+         * stripped values resolve. Only triggers when the input
+         * doesn't already carry an extension. */
+        if (append_wav) {
+            const char *slash = strrchr(candidate, '/');
+            const char *dot   = strrchr(candidate, '.');
+            int has_ext = (dot && (!slash || dot > slash));
+            size_t clen = strlen(candidate);
+            if (!has_ext && clen + 4 < sizeof(candidate)) {
+                memcpy(candidate + clen, ".wav", 5);
+                if (!realpath(candidate, real)) {
+                    *err = "file not found";
+                    return -1;
+                }
+            } else {
+                *err = "file not found";
+                return -1;
+            }
+        } else {
+            *err = "file not found";
+            return -1;
+        }
+    }
+
+    /* Containment check. Real path must be strictly inside
+     * sdir_real — i.e. begin with sdir_real followed by a '/'. */
+    if (strncmp(real, sdir_real, sdir_len) != 0 ||
+        real[sdir_len] != '/') {
+        *err = "path resolves outside sounds_dir";
+        return -1;
+    }
+
+    if (strlen(real) >= out_size) { *err = "path too long"; return -1; }
+    snprintf(out, out_size, "%s", real);
+    return 0;
+}
+
 static int cmd_queue(int argc, const char **argv, kerchunk_resp_t *r)
 {
     if (argc < 2 || (argc >= 2 && strcmp(argv[1], "help") == 0)) {
@@ -216,33 +303,25 @@ static int cmd_queue(int argc, const char **argv, kerchunk_resp_t *r)
         int depth = kerchunk_queue_depth();
         resp_int(r, "depth", depth);
     } else if (strcmp(argv[1], "inject") == 0 && argc >= 3) {
-        const char *path = argv[2];
-        if (strstr(path, "..") != NULL) {
-            resp_str(r, "error", "path traversal not allowed");
-            return -1;
-        }
-        /* Reject absolute paths outside sounds_dir for security */
-        if (path[0] == '/') {
-            const kerchunk_config_t *cfg = kerchunk_core_get_config();
-            const char *sdir = kerchunk_config_get(cfg, "general", "sounds_dir");
-            if (!sdir) sdir = "/usr/share/kerchunk/sounds";
-            if (strncmp(path, sdir, strlen(sdir)) != 0) {
-                resp_str(r, "error", "path must be relative or within sounds_dir");
-                return -1;
-            }
-        }
-        size_t plen = strlen(path);
-        if (plen < 4 ||
-            (strcmp(path + plen - 4, ".wav") != 0 &&
-             strcmp(path + plen - 4, ".pcm") != 0)) {
+        const char *input = argv[2];
+        size_t ilen = strlen(input);
+        if (ilen < 4 ||
+            (strcmp(input + ilen - 4, ".wav") != 0 &&
+             strcmp(input + ilen - 4, ".pcm") != 0)) {
             resp_str(r, "error", "only .wav and .pcm files allowed");
             return -1;
         }
-        int id = kerchunk_queue_add_file(path, 0);
+        char real[PATH_MAX];
+        const char *err = NULL;
+        if (resolve_under_sounds_dir(input, /*append_wav=*/0, real, sizeof(real), &err) != 0) {
+            resp_str(r, "error", err ? err : "path not allowed");
+            return -1;
+        }
+        int id = kerchunk_queue_add_file(real, 0);
         if (id >= 0) {
             resp_bool(r, "ok", 1);
             resp_int(r, "id", id);
-            resp_str(r, "path", path);
+            resp_str(r, "path", real);
             resp_int(r, "priority", 0);
         } else {
             resp_str(r, "error", "Failed to queue file");
@@ -621,30 +700,26 @@ static int cmd_play(int argc, const char **argv, kerchunk_resp_t *r)
 {
     if (argc < 2 || (argc >= 2 && strcmp(argv[1], "help") == 0)) {
         resp_text_raw(r, "Play a WAV file through the repeater\n\n"
-            "  play <path.wav>    Queue file for playback at normal priority.\n"
-            "                     WAV files at any sample rate are auto-resampled.\n");
-        resp_str(r, "error", "usage: play <path.wav>");
+            "  play <name>        Queue a sound from sounds_dir at normal\n"
+            "                     priority. <name> is a relative path; the .wav\n"
+            "                     extension is optional. Files outside sounds_dir\n"
+            "                     are rejected.\n\n"
+            "  Examples:\n"
+            "    play time/tm_eastern         (resolves time/tm_eastern.wav)\n"
+            "    play system/system_emergency_on\n");
+        resp_str(r, "error", "usage: play <name>");
         return -1;
     }
-    const char *path = argv[1];
-    if (strstr(path, "..") != NULL) {
-        resp_str(r, "error", "path traversal not allowed");
+    char real[PATH_MAX];
+    const char *err = NULL;
+    if (resolve_under_sounds_dir(argv[1], /*append_wav=*/1, real, sizeof(real), &err) != 0) {
+        resp_str(r, "error", err ? err : "path not allowed");
         return -1;
     }
-    /* Reject absolute paths outside sounds_dir for security */
-    if (path[0] == '/') {
-        const kerchunk_config_t *cfg = kerchunk_core_get_config();
-        const char *sdir = kerchunk_config_get(cfg, "general", "sounds_dir");
-        if (!sdir) sdir = "/usr/share/kerchunk/sounds";
-        if (strncmp(path, sdir, strlen(sdir)) != 0) {
-            resp_str(r, "error", "path must be relative or within sounds_dir");
-            return -1;
-        }
-    }
-    int id = kerchunk_queue_add_file(path, KERCHUNK_PRI_NORMAL);
+    int id = kerchunk_queue_add_file(real, KERCHUNK_PRI_NORMAL);
     if (id >= 0) {
         resp_bool(r, "ok", 1);
-        resp_str(r, "path", path);
+        resp_str(r, "path", real);
         resp_int(r, "id", id);
     } else {
         resp_str(r, "error", "Failed to queue file");

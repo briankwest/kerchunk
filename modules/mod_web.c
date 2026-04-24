@@ -1938,8 +1938,13 @@ static void walk_sounds(const char *base, const char *rel,
         char child_full[1024];
         snprintf(child_full, sizeof(child_full), "%s/%s", base, child_rel);
 
+        /* lstat (not stat) so symlinks are skipped, never followed —
+         * matches the cmd_play resolver which rejects anything whose
+         * realpath escapes sounds_dir. Listing things you can't play
+         * would just confuse the picker. */
         struct stat st;
-        if (stat(child_full, &st) != 0) continue;
+        if (lstat(child_full, &st) != 0) continue;
+        if (S_ISLNK(st.st_mode)) continue;
 
         if (S_ISDIR(st.st_mode)) {
             walk_sounds(base, child_rel, buf, len, max, first);
