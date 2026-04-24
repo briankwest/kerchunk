@@ -17,6 +17,7 @@
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -322,7 +323,9 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
             evt->announcement.description ? evt->announcement.description : "");
     fclose(fp);
 
-    g_today_calls++;
+    /* Announcements (CW ID, weather, time, ASR/AI, parrot, VM
+     * prompts) keep their CSV row for audit but do NOT count
+     * toward today_calls — only real voice traffic is tallied. */
     publish_cdr_snapshot();
 }
 
@@ -340,6 +343,65 @@ static int cdr_load(kerchunk_core_t *core)
     return 0;
 }
 
+/* Rebuild today_calls / today_seconds from today's CSV on disk so
+ * a daemon restart (deb upgrade, SIGHUP, crash recovery) doesn't
+ * silently zero the dashboard panel mid-day. The CSV is the
+ * authoritative record; the in-memory counters are just a cache.
+ *
+ * Skips rows where user_name == "system" (announcements: CW ID,
+ * weather, time, ASR/AI, parrot, VM prompts) so only voice
+ * traffic is tallied — same rule as on_announcement(). */
+static void replay_today_from_csv(void)
+{
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%04d-%02d-%02d.csv",
+             g_dir, t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        g_today_day = t->tm_yday;
+        return;
+    }
+
+    char line[2048];
+    int header = 1;
+    int    calls = 0;
+    double seconds = 0.0;
+    while (fgets(line, sizeof(line), fp)) {
+        if (header) { header = 0; continue; }
+
+        /* CSV cols: timestamp,date,time,user_id,user_name,method,
+         * duration_s,emergency,avg_rms,peak_rms,recording */
+        const char *fields[7] = {0};
+        fields[0] = line;
+        int idx = 0;
+        for (char *p = line; *p && idx < 6; p++) {
+            if (*p == ',') {
+                *p = '\0';
+                fields[++idx] = p + 1;
+            }
+        }
+        if (idx < 6) continue;
+
+        /* Skip announcement rows. */
+        if (strcmp(fields[4], "system") == 0) continue;
+
+        calls++;
+        seconds += atof(fields[6]);
+    }
+    fclose(fp);
+
+    g_today_calls   = calls;
+    g_today_seconds = seconds;
+    g_today_day     = t->tm_yday;
+
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "replayed today: %d calls, %.0fs from %s",
+                calls, seconds, path);
+}
+
 static int cdr_configure(const kerchunk_config_t *cfg)
 {
     const char *v;
@@ -352,7 +414,7 @@ static int cdr_configure(const kerchunk_config_t *cfg)
 
     if (g_enabled) {
         ensure_dir();
-        g_today_day = -1;
+        replay_today_from_csv();
     }
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "enabled=%d dir=%s", g_enabled, g_dir);
