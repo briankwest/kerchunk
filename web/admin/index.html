@@ -1074,14 +1074,20 @@ function fmtRemaining(sec){
 /* Authoritative caller-session render. Snapshot from mod_caller.
  * Authenticated → name + remaining countdown; not → "None". */
 function renderCallerSession(d){
+  renderCallerSession.last = d;
   const el = document.getElementById('caller');
   if (!el) return;
   if (!d || !d.authenticated) { el.textContent = 'None'; return; }
   const name = d.user_name || ('user '+d.user_id);
   const txing = d.current_user_id && d.current_user_id === d.user_id;
+  /* Derive remaining from session_started_at + session_timeout_sec
+   * so the countdown ticks locally between snapshots. */
+  const elapsed = d.session_started_at
+    ? Math.floor(Date.now()/1000) - d.session_started_at : 0;
+  const remaining = Math.max(0, (d.session_timeout_sec||0) - elapsed);
   el.innerHTML =
     '<strong>'+name+'</strong> (logged in via '+(d.method||'?')+
-    ', '+fmtRemaining(d.session_remaining_sec)+' left'+
+    ', '+fmtRemaining(remaining)+' left'+
     (txing ? ', transmitting' : '')+')';
 }
 
@@ -1101,6 +1107,7 @@ function fmtDuration(sec){
  * Mounts a fixed-position strip across the top with the remaining
  * countdown driven by emergency_expires_at. */
 function renderEmergency(s){
+  renderEmergency.last = s;
   let el = document.getElementById('emergency-banner');
   if (!s || !s.emergency){
     if (el) el.remove();
@@ -1125,19 +1132,29 @@ function renderEmergency(s){
 /* OTP elevated-sessions snapshot render — empty list when nobody
  * holds elevated access, otherwise one row per active session. */
 function renderOtpSessions(d){
+  renderOtpSessions.last = d;
   const el = document.getElementById('otp-sessions');
   if (!el) return;
   const list = (d && Array.isArray(d.sessions)) ? d.sessions : [];
   if (!list.length){ el.textContent = 'None'; return; }
-  el.innerHTML = list.map(s =>
-    '<div class="user-row"><span>'+
-    (s.name || ('user '+s.user_id))+'</span><span>'+
-    fmtRemaining(s.remaining_sec)+' left</span></div>').join('');
+  const now = Math.floor(Date.now()/1000);
+  const tot = d.session_timeout_sec || 0;
+  el.innerHTML = list.map(s => {
+    /* Derive remaining locally from started_at so the countdown
+     * ticks between snapshots. */
+    const remaining = s.started_at
+      ? Math.max(0, tot - (now - s.started_at))
+      : (s.remaining_sec || 0);
+    return '<div class="user-row"><span>'+
+      (s.name || ('user '+s.user_id))+'</span><span>'+
+      fmtRemaining(remaining)+' left</span></div>';
+  }).join('');
 }
 
 /* FreeSWITCH snapshot render — ESL link + call state + dialed
  * number with elapsed timer when CONNECTED. */
 function renderFreeswitch(d){
+  renderFreeswitch.last = d;
   const el = document.getElementById('freeswitch');
   if (!el) return;
   if (!d || typeof d.enabled === 'undefined'){ el.textContent = 'No data'; return; }
@@ -1156,8 +1173,12 @@ function renderFreeswitch(d){
   let call;
   if (d.call_state === 'connected'){
     const num = d.dialed_number || '?';
+    /* Live elapsed from call_started_at so the timer ticks. */
+    const elapsed = d.call_started_at
+      ? Math.floor(Date.now()/1000) - d.call_started_at
+      : (d.call_seconds || 0);
     call = '<span style="color:var(--accent)">📞 In call</span> '+num+
-           ' ('+fmtDuration(d.call_seconds||0)+')';
+           ' ('+fmtDuration(elapsed)+')';
   } else if (d.call_state === 'ringing'){
     call = '<span style="color:var(--yellow)">⌛ Ringing</span> '+(d.dialed_number||'?');
   } else if (d.call_state === 'dialing'){
@@ -1171,6 +1192,7 @@ function renderFreeswitch(d){
 
 /* CW ID snapshot render — countdown to next ID + mode/quiet flags. */
 function renderCwid(d){
+  renderCwid.last = d;
   const el = document.getElementById('cwid-table');
   if (!el) return;
   if (!d || !d.callsign){
@@ -1196,6 +1218,7 @@ function renderCwid(d){
 /* CDR snapshot render — today's call totals plus an in-call line
  * with the current caller (if any) and elapsed seconds. */
 function renderCdr(d){
+  renderCdr.last = d;
   const el = document.getElementById('cdr-table');
   if (!el) return;
   if (!d || typeof d.enabled === 'undefined'){
@@ -1208,8 +1231,12 @@ function renderCdr(d){
   if (d.in_call){
     const who = d.call_user_name ? d.call_user_name :
                 (d.call_user_id ? 'user '+d.call_user_id : 'unknown');
+    /* Live elapsed from call_started_at so the timer ticks. */
+    const elapsed = d.call_started_at
+      ? Math.floor(Date.now()/1000) - d.call_started_at
+      : (d.call_seconds || 0);
     html += '<tr><td><span style="color:var(--accent)">● In call</span></td>'+
-            '<td>'+who+' ('+fmtDuration(d.call_seconds||0)+')</td></tr>';
+            '<td>'+who+' ('+fmtDuration(elapsed)+')</td></tr>';
   }
   el.innerHTML = html;
 }
@@ -1772,6 +1799,22 @@ function setAudioVolume(v) {
    * periodic poll is needed. */
   connectSSE();
   setInterval(renderStats,1000);
+
+  /* Re-render countdown panels every second using each renderer's
+   * cached snapshot. Without this, "Next ID in 7m" / "logged in,
+   * 23m left" etc. only update when the next SSE event happens to
+   * arrive — minutes apart. The renderers compute live values from
+   * their epoch fields (next_fire_epoch, session_started_at,
+   * call_started_at, emergency_expires_at), so re-running them with
+   * the same cached data ticks naturally. */
+  setInterval(() => {
+    if (renderCwid.last)          renderCwid(renderCwid.last);
+    if (renderCallerSession.last) renderCallerSession(renderCallerSession.last);
+    if (renderOtpSessions.last)   renderOtpSessions(renderOtpSessions.last);
+    if (renderCdr.last)           renderCdr(renderCdr.last);
+    if (renderFreeswitch.last)    renderFreeswitch(renderFreeswitch.last);
+    if (renderEmergency.last)     renderEmergency(renderEmergency.last);
+  }, 1000);
 })();
 </script>
 </body>
