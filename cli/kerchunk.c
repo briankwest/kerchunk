@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/select.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -873,8 +874,43 @@ static int interactive_mode(const char *socket_path)
             }
         }
 
-        char *line = linenoise("kerchunk> ");
-        if (!line) break;  /* EOF / Ctrl-D */
+        /* Async edit mode: poll stdin AND the g_disconnected flag
+         * so a daemon shutdown drops us into the reconnect loop
+         * within ~200 ms instead of waiting for the user to press
+         * Enter. linenoise's blocking linenoise() call would sit
+         * on read(stdin) forever otherwise. */
+        struct linenoiseState ls;
+        char buf[4096];
+        if (linenoiseEditStart(&ls, -1, -1, buf, sizeof(buf), "kerchunk> ") < 0)
+            break;
+
+        char *line = NULL;
+        while (1) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(STDIN_FILENO, &rfds);
+            struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 };
+            int n = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+
+            if (g_disconnected) {
+                /* Wipe the prompt before the reconnect-loop banner
+                 * lands so we don't leave half-typed bytes behind. */
+                linenoiseHide(&ls);
+                linenoiseEditStop(&ls);
+                line = linenoiseEditMore;  /* signal: jump to outer reconnect */
+                break;
+            }
+
+            if (n > 0 && FD_ISSET(STDIN_FILENO, &rfds)) {
+                line = linenoiseEditFeed(&ls);
+                if (line == linenoiseEditMore) continue;
+                linenoiseEditStop(&ls);
+                break;
+            }
+        }
+
+        if (line == linenoiseEditMore) continue;  /* disconnected */
+        if (!line) break;                          /* EOF / Ctrl-D */
 
         if (line[0] == '\0') {
             linenoiseFree(line);
