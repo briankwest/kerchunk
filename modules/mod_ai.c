@@ -136,6 +136,13 @@ static char  g_sound_offline[128] = "system/ai_offline";
 static char  g_sound_error[128]   = "system/ai_error";
 static char  g_sound_timeout[128] = "system/ai_timeout";
 
+/* Cached sounds_dir from [general] so try_play_or_speak can stat
+ * a sound file before queueing it — the queue logs an ERROR when
+ * a file is missing at drain time, and the fallback TTS never
+ * fires because queue_add_file returned success at queue time.
+ * Defaults match the [general] sounds_dir default. */
+static char  g_sounds_dir[256] = "/usr/share/kerchunk/sounds";
+
 static int   g_max_consec_fail = 5;
 static int   g_disable_after_s = 300;
 
@@ -171,6 +178,13 @@ static int                g_worker_tid = -1;
  * or whether the caller should get a "standby" cue instead — see
  * ai_is_busy() and fire_standby_cue() below. */
 static _Atomic int        g_inflight;
+
+/* Forward decl — try_play_or_speak is used by the LLM error
+ * handler in run_ai_turn (defined earlier in the file); its
+ * implementation lives down near fire_standby_cue. */
+static void try_play_or_speak(const char *relname,
+                              const char *fallback_text,
+                              int priority);
 
 /* History (for `ai history` CLI) */
 static ai_history_entry_t g_history[AI_MAX_HISTORY];
@@ -624,7 +638,14 @@ static size_t append_message(char *buf, size_t max, size_t j,
             free(esc);
         }
     } else {
-        j += (size_t)snprintf(buf + j, max - j, ",\"content\":null");
+        /* Empty string rather than null.
+         *
+         * The OpenAI spec permits `"content": null` on an assistant
+         * message that carries tool_calls, but Ollama's
+         * /v1/chat/completions validator rejects it with
+         * HTTP 400 "invalid message content type: <nil>". Empty
+         * string is accepted by both OpenAI and Ollama. */
+        j += (size_t)snprintf(buf + j, max - j, ",\"content\":\"\"");
     }
     if (m->tool_calls_json && m->tool_calls_json[0]) {
         j += (size_t)snprintf(buf + j, max - j, ",\"tool_calls\":%s",
@@ -1018,10 +1039,7 @@ static int run_ai_turn(ai_conversation_t *c, int caller_id, char **out_text,
                 break;
             }
             free(body);
-            /* Try to play the pre-recorded WAV; otherwise fall back to TTS */
-            if (g_core->queue_audio_file(wav, KERCHUNK_PRI_NORMAL) != 0
-                && g_core->tts_speak)
-                g_core->tts_speak(fallback, KERCHUNK_PRI_NORMAL);
+            try_play_or_speak(wav, fallback, KERCHUNK_PRI_NORMAL);
             return -1;
         }
 
@@ -1131,6 +1149,38 @@ static int ai_is_busy(void)
     return queued > 0;
 }
 
+/* Try to play a pre-recorded sound file from <sounds_dir>/<relname>.wav;
+ * if the file is missing or can't be played, speak fallback_text via
+ * TTS instead.
+ *
+ * queue_add_file resolves the path by fopen() — it can't tell a
+ * missing file from a read error until drain time, at which point it
+ * logs an ERROR and silently drops the item (no fallback path
+ * reachable from here). We stat the file up-front so we can decide
+ * at the call site.
+ *
+ * Empty `relname` or empty fallback_text: that branch is skipped. */
+static void try_play_or_speak(const char *relname,
+                              const char *fallback_text,
+                              int priority)
+{
+    if (!g_core) return;
+
+    if (relname && relname[0]) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s.wav", g_sounds_dir, relname);
+        struct stat st;
+        if (stat(path, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+            if (g_core->queue_audio_file &&
+                g_core->queue_audio_file(path, priority) == 0)
+                return;  /* queued successfully */
+        }
+    }
+
+    if (g_core->tts_speak && fallback_text && fallback_text[0])
+        g_core->tts_speak(fallback_text, priority);
+}
+
 /* Play the configured standby cue (sound file / TTS / none).
  * Used when a transcript arrives while the worker is busy — tells
  * the caller we heard them but aren't ready yet, so they don't
@@ -1140,13 +1190,13 @@ static void fire_standby_cue(void)
     if (!g_core) return;
     if (strcmp(g_standby_cue, "none") == 0) return;
 
-    if (strcmp(g_standby_cue, "sound") == 0 &&
-        g_core->queue_audio_file &&
-        g_core->queue_audio_file(g_standby_sound, KERCHUNK_PRI_NORMAL) == 0) {
+    if (strcmp(g_standby_cue, "sound") == 0) {
+        try_play_or_speak(g_standby_sound, g_standby_text,
+                          KERCHUNK_PRI_NORMAL);
         return;
     }
 
-    /* "tts" mode, or fallback when the sound file is missing. */
+    /* "tts" mode */
     if (g_core->tts_speak && g_standby_text[0])
         g_core->tts_speak(g_standby_text, KERCHUNK_PRI_NORMAL);
 }
@@ -1552,6 +1602,11 @@ static int ai_configure(const kerchunk_config_t *cfg)
     if (v) snprintf(g_sound_error, sizeof(g_sound_error), "%s", v);
     v = kerchunk_config_get(cfg, "ai", "sound_timeout");
     if (v) snprintf(g_sound_timeout, sizeof(g_sound_timeout), "%s", v);
+
+    /* Pick up sounds_dir so try_play_or_speak() can resolve and stat
+     * the sound-file paths before queueing them. */
+    v = kerchunk_config_get(cfg, "general", "sounds_dir");
+    if (v) snprintf(g_sounds_dir, sizeof(g_sounds_dir), "%s", v);
 
     g_max_consec_fail =
         kerchunk_config_get_int(cfg, "ai", "max_consecutive_failures", 5);
