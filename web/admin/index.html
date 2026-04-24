@@ -208,27 +208,34 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 
   <!-- Statistics -->
   <div class="card">
-    <h2 style="display:flex;align-items:center;justify-content:space-between">
-      <span>RX / TX activity</span>
-      <span class="stats-range-toggle" style="display:flex;gap:4px">
-        <button class="btn btn-sm stats-range active" data-range="minute">1h</button>
-        <button class="btn btn-sm stats-range"        data-range="hourly">24h</button>
-        <button class="btn btn-sm stats-range"        data-range="daily">30d</button>
-      </span>
-    </h2>
-    <table id="stats-table"><tr><td colspan="2">Loading...</td></tr></table>
-    <!-- Three charts share one slot; range toggle above swaps which is
-         visible. Hover tooltip carries the RX/TX breakdown so we can
-         drop the per-chart legend entirely. Click to enlarge stays. -->
-    <div class="stats-chart" data-range="minute" style="margin-top:12px;cursor:pointer" title="Click to enlarge">
+    <h2>Statistics</h2>
+
+    <!-- Charts immediately under the title. Range toggle sits DIRECTLY
+         above the chart so the visual association is obvious — the
+         previous version had the toggle in the <h2> header with the
+         stats table separating it from the chart, which made it hard
+         to see which control affected which graph. Hover tooltip
+         carries the RX/TX breakdown, no legend needed. Click the
+         chart to enlarge. -->
+    <div class="stats-range-toggle"
+         style="display:flex;gap:4px;justify-content:flex-end;margin-bottom:4px">
+      <button class="btn btn-sm stats-range active" data-range="minute">1h</button>
+      <button class="btn btn-sm stats-range"        data-range="hourly">24h</button>
+      <button class="btn btn-sm stats-range"        data-range="daily">30d</button>
+    </div>
+    <div class="stats-chart" data-range="minute" style="cursor:pointer" title="Click to enlarge">
       <div style="position:relative;height:120px"><canvas id="chart-minute"></canvas></div>
     </div>
-    <div class="stats-chart" data-range="hourly" style="margin-top:12px;cursor:pointer;display:none" title="Click to enlarge">
+    <div class="stats-chart" data-range="hourly" style="cursor:pointer;display:none" title="Click to enlarge">
       <div style="position:relative;height:120px"><canvas id="chart-hourly"></canvas></div>
     </div>
-    <div class="stats-chart" data-range="daily" style="margin-top:12px;cursor:pointer;display:none" title="Click to enlarge">
+    <div class="stats-chart" data-range="daily" style="cursor:pointer;display:none" title="Click to enlarge">
       <div style="position:relative;height:120px"><canvas id="chart-daily"></canvas></div>
     </div>
+
+    <!-- Numeric summary below the chart — chart is the glance view,
+         table is the detail. -->
+    <table id="stats-table" style="margin-top:12px"><tr><td colspan="2">Loading...</td></tr></table>
     <div style="margin-top:12px">
       <h3 style="margin:0 0 6px;font-size:12px;color:var(--dim)">Top Users</h3>
       <table id="users-table" style="font-size:11px;width:100%">
