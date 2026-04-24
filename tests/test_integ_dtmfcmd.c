@@ -144,61 +144,12 @@ void test_integ_dtmfcmd(void)
                 "wrong event type");
     test_end();
 
-    /* 9. COR gate suppresses digits during gate period */
-    test_begin("dtmfcmd: COR gate suppresses digits");
-    {
-        kerchunk_config_t *cfg = kerchunk_config_create();
-        kerchunk_config_set(cfg, "dtmf", "cor_gate_ms", "200");
-        dtmfcmd_configure(cfg);
-        kerchunk_config_destroy(cfg);
-
-        reset_custom();
-        mock_fire_simple(KERCHEVT_COR_ASSERT);
-        /* Digit during gate should be suppressed */
-        mock_fire_dtmf('*');
-        mock_fire_dtmf('8');
-        mock_fire_dtmf('7');
-        mock_fire_dtmf('#');
-        test_assert(t_custom_fired == 0, "digit during gate should be suppressed");
-    }
-    test_end();
-
-    /* 10. COR gate expires, digits accepted */
-    test_begin("dtmfcmd: COR gate expires, digits accepted");
-    {
-        /* Fire the gate timer to simulate expiry */
-        test_assert(g_cor_gate_timer >= 0, "gate timer not set");
-        mock_fire_timer(g_cor_gate_timer);
-        test_assert(g_cor_gate_active == 0, "gate still active after expiry");
-
-        reset_custom();
-        mock_fire_dtmf('*');
-        mock_fire_dtmf('8');
-        mock_fire_dtmf('7');
-        mock_fire_dtmf('#');
-        test_assert(t_custom_fired >= 1, "digit after gate should dispatch");
-        test_assert(t_custom_type == (kerchevt_type_t)(KERCHEVT_CUSTOM + DTMF_EVT_VOICEMAIL_STATUS),
-                    "wrong event after gate");
-    }
-    test_end();
-
-    /* 11. COR gate disabled (cor_gate_ms=0) passes all digits */
-    test_begin("dtmfcmd: COR gate disabled passes digits");
-    {
-        kerchunk_config_t *cfg = kerchunk_config_create();
-        kerchunk_config_set(cfg, "dtmf", "cor_gate_ms", "0");
-        dtmfcmd_configure(cfg);
-        kerchunk_config_destroy(cfg);
-
-        reset_custom();
-        mock_fire_simple(KERCHEVT_COR_ASSERT);
-        mock_fire_dtmf('*');
-        mock_fire_dtmf('8');
-        mock_fire_dtmf('7');
-        mock_fire_dtmf('#');
-        test_assert(t_custom_fired >= 1, "digits should pass when gate disabled");
-    }
-    test_end();
+    /* Tests 9-11 (COR gate suppression / expiry / disabled) removed:
+     * the [dtmf] cor_gate_ms mechanism was deleted in the COR/DTMF
+     * re-architecture. Squelch-transient masking is now handled by
+     * the fused TX-activity detector (cos_bit OR dtmf_active) plus
+     * libplcode's own 2-block hysteresis + SNR + twist + harmonic
+     * checks. See ARCH-COR-DTMF.md. */
 
     mod_dtmfcmd.unload();
     for (int i = 0; i <= 8; i++)
