@@ -11,6 +11,7 @@
 #include "kerchunk.h"
 #include "kerchunk_log.h"
 #include "kerchunk_console.h"
+#include "kerchunk_txactivity.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1677,23 +1678,13 @@ int main(int argc, char **argv)
      * [repeater] cor_drop_hold if both present.
      *
      * See ARCH-COR-DTMF.md §11. */
-    int tx_published = 0;       /* last edge state we fired events for */
-    int tx_silent_ticks = 0;    /* consecutive ticks with all inputs quiet */
-    int tx_dtmf_seen_ago = INT_MAX/2;  /* ticks since last dtmf_active=1 */
-
-    /* Adaptive end-silence:
-     *   tx_end_silence_ms       — required quiet time on a pure-voice
-     *                              unkey (no recent DTMF). Default 300ms.
-     *   tx_end_silence_dtmf_ms  — required quiet time when DTMF activity
-     *                              has happened recently. Default 1000ms.
-     *                              Long enough to absorb inter-tone gaps
-     *                              on radios whose COS recovery is slow.
-     *   tx_dtmf_grace_ms        — how long after the last DTMF tone we
-     *                              stay in "patient" mode. Default 3000ms.
+    /* ── Fused TX-activity detector (state in kerchunk_txactivity_t,
+     *    logic in src/kerchunk_txactivity.c — testable in isolation).
      *
-     * Net effect: voice transmissions get fast unkey latency, DTMF
-     * sequences keep generous mid-sequence patience, and once a DTMF
-     * burst clearly ends (no tones for grace_ms) we fall back to fast.
+     * Replaces the old cor_drop_hold mechanism. Decides "user is
+     * transmitting" from cos_bit OR dtmf_active. Adaptive end-silence:
+     * normal value for voice unkey, longer value during/after DTMF
+     * activity to absorb inter-tone gaps. See ARCH-COR-DTMF.md §11.
      *
      * Back-compat: legacy [repeater] cor_drop_hold seeds end_silence_ms
      * if [txactivity] end_silence_ms is unset. */
@@ -1704,31 +1695,35 @@ int main(int argc, char **argv)
                                 "cor_drop_hold", 300);
     if (tx_end_silence_ms < 0)   tx_end_silence_ms = 0;
     if (tx_end_silence_ms > 5000) tx_end_silence_ms = 5000;
-    int tx_end_silence_ticks = tx_end_silence_ms / 20;
 
     int tx_end_silence_dtmf_ms = kerchunk_config_get_duration_ms(cfg,
                                     "txactivity", "end_silence_dtmf_ms", 1000);
     if (tx_end_silence_dtmf_ms < tx_end_silence_ms)
         tx_end_silence_dtmf_ms = tx_end_silence_ms;
     if (tx_end_silence_dtmf_ms > 5000) tx_end_silence_dtmf_ms = 5000;
-    int tx_end_silence_dtmf_ticks = tx_end_silence_dtmf_ms / 20;
 
     int tx_dtmf_grace_ms = kerchunk_config_get_duration_ms(cfg,
                                 "txactivity", "dtmf_grace_ms", 3000);
     if (tx_dtmf_grace_ms < 0)    tx_dtmf_grace_ms = 0;
     if (tx_dtmf_grace_ms > 30000) tx_dtmf_grace_ms = 30000;
-    int tx_dtmf_grace_ticks = tx_dtmf_grace_ms / 20;
 
     const char *tc_v = kerchunk_config_get(cfg, "txactivity", "trust_cos_bit");
     int tx_trust_cos = tc_v ? atoi(tc_v) : 1;
+
+    kerchunk_txactivity_t tx;
+    kerchunk_txactivity_init(&tx,
+        tx_end_silence_ms      / 20,
+        tx_end_silence_dtmf_ms / 20,
+        tx_dtmf_grace_ms       / 20,
+        tx_trust_cos);
 
     KERCHUNK_LOG_I(LOG_MOD,
         "TX-activity: end_silence=%dms (%d ticks) "
         "end_silence_dtmf=%dms (%d ticks) "
         "dtmf_grace=%dms (%d ticks) trust_cos=%d",
-        tx_end_silence_ms, tx_end_silence_ticks,
-        tx_end_silence_dtmf_ms, tx_end_silence_dtmf_ticks,
-        tx_dtmf_grace_ms, tx_dtmf_grace_ticks,
+        tx_end_silence_ms, tx.end_silence_ticks,
+        tx_end_silence_dtmf_ms, tx.end_silence_dtmf_ticks,
+        tx_dtmf_grace_ms, tx.dtmf_grace_ticks,
         tx_trust_cos);
 
 
@@ -1769,91 +1764,60 @@ int main(int argc, char **argv)
             kerchunk_core_unlock_config();
         }
 
-        /* ── Fused TX-activity detection (three-channel OR) ──
-         * Samples all three presence inputs this tick, declares the
-         * edge-published state, and fires COR_ASSERT/DROP events
-         * consumers already subscribe to. Events still named "COR"
-         * for compatibility, but are now derived from a fused
-         * signal — see ARCH-COR-DTMF.md. */
-        /* kerchunk_hid_read_cor() returns 0/1 on success, -1 on no data
-         * or device error. Only treat a confirmed 1 as COS present.
-         * Also remember the last known good state so a transient -1
-         * doesn't drop us out of RECEIVING during a burst of HID
-         * activity. */
+        /* Fused TX-activity tick (cos OR dtmf, adaptive end-silence).
+         * Logic in src/kerchunk_txactivity.c, unit-tested separately. */
         int cos_raw = tx_trust_cos ? kerchunk_hid_read_cor() : 0;
-        static int cos_bit_sticky = 0;
-        if (cos_raw == 0 || cos_raw == 1)
-            cos_bit_sticky = cos_raw;
-        int cos_bit = cos_bit_sticky;
         int dtmf_active = atomic_load(&g_tx_dtmf_active);
-        int present_now = cos_bit || dtmf_active;
+        int active_silence_before = kerchunk_txactivity_active_silence_ticks(&tx);
+        kerchunk_txact_event_t txev =
+            kerchunk_txactivity_tick(&tx, cos_raw, dtmf_active);
 
-        /* Track ticks since last DTMF tone so we can adapt the
-         * end-silence requirement: short on pure-voice unkeys (fast
-         * latency), long during/right-after DTMF (absorb inter-tone
-         * gaps where COS hasn't recovered yet). */
-        if (dtmf_active) tx_dtmf_seen_ago = 0;
-        else if (tx_dtmf_seen_ago < INT_MAX/2) tx_dtmf_seen_ago++;
-        int active_silence_ticks =
-            (tx_dtmf_seen_ago < tx_dtmf_grace_ticks)
-                ? tx_end_silence_dtmf_ticks
-                : tx_end_silence_ticks;
+        if (txev == KERCHUNK_TXACT_BEGIN) {
+            KERCHUNK_LOG_I(LOG_MOD,
+                "TX begin: cos=%d dtmf=%d",
+                tx.cos_bit_sticky, dtmf_active);
 
-        if (present_now) {
-            tx_silent_ticks = 0;
-            if (!tx_published) {
-                KERCHUNK_LOG_I(LOG_MOD,
-                    "TX begin: cos=%d dtmf=%d",
-                    cos_bit, dtmf_active);
-
-                /* Preempt queue if it was actively playing — incoming
-                 * transmission takes priority over announcements.
-                 * Fire QUEUE_PREEMPTED so modules (CWID, etc.) can re-queue. */
-                if (kerchunk_queue_is_draining() || kerchunk_queue_depth() > 0) {
-                    char preempt_source[QUEUE_SOURCE_MAX] = "";
-                    int flushed = kerchunk_queue_preempt(preempt_source,
-                                                          sizeof(preempt_source));
-                    if (flushed > 0) {
-                        KERCHUNK_LOG_I(LOG_MOD,
-                            "TX preempted queue: %d items flushed (source=%s)",
-                            flushed, preempt_source[0] ? preempt_source : "?");
-                        kerchevt_t pe = {
-                            .type = KERCHEVT_QUEUE_PREEMPTED,
-                            .timestamp_us = tick_start,
-                            .preempt = { .source = preempt_source,
-                                         .items_flushed = flushed },
-                        };
-                        kerchevt_fire(&pe);
-                    }
+            /* Preempt queue if it was actively playing — incoming
+             * transmission takes priority over announcements.
+             * Fire QUEUE_PREEMPTED so modules (CWID, etc.) can re-queue. */
+            if (kerchunk_queue_is_draining() || kerchunk_queue_depth() > 0) {
+                char preempt_source[QUEUE_SOURCE_MAX] = "";
+                int flushed = kerchunk_queue_preempt(preempt_source,
+                                                      sizeof(preempt_source));
+                if (flushed > 0) {
+                    KERCHUNK_LOG_I(LOG_MOD,
+                        "TX preempted queue: %d items flushed (source=%s)",
+                        flushed, preempt_source[0] ? preempt_source : "?");
+                    kerchevt_t pe = {
+                        .type = KERCHEVT_QUEUE_PREEMPTED,
+                        .timestamp_us = tick_start,
+                        .preempt = { .source = preempt_source,
+                                     .items_flushed = flushed },
+                    };
+                    kerchevt_fire(&pe);
                 }
+            }
 
-                kerchunk_core_set_cor(1);
-                kerchevt_t ev = {
-                    .type = KERCHEVT_COR_ASSERT,
-                    .timestamp_us = tick_start,
-                    .cor = { .active = 1 },
-                };
-                kerchevt_fire(&ev);
-                tx_published = 1;
-            }
-        } else if (tx_published) {
-            tx_silent_ticks++;
-            if (tx_silent_ticks >= active_silence_ticks) {
-                KERCHUNK_LOG_I(LOG_MOD,
-                    "TX end: silent for %d ticks (%d ms, mode=%s)",
-                    tx_silent_ticks, tx_silent_ticks * 20,
-                    (active_silence_ticks == tx_end_silence_dtmf_ticks)
-                        ? "dtmf-patient" : "voice");
-                kerchunk_core_set_cor(0);
-                kerchevt_t ev = {
-                    .type = KERCHEVT_COR_DROP,
-                    .timestamp_us = tick_start,
-                    .cor = { .active = 0 },
-                };
-                kerchevt_fire(&ev);
-                tx_published = 0;
-                tx_silent_ticks = 0;
-            }
+            kerchunk_core_set_cor(1);
+            kerchevt_t ev = {
+                .type = KERCHEVT_COR_ASSERT,
+                .timestamp_us = tick_start,
+                .cor = { .active = 1 },
+            };
+            kerchevt_fire(&ev);
+        } else if (txev == KERCHUNK_TXACT_END) {
+            KERCHUNK_LOG_I(LOG_MOD,
+                "TX end: silent for %d ticks (%d ms, mode=%s)",
+                active_silence_before, active_silence_before * 20,
+                (active_silence_before == tx.end_silence_dtmf_ticks)
+                    ? "dtmf-patient" : "voice");
+            kerchunk_core_set_cor(0);
+            kerchevt_t ev = {
+                .type = KERCHEVT_COR_DROP,
+                .timestamp_us = tick_start,
+                .cor = { .active = 0 },
+            };
+            kerchevt_fire(&ev);
         }
 
         /* Tick event */
