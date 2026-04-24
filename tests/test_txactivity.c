@@ -225,7 +225,9 @@ void test_txactivity(void)
     }
     test_end();
 
-    /* 10. Reassert during silence resets the counter. */
+    /* 10. Reassert during silence resets the counter AND pins the
+     *     patient window (the 0→1 reassert edge IS the flap signal —
+     *     see test 11a for the rationale). */
     test_begin("txactivity: reassert during silence resets counter");
     {
         kerchunk_txactivity_t s;
@@ -237,15 +239,111 @@ void test_txactivity(void)
         run_ticks(&s, 10, 0, 0, &b, &e);
         test_assert(s.silent_ticks == 10, "10 silent");
 
-        /* reassert */
+        /* reassert — this also triggers flap detection (cos 0→1 mid
+         * session), so the silence window extends to patient (50). */
         kerchunk_txactivity_tick(&s, 1, 0);
         test_assert(s.silent_ticks == 0, "silent_ticks reset on reassert");
+        test_assert(s.cos_flapped_session == 1, "reassert flags flap");
 
-        /* Now drop again — should still need full window */
-        run_ticks(&s, 14, 0, 0, &b, &e);
-        test_assert(e == 0, "no END before threshold (re-counted)");
+        /* Drop again — with flap flag set, window is now 50 ticks. */
+        run_ticks(&s, 49, 0, 0, &b, &e);
+        test_assert(e == 0, "no END before patient threshold (re-counted)");
         kerchunk_txact_event_t ev = kerchunk_txactivity_tick(&s, 0, 0);
-        test_assert(ev == KERCHUNK_TXACT_END, "END at 15 ticks after reassert");
+        test_assert(ev == KERCHUNK_TXACT_END,
+            "END at 50 ticks after reassert (patient window from flap)");
+    }
+    test_end();
+
+    /* 11a. COS flap detection — Retevis-style CTCSS chop mid-keyup.
+     *      Sequence: BEGIN on cos=1, cos drops to 0 (voice pause, CTCSS
+     *      lost lock), cos comes back 1 (CTCSS re-locked), user still
+     *      keying. The 0→1 transition should pin the session into the
+     *      dtmf-patient silence window. Subsequent cos=0 then takes
+     *      the longer window before END fires. */
+    test_begin("txactivity: cos 0→1 mid-session pins patient window");
+    {
+        kerchunk_txactivity_t s;
+        kerchunk_txactivity_init(&s, 15, 50, 150, 1);
+        kerchunk_txact_event_t ev;
+
+        /* BEGIN on cos=1 */
+        ev = kerchunk_txactivity_tick(&s, 1, 0);
+        test_assert(ev == KERCHUNK_TXACT_BEGIN, "BEGIN");
+        test_assert(s.cos_flapped_session == 0, "no flap yet");
+
+        /* cos drops; NOT a flap yet (cos went 1→0, not 0→1).
+         * Voice window still in effect. */
+        test_assert(kerchunk_txactivity_active_silence_ticks(&s) == 15,
+            "voice mode before any flap");
+        ev = kerchunk_txactivity_tick(&s, 0, 0);
+        test_assert(ev == KERCHUNK_TXACT_NONE, "still tracking");
+        test_assert(s.cos_flapped_session == 0,
+            "single 1→0 is not yet evidence of flap");
+
+        /* cos comes back 1 — THIS is the flap-back-up. Pin patient. */
+        ev = kerchunk_txactivity_tick(&s, 1, 0);
+        test_assert(ev == KERCHUNK_TXACT_NONE, "still in same session");
+        test_assert(s.cos_flapped_session == 1,
+            "flap flag set on 0→1 mid-session");
+        test_assert(kerchunk_txactivity_active_silence_ticks(&s) == 50,
+            "silence window extended to dtmf-patient (50 ticks)");
+
+        /* cos drops again; voice window (15 ticks) is NOT enough now.
+         * Push 30 silent ticks — should still NOT END. */
+        int b, e;
+        run_ticks(&s, 30, 0, 0, &b, &e);
+        test_assert(e == 0, "no END before patient threshold");
+        test_assert(s.published == 1, "still asserted");
+
+        /* Push to 50 silent ticks total — END. */
+        run_ticks(&s, 20, 0, 0, &b, &e);
+        test_assert(e == 1, "END at 50 ticks (patient window)");
+        test_assert(s.cos_flapped_session == 0,
+            "flap flag cleared on TX_END");
+    }
+    test_end();
+
+    /* 11b. Clean radio (no flap) keeps the fast voice tail. */
+    test_begin("txactivity: no flap → voice window preserved");
+    {
+        kerchunk_txactivity_t s;
+        kerchunk_txactivity_init(&s, 15, 50, 150, 1);
+        kerchunk_txact_event_t ev;
+
+        ev = kerchunk_txactivity_tick(&s, 1, 0);   /* BEGIN */
+        test_assert(ev == KERCHUNK_TXACT_BEGIN, "BEGIN");
+
+        /* cos drops clean at real unkey. No prior 0→1. */
+        int b, e;
+        run_ticks(&s, 14, 0, 0, &b, &e);
+        test_assert(e == 0, "voice threshold not yet met");
+        ev = kerchunk_txactivity_tick(&s, 0, 0);
+        test_assert(ev == KERCHUNK_TXACT_END,
+            "END at 15 ticks — fast voice tail preserved when no flap");
+    }
+    test_end();
+
+    /* 11c. Flap flag is per-session: after END, next session starts
+     *      fresh in voice mode. */
+    test_begin("txactivity: flap flag clears between sessions");
+    {
+        kerchunk_txactivity_t s;
+        kerchunk_txactivity_init(&s, 15, 50, 150, 1);
+
+        /* Session 1: flap, then END. */
+        kerchunk_txactivity_tick(&s, 1, 0);      /* BEGIN */
+        kerchunk_txactivity_tick(&s, 0, 0);      /* drop */
+        kerchunk_txactivity_tick(&s, 1, 0);      /* back up — flap set */
+        test_assert(s.cos_flapped_session == 1, "flap set in session 1");
+        int b, e;
+        run_ticks(&s, 50, 0, 0, &b, &e);
+        test_assert(e == 1, "session 1 END");
+        test_assert(s.cos_flapped_session == 0, "cleared on END");
+
+        /* Session 2: clean keyup, should get the fast window. */
+        kerchunk_txactivity_tick(&s, 1, 0);      /* BEGIN */
+        test_assert(kerchunk_txactivity_active_silence_ticks(&s) == 15,
+            "session 2 starts fresh in voice mode");
     }
     test_end();
 

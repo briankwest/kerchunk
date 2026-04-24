@@ -32,9 +32,14 @@ void kerchunk_txactivity_init(kerchunk_txactivity_t *s,
 int kerchunk_txactivity_active_silence_ticks(const kerchunk_txactivity_t *s)
 {
     if (!s) return 0;
-    return (s->dtmf_seen_ago < s->dtmf_grace_ticks)
-        ? s->end_silence_dtmf_ticks
-        : s->end_silence_ticks;
+    /* Extend to the dtmf-patient window whenever EITHER:
+     *   - we're within dtmf_grace of the last DTMF tone (original reason), or
+     *   - the COS bit has flapped 0→1 during this session (Retevis-class
+     *     CTCSS decoder losing lock on voice pauses — once observed, pin
+     *     the longer window for the rest of the session). */
+    if (s->dtmf_seen_ago < s->dtmf_grace_ticks || s->cos_flapped_session)
+        return s->end_silence_dtmf_ticks;
+    return s->end_silence_ticks;
 }
 
 kerchunk_txact_event_t
@@ -43,6 +48,11 @@ kerchunk_txactivity_tick(kerchunk_txactivity_t *s,
                          int dtmf_active)
 {
     if (!s) return KERCHUNK_TXACT_NONE;
+
+    /* Snapshot the previous sticky value BEFORE we update it so we can
+     * detect a 0→1 transition during an active session — see the flap
+     * heuristic below. */
+    int prev_cos_bit = s->cos_bit_sticky;
 
     /* COS bit handling — sticky over HID -1 (no-data) returns. Only
      * accept definitive 0 or 1 readings. trust_cos_bit=0 forces
@@ -54,6 +64,16 @@ kerchunk_txactivity_tick(kerchunk_txactivity_t *s,
         s->cos_bit_sticky = 0;
     }
     int cos_bit = s->cos_bit_sticky;
+
+    /* Flap detection: during an active session (published=1), a 0→1
+     * transition on the COS bit means it dropped mid-keyup and came
+     * back up — i.e. the radio's CTCSS/DCS decoder is losing lock.
+     * A clean radio stays 1 throughout the entire keyup and only
+     * drops to 0 at the real unkey. Once set, cos_flapped_session
+     * pins active_silence_ticks() into the patient window until
+     * TX_END clears it. */
+    if (s->published && prev_cos_bit == 0 && cos_bit == 1)
+        s->cos_flapped_session = 1;
 
     /* Track ticks since last DTMF tone, for the adaptive end-silence. */
     if (dtmf_active) {
@@ -80,6 +100,7 @@ kerchunk_txactivity_tick(kerchunk_txactivity_t *s,
         if (s->silent_ticks >= active_silence) {
             s->published = 0;
             s->silent_ticks = 0;
+            s->cos_flapped_session = 0;  /* session over — reset flappy flag */
             return KERCHUNK_TXACT_END;
         }
     }

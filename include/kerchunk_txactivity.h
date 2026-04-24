@@ -42,6 +42,16 @@ typedef struct {
     int silent_ticks;            /* consecutive ticks with all inputs quiet */
     int dtmf_seen_ago;           /* ticks since last dtmf_active=1 */
     int cos_bit_sticky;          /* 0/1 — last definitive cos value, sticky over -1 */
+    int cos_flapped_session;     /* 0/1 — set when cos_bit went 0→1 during an
+                                  * active session (i.e. it had previously
+                                  * dropped mid-keyup and came back up).
+                                  * Radios whose CTCSS/DCS decoder loses
+                                  * lock during voice pauses (Retevis) flap
+                                  * reliably; this flag pins the detector
+                                  * into the longer dtmf-patient silence
+                                  * window for the rest of the session so
+                                  * the next brief COS drop doesn't trigger
+                                  * a premature TX_END. Cleared on TX_END. */
 } kerchunk_txactivity_t;
 
 /* Initialize state. All ticks values are in 20 ms units (caller has
