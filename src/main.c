@@ -970,14 +970,14 @@ static const char *get_tx_state(void)
  *     - g_audio_state.* (everything except the *_ms config fields)
  *
  *   Mutated locals (would become state-struct fields in Phase 2/3):
- *     - prev_dtmf
+ *     - rx_tick.prev_dtmf
  *     - deadline, t0
  */
 static void *audio_thread_fn(void *arg)
 {
     audio_thread_ctx_t *ctx = (audio_thread_ctx_t *)arg;
 
-    int prev_dtmf = 0;
+    kerchunk_audio_tick_rx_state_t rx_tick = { .prev_dtmf = 0 };
 
     KERCHUNK_LOG_I(LOG_MOD, "audio thread started (tick=%dus)", AUDIO_TICK_US);
 
@@ -1074,126 +1074,64 @@ static void *audio_thread_fn(void *arg)
         kerchevt_fire(&audio_evt);
         kerchunk_core_dispatch_taps(&audio_evt);
 
-        /* Reset DTMF decoder on COR assert BEFORE processing this
-         * tick's audio — otherwise the first frame of a new
-         * transmission is fed into a decoder still holding Goertzel
-         * accumulators, hysteresis counters, and current_digit from
-         * the PREVIOUS transmission. That lets a spurious DTMF_DIGIT
-         * leak into the new session and (intermittently) locks the
-         * decoder onto the wrong digit for the first real tone.
-         * Particularly bad when the user rekeys during the courtesy
-         * tone / relay drain window. */
-        if (relay_active && !g_audio_state.relay_was_active)
-            plcode_dtmf_dec_reset(ctx->dtmf_dec);
+        /* ── RX sub-tick: decoder reset edge, DTMF process + events,
+         *    relay drain-start edge, relay decision + early-stop.
+         *    Pure function over state; see src/kerchunk_audio_tick.c
+         *    and PLAN-AUDIO-TICK.md §4 Phase 2. */
+        kerchunk_audio_tick_rx_out_t rx_out;
+        kerchunk_audio_tick_rx(&g_audio_state,
+                               &rx_tick,
+                               ctx->dtmf_dec,
+                               frame, nread,
+                               relay_active,
+                               kerchunk_core_get_ptt(),
+                               kerchunk_audio_playback_writable(),
+                               g_sample_rate,
+                               &rx_out);
 
-        /* ── DTMF decoder: only process when COR active or draining ──
-         * Saves CPU and prevents false detections from noise/silence.
-         * The relay drain window catches late digits in the squelch tail. */
-        if (relay_active || g_audio_state.relay_drain > 0) {
-            plcode_dtmf_result_t dtmf_res;
-            plcode_dtmf_dec_process(ctx->dtmf_dec, frame, (size_t)nread, &dtmf_res);
+        /* Publish DTMF-active to the fused TX-activity detector in the
+         * main thread (one of the two presence inputs). */
+        atomic_store(&g_tx_dtmf_active, rx_out.dtmf_active);
 
-            /* Publish DTMF-active to the fused TX-activity detector in
-             * the main thread (one of the two presence inputs). */
-            atomic_store(&g_tx_dtmf_active, dtmf_res.detected ? 1 : 0);
-
-            if (dtmf_res.detected && !prev_dtmf) {
-                KERCHUNK_LOG_I(LOG_MOD, "DTMF: %c", dtmf_res.digit);
-                kerchevt_t evt = {
-                    .type = KERCHEVT_DTMF_DIGIT,
-                    .timestamp_us = t0,
-                    .dtmf = { .digit = dtmf_res.digit, .duration_ms = 0 },
-                };
-                kerchevt_fire(&evt);
-            } else if (!dtmf_res.detected && prev_dtmf) {
-                kerchevt_t evt = {
-                    .type = KERCHEVT_DTMF_END,
-                    .timestamp_us = t0,
-                    .dtmf = { .digit = '\0', .duration_ms = 0 },
-                };
-                kerchevt_fire(&evt);
-            }
-            prev_dtmf = dtmf_res.detected;
-        } else {
-            /* Decoder not running this tick — ensure the fused detector
-             * in the main thread doesn't see stale detection state. */
-            atomic_store(&g_tx_dtmf_active, 0);
-            if (prev_dtmf) {
-                /* COR gone and drain expired — emit final DTMF_END if
-                 * a tone was still held when signal dropped */
-                kerchevt_t evt = {
-                    .type = KERCHEVT_DTMF_END,
-                    .timestamp_us = t0,
-                    .dtmf = { .digit = '\0', .duration_ms = 0 },
-                };
-                kerchevt_fire(&evt);
-                prev_dtmf = 0;
-            }
+        /* Translate rx_out events into event-bus fires. */
+        if (rx_out.event == KERCHUNK_TICK_RX_DTMF_DIGIT) {
+            KERCHUNK_LOG_I(LOG_MOD, "DTMF: %c", rx_out.digit);
+            kerchevt_t evt = {
+                .type = KERCHEVT_DTMF_DIGIT,
+                .timestamp_us = t0,
+                .dtmf = { .digit = rx_out.digit, .duration_ms = 0 },
+            };
+            kerchevt_fire(&evt);
+        } else if (rx_out.event == KERCHUNK_TICK_RX_DTMF_END) {
+            kerchevt_t evt = {
+                .type = KERCHEVT_DTMF_END,
+                .timestamp_us = t0,
+                .dtmf = { .digit = '\0', .duration_ms = 0 },
+            };
+            kerchevt_fire(&evt);
         }
 
-        /* ── Software relay: retransmit RX audio with TX encoder ──
-         *
-         * When the RT-97L's internal relay is off, kerchunkd captures RX
-         * audio, mixes in the TX CTCSS/DCS tone, and writes it to the
-         * playback ring buffer. This gives full software control over
-         * what gets retransmitted.
-         *
-         * When COR drops, we don't stop instantly — we drain remaining
-         * captured audio (relay_drain countdown) so the last few frames
-         * of speech aren't cut off mid-word.
-         */
-        /* Detect COR drop → start drain countdown */
-        if (g_audio_state.software_relay && g_audio_state.relay_was_active && !relay_active) {
-            g_audio_state.relay_drain = (g_sample_rate * g_audio_state.relay_drain_ms) / 1000;
-        }
-        g_audio_state.relay_was_active = relay_active;
+        /* Relay write: copy frame, apply TX scrambler, push to
+         * playback ring + playback taps. All I/O lives here so the
+         * pure tick function stays scrambler-hook-free. */
+        if (rx_out.relay_write) {
+            int16_t relay_buf[KERCHUNK_MAX_FRAME_SAMPLES];
+            memcpy(relay_buf, frame, (size_t)nread * sizeof(int16_t));
 
-        /* Relay when COR active OR drain timer running.
-         * The drain timer gives captured audio time to flush through
-         * the relay path after COR drops. Configurable via relay_drain. */
-        /* Don't relay while queue is transmitting — any COR during queue TX
-         * is feedback from our own transmission, not a real signal.  Without
-         * this guard the relay fills the playback ring with noise and the
-         * queue can never release PTT (playback_pending never reaches 0). */
-        int do_relay = g_audio_state.software_relay && kerchunk_core_get_ptt() &&
-                       !g_audio_state.queue_ptt &&
-                       (relay_active || g_audio_state.relay_drain > 0);
-
-        if (do_relay && nread > 0) {
-            if (kerchunk_audio_playback_writable() >= (size_t)nread) {
-                int16_t relay_buf[KERCHUNK_MAX_FRAME_SAMPLES];
-                memcpy(relay_buf, frame, (size_t)nread * sizeof(int16_t));
-
-                /* TX scrambler before CTCSS/DCS mix */
-                {
-                    void *scr_ctx;
-                    kerchunk_scrambler_fn scr_fn = kerchunk_core_get_tx_scrambler(&scr_ctx);
-                    if (scr_fn)
-                        scr_fn(relay_buf, (size_t)nread, scr_ctx);
-                }
-
-                kerchunk_audio_playback(relay_buf, (size_t)nread);
-
-                /* Dispatch to playback taps (TX recording) */
-                kerchevt_t relay_evt = {
-                    .type = KERCHEVT_AUDIO_FRAME,
-                    .audio = { .samples = relay_buf, .n = (size_t)nread },
-                };
-                kerchunk_core_dispatch_playback_taps(&relay_evt);
-
-                /* Count down drain timer after COR dropped.
-                 * Early stop: if captured audio is below noise floor, speech
-                 * has ended — skip remaining drain so courtesy tone plays
-                 * immediately instead of waiting the full relay_drain period. */
-                if (!relay_active && g_audio_state.relay_drain > 0) {
-                    g_audio_state.relay_drain -= nread;
-                    int64_t pwr = 0;
-                    for (int k = 0; k < nread; k++)
-                        pwr += (int64_t)frame[k] * frame[k];
-                    if (pwr / nread < 200 * 200)  /* ~200 RMS = noise floor */
-                        g_audio_state.relay_drain = 0;
-                }
+            {
+                void *scr_ctx;
+                kerchunk_scrambler_fn scr_fn = kerchunk_core_get_tx_scrambler(&scr_ctx);
+                if (scr_fn)
+                    scr_fn(relay_buf, (size_t)nread, scr_ctx);
             }
+
+            kerchunk_audio_playback(relay_buf, (size_t)nread);
+
+            kerchevt_t relay_evt = {
+                .type = KERCHEVT_AUDIO_FRAME,
+                .audio = { .samples = relay_buf, .n = (size_t)nread },
+            };
+            kerchunk_core_dispatch_playback_taps(&relay_evt);
         }
         }  /* end RX per-frame catchup loop */
 
