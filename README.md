@@ -6,9 +6,9 @@
 
 A custom repeater controller for the Retevis RT97L repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 or AIOC (All-In-One-Cable) USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode). Supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) operation.
 
-**30 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs / Wyoming), ASR (Wyoming speech recognition), **AI voice assistant (OpenAI-compatible LLM with tool calling)**, parrot/echo, CDR, statistics, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry, PoC radio bridge.
+**31 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs / Wyoming), ASR (Wyoming speech recognition), **AI voice assistant (OpenAI-compatible LLM with tool calling)**, parrot/echo, CDR, statistics, system stats, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry, PoC radio bridge.
 
-**288 tests** — unit + integration test coverage with mock core vtable.
+**318 tests** — unit + integration test coverage, including 35 tests for the pure audio-thread functions (`kerchunk_audio_tick_rx`, `kerchunk_audio_tick_tx`, ring-commit + `paInputUnderflow`, repeat-last fill) and 11 tests for the fused TX-activity detector (`kerchunk_txactivity`).
 
 **Embedded CLI** — interactive console with tab completion and history when running in foreground mode (`kerchunkd -f`). Log output streams above the prompt.
 
@@ -24,7 +24,7 @@ A custom repeater controller for the Retevis RT97L repeater, built in C11 for Ra
 
 **Heartbeat event** — 5-second keepalive for SSE/WebSocket clients.
 
-**19 core CLI commands, 30+ module CLI commands** (including `ai`, `ai tools`, `ai history`, `ai ask <text>`, `ai reset`) with full inline help and tab completion.
+**19 core CLI commands, 28 module CLI commands** (including `ai`, `ai tools`, `ai history`, `ai ask <text>`, `ai reset`) with full inline help and tab completion.
 
 ## Table of Contents
 
@@ -71,6 +71,7 @@ A custom repeater controller for the Retevis RT97L repeater, built in C11 for Ra
   - [mod_scrambler — Voice Scrambler (Part 90 only)](#mod_scrambler--voice-scrambler-part-90-only)
   - [mod_sdr — SDR Channel Monitor](#mod_sdr--sdr-channel-monitor)
   - [mod_freeswitch — FreeSWITCH AutoPatch](#mod_freeswitch--freeswitch-autopatch)
+  - [mod_sysstats — System Stats](#mod_sysstats--system-stats)
   - [mod_poc — PoC Radio Bridge](#mod_poc--poc-radio-bridge)
   - [mod_gpio — GPIO Relay Control](#mod_gpio--gpio-relay-control)
   - [mod_logger — Event Logger](#mod_logger--event-logger)
@@ -208,7 +209,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  └──────────┘  └──────────┘  └──────────┘                     │
 │                                                               │
 │  ┌──────────────────────────────────────────────────────────┐ │
-│  │                  Loaded Modules (30)                     │ │
+│  │                  Loaded Modules (31)                     │ │
 │  │                                                          │ │
 │  │  mod_repeater   RX state machine (IDLE/RECV/TAIL/HANG)   │ │
 │  │  mod_cwid       Morse CW ID + voice ID via TTS           │ │
@@ -232,6 +233,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_poc        PoC radio server bridge (libpoc)         │ │
 │  │  mod_nws        NWS weather alert monitor                │ │
 │  │  mod_stats      Statistics, metrics, persistence         │ │
+│  │  mod_sysstats   System stats (CPU, mem, temp, uptime)    │ │
 │  │  mod_web        HTTP server + SSE + web dashboard        │ │
 │  │  mod_webhook    HTTP POST notifications on events        │ │
 │  │  mod_scrambler  Frequency inversion voice scrambler      │ │
@@ -246,11 +248,15 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 
 ### Threading Model
 
-- **Audio thread** (20ms) — captures audio, runs libplcode decoders (CTCSS/DCS/DTMF), software relay with drain, drains outbound queue, manages queue-driven PTT
-- **Main thread** (20ms) — processes timers, polls control socket, handles COR/PTT, config reloads
+- **Audio thread** (20ms) — captures audio, runs libplcode decoders (CTCSS/DCS/DTMF), software relay with drain, drains outbound queue, manages queue-driven PTT. Decisions live in pure functions (`kerchunk_audio_tick_rx`, `kerchunk_audio_tick_tx`) over a single `kerchunk_audio_state_t`, so they're unit-tested without PortAudio. PortAudio callbacks are thin wrappers over `kerchunk_audio_ring_commit()`, which handles `paInputUnderflow` drop and capture resample.
+- **Main thread** (20ms) — fused TX-activity detector (COS bit OR DTMF decoder detected → `COR_ASSERT/DROP`), timers, control socket, config reload. See [ARCH-COR-DTMF.md](ARCH-COR-DTMF.md) for the COR/DTMF design.
 - **Web thread** — accepts HTTP connections, serves API/SSE/static files
+- **Audio flush thread** (5ms) — drains the web-audio SPSC ring and wakes mongoose via `mg_wakeup` so WebSocket listeners get steady frames
 - **TTS thread** — async synthesis via ElevenLabs cloud or Wyoming local server (non-blocking)
+- **ASR thread** — async transcription via Wyoming ASR server (non-blocking)
+- **AI thread** — LLM + tool-calling worker (non-blocking)
 - **NWS thread** — async weather alert polling (non-blocking)
+- **SDR thread** — async channel monitor capture (non-blocking)
 
 #### Thread Safety
 
@@ -459,7 +465,7 @@ cd kerchunk
 autoreconf -fi
 ./configure
 make
-make check       # Run test suite (288 tests)
+make check       # Run test suite (318 tests)
 sudo make install
 ```
 
@@ -797,7 +803,7 @@ User config: add `totp_secret = <base32 key>` to `[user.N]` sections.
 
 ### mod_parrot — Echo/Parrot
 
-`*88#` arms. Records next transmission (max 10s), plays back for audio quality check.
+`*88#` arms. Records next transmission (max 10s), plays back for audio quality check. After playback, reports the peak sample level (dBFS) and the speech-active average RMS (measured only on frames above a ~-40 dBFS noise floor, so long user pauses don't dilute the reading). This makes it a cheap on-radio audio-level check: "your peak was -6 dBFS, average -18 dBFS" is actionable; "average 3%" from a long-silence dilution was not.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -1025,6 +1031,29 @@ Uses an RTL-SDR dongle (librtlsdr) to monitor a single channel. Tunes to the cha
 
 Config section: `[sdr]`. CLI: `sdr`. Requires `librtlsdr-dev`.
 
+### mod_freeswitch — FreeSWITCH AutoPatch
+
+Ham-only (`*0<digits>#` to dial, `*0#` to hang up). Connects to a local FreeSWITCH via ESL for outbound calls — e.g., phone patch for emergencies, or a SIP bridge to cellular. Supports VOX-keyed audio, jitter buffer, DTMF dial/hangup events, admin-only mode, and dial/inactivity timeouts. ESL connection uses exponential backoff + a circuit breaker (1s/2s/4s/8s/16s/30s cap, stops after 16 failed attempts) so a stopped FreeSWITCH doesn't flood the log with reconnect noise.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | on/off | `off` | Enable AutoPatch |
+| `esl_host` | string | `127.0.0.1` | FreeSWITCH ESL host |
+| `esl_port` | int | `8021` | ESL port |
+| `esl_password` | string | `ClueCon` | ESL password |
+| `sip_gateway` | string | | Dial prefix for outbound bridge |
+| `admin_only` | on/off | `off` | Require admin access to use |
+| `dial_timeout` | s | `60` | Max dial+connect time |
+| `inactivity_timeout` | s | `600` | Max idle time during call |
+
+See [FREESWITCH.md](FREESWITCH.md) for the full ESL + dialplan setup. Config section: `[freeswitch]`. CLI: `freeswitch`.
+
+### mod_sysstats — System Stats
+
+Reports host CPU load, memory usage, disk temperature, and uptime to the web dashboard and via CLI. Purely informational; no RF activity. Useful for headless Raspberry Pi deployments where you want a status glance.
+
+Config section: (none; no knobs). CLI: `sys`.
+
 ### mod_gpio — GPIO Relay Control
 
 DTMF `*41<pin>#` on, `*40<pin>#` off. Only pins listed in `allowed_pins` can be controlled. All GPIO pins are 3.3V logic — use a relay board or transistor driver for loads requiring more current.
@@ -1223,13 +1252,13 @@ The public dashboard (`index.html`) includes a GMRS coverage map. The full cover
 ## Testing
 
 ```bash
-make check    # 288 tests across 2 binaries (test_kerchunk + test_web_acl)
+make check    # 318 tests across 2 binaries (test_kerchunk + test_web_acl)
 ```
 
-- **Unit tests**: event bus, config parser, queue, repeater state events, CW ID encoding, response system, admin ACL, scheduler, recursion cap
+- **Unit tests**: event bus, config parser, queue, repeater state events, CW ID encoding, response system, admin ACL, scheduler, recursion cap, fused TX-activity detector (`kerchunk_txactivity`), SPSC audio ring + PA-callback commit + `paInputUnderflow` drop + repeat-last fill, RX audio sub-tick (decoder reset-on-assert-edge, DTMF event edges, relay drain + early-stop), TX audio sub-tick (queue-pause gate, tx_delay/tail silence budgets, drain cadence, tail-cancel-on-requeue, PTT release with hold-ticks)
 - **Integration tests**: repeater state machine (including closed repeater), DTMF dispatch, caller identification, voicemail, timers, user database, DSP decoders, recorder, TX encoder, emergency, parrot, CDR, CWID, stats (including persistence), OTP authentication, voice scrambler, FreeSWITCH bridge, admin IP restriction
 
-Tests use a mock core vtable (`test_integ_mock.h`) that records every call for white-box assertions. Module `.c` files are included directly into the integration tests after redefining `KERCHUNK_MODULE_DEFINE`, giving tests access to static globals for full introspection.
+Tests come in two styles. Pure unit tests drive the extracted functions directly (no mocks, no module includes) — this is how `kerchunk_audio_tick_rx/tx`, `kerchunk_audio_ring_commit`, and `kerchunk_txactivity` are covered. Integration tests use a mock core vtable (`test_integ_mock.h`) that records every call, and include module `.c` files directly into the test binary after redefining `KERCHUNK_MODULE_DEFINE`, giving tests access to static globals for full introspection.
 
 ## License
 

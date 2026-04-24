@@ -341,7 +341,7 @@ git clone https://github.com/briankwest/kerchunk.git
 cd kerchunk
 autoreconf -fi
 ./configure
-make            # Builds daemon, CLI, and all 30 modules (optional modules skipped if deps missing)
+make            # Builds daemon, CLI, and all 31 modules (optional modules skipped if deps missing)
 make check      # Runs the test suite (all must pass)
 ```
 
@@ -349,7 +349,7 @@ Build outputs:
 - `kerchunkd` -- the daemon
 - `kerchunk` -- the CLI tool
 - `modules/*.so` -- up to 30 loadable modules (subject to which optional libraries are installed)
-- `test_kerchunk` -- test binary (288 tests)
+- `test_kerchunk` -- test binary (318 tests)
 
 ### Linux Setup
 
@@ -472,14 +472,16 @@ Order matters for dependencies:
 | `agc` | (unset) | ALSA AGC switch (`on` or `off`, unset = don't change) |
 | `preemphasis` | `off` | Pre-emphasis filter (RT-97L handles this in hardware) |
 
+**Under-run handling:** when the USB sound card fails to deliver fresh samples for a PortAudio callback period (the `paInputUnderflow` flag), the audio engine drops that zero-filled buffer instead of writing silence into the capture ring. The audio thread's empty-ring path then fills the missing frame with repeat-last-sample, so the DTMF decoder's hysteresis and the relay/web/recorder paths see continuous audio. This is a silent mechanism — you won't see log lines unless audio is broken; if you're debugging jitter check `journalctl -u kerchunkd | grep -i underflow`.
+
 #### `[hid]` -- USB HID Interface
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `device` | `/dev/rimlite` | HID device path |
-| `cor_bit` | `0` | GPIO bit for COR input (0-7) |
+| `cor_bit` | `0` | GPIO bit for COR input (0-7). On RIM-Lite v2 set this to `2` (GPIO2); on CM119 breakouts it's typically `3`. Values >7 clamp back to 2. |
 | `cor_polarity` | `active_low` | COR polarity: `active_low` or `active_high` |
-| `ptt_bit` | `2` | GPIO pin number for PTT output (1-8) |
+| `ptt_bit` | `2` | GPIO bit for PTT output (0-7). Values >7 clamp to 2. |
 
 #### `[repeater]` -- State Machine and Timers
 
@@ -659,6 +661,8 @@ Avoid models smaller than ~7B for production — they can emit structurally-vali
 |-----|---------|-------------|
 | `max_duration` | `10` | Maximum recording length in seconds (capped at 30) |
 
+After playback, mod_parrot logs the **peak sample level** (dBFS) and **speech-active average RMS** (dBFS, measured only across frames above a ~-40 dBFS noise floor). Use this on-radio as a cheap audio-level check: if your peak is below -12 dBFS, turn up TX audio on the interface. Speech-active RMS ignores long silent gaps, so you get a useful number even if you pause while talking.
+
 #### `[courtesy]` -- Courtesy Tone
 
 | Key | Default | Description |
@@ -675,6 +679,8 @@ Avoid models smaller than ~7B for production — they can emit structurally-vali
 | `hits_to_begin` | `1` | Consecutive 20 ms tone blocks before decoder lock-on |
 | `misses_to_end` | `3` | Consecutive 20 ms silent blocks before tone-end |
 | `min_off_frames` | `1` | Silence (in 20 ms blocks) required before SAME digit can re-fire |
+
+The decoder is a libplcode Goertzel-based state machine (IDLE → PENDING → ACTIVE → COOLDOWN). The kerchunk defaults above are **looser** than libplcode's upstream (`2/3/2`) so tight-squelch radios that briefly drop audio between the CTCSS recovery and the tone still detect the digit, and so fast double-taps of the same digit (`*88#`, `*911#`) aren't collapsed into one. Raise these on noisy lines if you see spurious double-detects. The decoder is reset on every COR-assert edge — stale state from a prior session never leaks into a new keyup (see `ARCH-COR-DTMF.md` §12 item #4).
 
 #### `[recording]` -- Transmission Recording
 
@@ -775,6 +781,8 @@ DTMF: `*97#` toggle, `*970#` off, `*971#`-`*978#` set code. CW ID and emergency 
 | `dial_whitelist` | (none) | Comma-separated list of allowed number patterns |
 
 DTMF: `*0<digits>#` to dial, `*0#` to hang up. See [FREESWITCH.md](FREESWITCH.md) for FreeSWITCH server configuration and architecture details.
+
+**ESL connection resilience:** if the FreeSWITCH server is unreachable at startup or goes down mid-session, mod_freeswitch retries with exponential backoff (1s / 2s / 4s / 8s / 16s / 30s cap, 16 attempts maximum). After the cap it stops retrying until a manual `freeswitch enable` or config reload. This prevents a stopped FS from flooding the log with ~25 warnings per second while giving you a reasonable window for transient network hiccups.
 
 #### `[sdr]` -- SDR Channel Monitor
 
@@ -1204,6 +1212,15 @@ The event logger (`mod_logger`) automatically rotates the log file when it reach
 
 **Audio cuts off mid-word:**
 - Increase `relay_drain` in `[repeater]` (default 500ms). This controls how long the repeater continues relaying after the carrier drops.
+
+**Session stays open / tail never fires / repeater thinks you're still keyed up after DTMF:**
+- This is the Retevis-class behavior where DTMF tones drop COS. Check the `[txactivity]` section: `end_silence_dtmf_ms` (default 1000) is how long after a tone ends before TX_END fires. If you see `TX_END: silent for N ticks` logs immediately after a tone, that's working correctly. If TX_END is taking much longer, raise `end_silence_ms` (voice mode) not `end_silence_dtmf_ms`. See `ARCH-COR-DTMF.md` §12 for the detector design.
+
+**Repeater transmits over my keyup (queue PTT asserts while I'm still talking):**
+- Ensure `[repeater] software_relay` is set correctly. The queue-pause guard now waits for COR clear regardless of `software_relay` mode — so a hardware-relay setup shouldn't see this. If you do, check the journal for `TX-activity:` log lines — a stuck `dtmf_active` atomic would keep the presence detector asserted.
+
+**DTMF digits intermittently drop or get locked to the wrong digit after a rekey:**
+- The decoder is reset on every COR-assert edge so stale state doesn't leak into a new session (`ARCH-COR-DTMF.md` item #4). If you're still seeing this, check the `[dtmf]` thresholds: the kerchunk defaults (`hits_to_begin=1`, `misses_to_end=3`, `min_off_frames=1`) are looser than libplcode upstream to catch fast double-taps on tight-squelch radios. Raise them on noisy lines.
 
 #### HID Device Permissions
 

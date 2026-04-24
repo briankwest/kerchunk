@@ -18,7 +18,7 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
 - [HID Driver (CM108/CM119 GPIO)](#hid-driver-cm108cm119-gpio)
   - [PTT Write Format (5 bytes)](#ptt-write-format-5-bytes)
   - [COR Read Format](#cor-read-format)
-  - [COR Drop Hold Timer](#cor-drop-hold-timer)
+  - [TX-activity detector (fused presence)](#tx-activity-detector-fused-presence)
 - [WebSocket Audio Streaming](#websocket-audio-streaming)
 - [Module Lifecycle](#module-lifecycle)
   - [DTMF Command Registration](#dtmf-command-registration)
@@ -69,16 +69,17 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
                           │     └────────────────────────────────┘  │
                           │                                         │
                           │  ┌───────────────────────────────────┐  │
-                          │  │         27 Loaded Modules         │  │
+                          │  │         31 Loaded Modules         │  │
                           │  │  repeater  cwid      courtesy     │  │
                           │  │  caller    dtmfcmd   otp          │  │
                           │  │  voicemail gpio      logger       │  │
                           │  │  weather   time      recorder     │  │
                           │  │  tones     emergency parrot       │  │
                           │  │  cdr       tts       nws          │  │
-                          │  │  stats     web       webhook      │  │
-                          │  │  scrambler sdr       freeswitch   │  │
-                          │  │  pocsag    flex      aprs         │  │
+                          │  │  stats     sysstats  web          │  │
+                          │  │  webhook   scrambler sdr          │  │
+                          │  │  freeswitch pocsag   flex         │  │
+                          │  │  aprs      asr       ai      poc  │  │
                           │  └───────────────────────────────────┘  │
                           └─────────────────────────────────────────┘
 ```
@@ -89,21 +90,33 @@ Complete technical architecture of the kerchunkd GMRS/HAM repeater controller.
 
 ```
   Thread 1: Main Loop (20ms tick)
-  ├── COR polling (HID read + drop hold timer)
+  ├── HID COS bit read (sticky across read -EAGAIN)
+  ├── Fused TX-activity detector (cos_bit OR dtmf_active → COR_ASSERT/DROP)
   ├── Timer expiry dispatch
   ├── Control socket poll (CLI commands)
   ├── Config reload (SIGHUP)
   └── Module tick events
 
   Thread 2: Audio Thread (20ms tick, clock_nanosleep)
-  ├── Capture frame from PortAudio ring
+  ├── Capture frame from PortAudio ring (repeat-last on under-run)
   ├── CTCSS/DCS decoders (on raw frame)
   ├── RX descrambler (in-place)
-  ├── Audio tap dispatch (→ WebSocket SPSC ring)
-  ├── DTMF decoder (on descrambled frame)
-  ├── Software relay (when enabled)
-  ├── Queue drain engine (tx_delay → audio → tx_tail → PTT release)
-  └── Playback to PortAudio ring
+  ├── kerchunk_audio_tick_rx(): decoder reset-on-COR-assert-edge →
+  │                             DTMF decode + edge-detect events →
+  │                             relay drain-start edge → relay write
+  │                             decision + silence-floor early-stop
+  ├── Audio tap dispatch (→ WebSocket SPSC ring, recorder)
+  ├── kerchunk_audio_tick_tx(): queue-pause gate → PTT assert +
+  │                             tx_delay setup → queue drain (1 frame/
+  │                             tick) → tx_tail silence → PTT release
+  │                             (multi-pass for tail-cancel-on-requeue)
+  └── Playback to PortAudio ring (with TX scrambler + playback taps)
+
+  The RX/TX sub-ticks are pure functions over kerchunk_audio_state_t.
+  See include/kerchunk_audio_tick.h and src/kerchunk_audio_tick.c.
+  PortAudio callbacks themselves are thin wrappers over
+  kerchunk_audio_ring_commit() (include/kerchunk_audio_ring.h), which
+  handles paInputUnderflow drop and capture resample.
 
   Thread 3: Web Server (mongoose mg_mgr_poll)
   ├── HTTP/HTTPS request handling
@@ -621,16 +634,18 @@ replaces the old single-signal cor_drop_hold mask. See
 
 ```
   IDLE ──► PENDING ──► ACTIVE ──► COOLDOWN ──► IDLE
-   │        (2 blocks   (digit     (same-digit
-   │         40ms)      reported)   blocked)
+   │        (onset    (digit     (same-digit
+   │         confirm)  reported)  blocked)
    │
-   └── hits_to_begin: 2 blocks (40ms) to confirm onset
-       misses_to_end: 10 blocks (200ms) to confirm offset
-       min_off_frames: 8 blocks (160ms) same-digit cooldown
+   └── Kerchunk runtime defaults (looser than libplcode upstream
+       so tight-squelch radios and fast double-taps work):
+       hits_to_begin  = 1  block  (~20 ms)  confirm onset
+       misses_to_end  = 3  blocks (~60 ms)  confirm offset
+       min_off_frames = 1  block  (~20 ms)  same-digit cooldown
 
-  Tuned for hardware repeaters where DTMF interrupts CTCSS,
-  causing brief COS dropouts that would otherwise split one
-  digit press into multiple detections.
+  Configurable via [dtmf] section. Tuned for hardware repeaters
+  where DTMF interrupts CTCSS, causing brief COS dropouts that
+  would otherwise split one digit press into multiple detections.
 ```
 
 ---
@@ -644,14 +659,21 @@ replaces the old single-signal cor_drop_hold mask. See
   ├── [audio]       PortAudio devices, sample_rate (default 48000), mixer levels
   ├── [hid]         HID device, COR bit/polarity, PTT GPIO pin
   ├── [repeater]    State machine timers, relay mode, TX tone, CW ID
+  ├── [txactivity]  Fused presence detector — end_silence_ms (300),
+  │                 end_silence_dtmf_ms (1000), dtmf_grace_ms (3000),
+  │                 trust_cos_bit. Replaces the old cor_drop_hold.
+  ├── [dtmf]        libplcode decoder thresholds — hits_to_begin (1),
+  │                 misses_to_end (3), min_off_frames (1). Looser than
+  │                 upstream so tight-squelch radios detect reliably.
   ├── [web]         HTTP/TLS, auth, PTT, registration
   ├── [caller]      Identification methods, ANI window, login timeout
-  ├── [dtmf]        Inter-digit timeout, COR gate, pattern overrides
   ├── [voicemail]   Storage, limits
   ├── [weather]     API key, location, announce settings
   ├── [time]        Timezone, interval
   ├── [nws]         Location, severity, poll interval
-  ├── [tts]         ElevenLabs API, voice, model, text normalization
+  ├── [tts]         ElevenLabs or Wyoming engine, voice, model, normalization
+  ├── [asr]         Wyoming ASR server (Sherpa-ONNX / faster-whisper)
+  ├── [ai]          AI assistant (provider, model, tool allowlist)
   ├── [recording]   Directory, max duration
   ├── [emergency]   Auto-deactivate timeout
   ├── [otp]         Session timeout, time skew
@@ -664,9 +686,11 @@ replaces the old single-signal cor_drop_hold mask. See
   ├── [logger]      File, rotation size
   ├── [cdr]         Directory
   ├── [parrot]      Max duration
+  ├── [freeswitch]  ESL host/port/password, DID routing, circuit breaker
   ├── [pocsag]      POCSAG paging encoder settings
   ├── [flex]        FLEX paging encoder settings
   ├── [aprs]        APRS position reporting, RX/TX, beacon settings
+  ├── [poc]         PoC (push-to-talk over cellular) bridge
   ├── [group.N]     Group name
   └── [user.N]      Username, callsign, email, ANI, login, access, group, TOTP
 
@@ -681,8 +705,8 @@ replaces the old single-signal cor_drop_hold mask. See
 ```
   kerchunkd           Daemon binary (links libplcode.a + PortAudio + ALSA)
   kerchunk            CLI binary (connects via Unix socket)
-  modules/*.so        27 dynamically loaded modules
-  test_kerchunk       Test binary (234 tests)
+  modules/*.so        31 dynamically loaded modules
+  test_kerchunk       Test binary (318 tests)
   libplcode           External dependency (CTCSS/DCS/DTMF/CW ID codec library)
   sounds/             WAV files: any sample rate (auto-resampled at load time)
   └── cache/tts/      TTS response cache (hash-keyed WAV files)
