@@ -288,19 +288,21 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
     </div>
   </div>
 
-  <!-- Dynamic Controls -->
+  <!-- Simulation (sim controls only) -->
   <div class="card">
     <h2>Simulation</h2>
     <div class="controls">
       <button class="btn" data-label="COR" data-ui-cmd="cor" onclick="toggleCOR(this)">COR OFF</button>
     </div>
     <div id="dynamic-controls"></div>
-    <h2 style="margin-top:12px">Voicemail</h2>
+  </div>
+
+  <!-- Services (module state — voicemail + phone bridge) -->
+  <div class="card">
+    <h2>Voicemail</h2>
     <div id="voicemail" style="font-size:12px;color:var(--dim)">No data</div>
     <h2 style="margin-top:12px">Phone (FreeSWITCH)</h2>
     <div id="freeswitch" style="font-size:12px;color:var(--dim)">No data</div>
-    <h2 style="margin-top:12px">Users</h2>
-    <div id="users-list" style="font-size:12px">Loading...</div>
   </div>
 
   <!-- Live Audio -->
@@ -1444,22 +1446,14 @@ function renderWeather(d) {
   }
 }
 
-async function refreshUsers() {
-  try {
-    const d=await fetchJSON('/api/users');
-    const el=document.getElementById('users-list');
-    if(!d.users||d.users.length===0){el.textContent='No users';return;}
-    el.innerHTML=d.users.map(u=>
-      '<div class="user-row"><span>'+(u.username||u.name)+'</span><span>'+
-      (u.name||'')+ ' / access='+u.access+'</span></div>'
-    ).join('');
-  } catch(e){}
-}
+/* Inline user list moved to its own page (/admin/users.html — see
+ * the "Users" button in the header). Dashboard no longer polls
+ * /api/users on a 1s interval just to rebuild a static config dump. */
 
 async function reloadConfig() {
   await fetch(API+'/api/config/reload',{method:'POST',credentials:'same-origin'});
   addLog('Config reload requested','log-warn');
-  setTimeout(()=>{refreshUsers();refreshStatus();refreshStation();},1000);
+  setTimeout(()=>{refreshStation();},1000);
 }
 
 function addLog(text,cls) {
@@ -1639,7 +1633,7 @@ function connectSSE() {
           break;
         case 'config_reload':
           addLog('Config reloaded','log-warn');
-          setTimeout(()=>{refreshUsers();refreshStation();refreshStatus();},500);
+          setTimeout(()=>{refreshStation();refreshStatus();},500);
           break;
         case 'shutdown':
           addLog('Daemon shutting down!','log-err');
@@ -1792,7 +1786,6 @@ function setAudioVolume(v) {
   initCharts();
   refreshStation();
   refreshStatus();
-  refreshUsers();
   buildDynamicControls().then(() => refreshStatus());
   /* System metrics come in via SSE (sys_updated); the snapshot cache
    * replays the latest value on connect, so no bootstrap fetch or
