@@ -131,8 +131,15 @@ static int dispatch_command(void)
             char arg[MAX_CMD_LEN];
             snprintf(arg, sizeof(arg), "%s", g_buf + plen);
 
-            g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "command: *%s# → event %d, arg='%s'",
-                        g_buf, g_cmds[i].custom_event_id, arg);
+            g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                        "command: *%s# → %s (event %d)%s%s%s",
+                        g_buf,
+                        g_cmds[i].description[0] ? g_cmds[i].description
+                                                 : "(unnamed)",
+                        g_cmds[i].custom_event_id,
+                        arg[0] ? " arg='" : "",
+                        arg[0] ? arg      : "",
+                        arg[0] ? "'"      : "");
 
             kerchevt_t evt = {
                 .type = (kerchevt_type_t)g_cmds[i].custom_event_id,
