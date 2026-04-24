@@ -1586,13 +1586,39 @@ int main(int argc, char **argv)
 
     /* Create decoders */
     audio_thread_ctx_t audio_ctx = { NULL, NULL, NULL };
-    /* DTMF decoder: tuned for hardware repeaters where the radio briefly
-     * drops COS during DTMF (CTCSS interrupted by tone).  Higher
-     * misses_to_end rides through the dropout without false digit-end.
-     * Higher min_off_frames prevents same-digit re-detection. */
+    /* DTMF decoder thresholds — exposed as [dtmf] config knobs so radios
+     * with different audio characteristics can be tuned without a
+     * rebuild. Defaults are *looser* than libplcode's library defaults
+     * so users on tight-squelch radios (Retevis, etc.) catch fast
+     * double-taps without missing duplicates. Each knob is in 20-ms
+     * decoder blocks unless noted.
+     *
+     *   hits_to_begin   — consecutive blocks of tone before lock-on
+     *                     (default 1 here vs 2 upstream). Lower = catches
+     *                     shorter tones at slight false-positive risk.
+     *   misses_to_end   — consecutive silent blocks before tone-end
+     *                     (default 3 = 60 ms). Rides through brief
+     *                     dropouts on radios that mute audio during
+     *                     CTCSS recovery.
+     *   min_off_frames  — silence required before SAME digit can
+     *                     re-trigger (default 1 = 20 ms). Lower = fast
+     *                     double-taps detected, e.g. *88# on a radio
+     *                     that mutes between presses. Different digits
+     *                     can re-trigger immediately regardless. */
     plcode_dtmf_dec_opts_t dtmf_opts = {0};
-    dtmf_opts.misses_to_end = 5;    /* 100ms of silence to end digit */
-    dtmf_opts.min_off_frames = 3;   /* 60ms cooldown for same digit re-detection */
+    {
+        const char *v;
+        v = kerchunk_config_get(cfg, "dtmf", "hits_to_begin");
+        dtmf_opts.hits_to_begin  = v ? atoi(v) : 1;
+        v = kerchunk_config_get(cfg, "dtmf", "misses_to_end");
+        dtmf_opts.misses_to_end  = v ? atoi(v) : 3;
+        v = kerchunk_config_get(cfg, "dtmf", "min_off_frames");
+        dtmf_opts.min_off_frames = v ? atoi(v) : 1;
+    }
+    KERCHUNK_LOG_I(LOG_MOD,
+        "DTMF decoder: hits_to_begin=%d misses_to_end=%d min_off_frames=%d",
+        dtmf_opts.hits_to_begin, dtmf_opts.misses_to_end,
+        dtmf_opts.min_off_frames);
     plcode_dtmf_dec_create_ex(&audio_ctx.dtmf_dec, g_sample_rate, &dtmf_opts);
 
     /* ── Start audio thread ── */
