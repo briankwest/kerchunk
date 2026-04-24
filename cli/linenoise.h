@@ -81,6 +81,15 @@ void linenoiseEditStop(struct linenoiseState *l);
 void linenoiseHide(struct linenoiseState *l);
 void linenoiseShow(struct linenoiseState *l);
 
+/* Register an active linenoiseState so linenoiseRefreshLine()
+ * (called from threads that print async output and don't carry a
+ * direct handle to the editing state) can redraw the prompt after
+ * those foreign writes. The synchronous linenoise() call manages
+ * this internally; callers driving the async edit API
+ * (linenoiseEditStart/Feed/Stop) must register and unregister
+ * explicitly. Pass NULL to unregister. */
+void linenoiseSetState(struct linenoiseState *l);
+
 /* Blocking API. */
 char *linenoise(const char *prompt);
 void linenoiseFree(void *ptr);

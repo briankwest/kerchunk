@@ -881,8 +881,16 @@ static int interactive_mode(const char *socket_path)
          * on read(stdin) forever otherwise. */
         struct linenoiseState ls;
         char buf[4096];
+        fflush(stdout);  /* drain any printf'd welcome/banner so the
+                          * prompt write below isn't reordered behind
+                          * stdio buffering */
         if (linenoiseEditStart(&ls, -1, -1, buf, sizeof(buf), "kerchunk> ") < 0)
             break;
+        /* Register so the reader thread's linenoiseRefreshLine() can
+         * redraw the prompt after each async event print. Without
+         * this, every event from the daemon silently wipes the
+         * prompt and the user thinks they're stuck. */
+        linenoiseSetState(&ls);
 
         char *line = NULL;
         while (1) {
@@ -896,6 +904,7 @@ static int interactive_mode(const char *socket_path)
                 /* Wipe the prompt before the reconnect-loop banner
                  * lands so we don't leave half-typed bytes behind. */
                 linenoiseHide(&ls);
+                linenoiseSetState(NULL);
                 linenoiseEditStop(&ls);
                 line = linenoiseEditMore;  /* signal: jump to outer reconnect */
                 break;
@@ -904,6 +913,7 @@ static int interactive_mode(const char *socket_path)
             if (n > 0 && FD_ISSET(STDIN_FILENO, &rfds)) {
                 line = linenoiseEditFeed(&ls);
                 if (line == linenoiseEditMore) continue;
+                linenoiseSetState(NULL);
                 linenoiseEditStop(&ls);
                 break;
             }

@@ -1102,6 +1102,12 @@ void linenoiseRefreshLine(void) {
         refreshLineWithFlags(lnCurrentState, REFRESH_WRITE);
 }
 
+/* Public registration of the active editing state so
+ * linenoiseRefreshLine() works under the async edit API too. */
+void linenoiseSetState(struct linenoiseState *l) {
+    lnCurrentState = l;
+}
+
 /* Insert the character(s) 'c' of length 'clen' at cursor current position.
  * This handles both single-byte ASCII and multi-byte UTF-8 sequences.
  *
