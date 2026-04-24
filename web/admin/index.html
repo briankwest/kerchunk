@@ -170,6 +170,10 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
     <table id="station-table">
       <tr><td>Loading...</td></tr>
     </table>
+    <h2 style="margin-top:12px">Today</h2>
+    <table id="cdr-table">
+      <tr><td colspan="2" style="color:var(--dim)">No data</td></tr>
+    </table>
   </div>
 
   <!-- State Machines -->
@@ -1087,6 +1091,39 @@ function renderCallerSession(d){
     (txing ? ', transmitting' : '')+')';
 }
 
+/* Format seconds as "1h 23m" / "23m 45s" / "45s" — short labels. */
+function fmtDuration(sec){
+  if(!sec || sec <= 0) return '0s';
+  sec = Math.round(sec);
+  const h = Math.floor(sec/3600);
+  const m = Math.floor((sec%3600)/60);
+  const s = sec%60;
+  if(h > 0) return h+'h '+m+'m';
+  if(m > 0) return m+'m '+s+'s';
+  return s+'s';
+}
+
+/* CDR snapshot render — today's call totals plus an in-call line
+ * with the current caller (if any) and elapsed seconds. */
+function renderCdr(d){
+  const el = document.getElementById('cdr-table');
+  if (!el) return;
+  if (!d || typeof d.enabled === 'undefined'){
+    el.innerHTML = '<tr><td colspan="2" style="color:var(--dim)">No data</td></tr>';
+    return;
+  }
+  let html = '';
+  html += '<tr><td>Calls today</td><td>'+(d.today_calls||0)+'</td></tr>';
+  html += '<tr><td>Duration today</td><td>'+fmtDuration(d.today_seconds||0)+'</td></tr>';
+  if (d.in_call){
+    const who = d.call_user_name ? d.call_user_name :
+                (d.call_user_id ? 'user '+d.call_user_id : 'unknown');
+    html += '<tr><td><span style="color:var(--accent)">● In call</span></td>'+
+            '<td>'+who+' ('+fmtDuration(d.call_seconds||0)+')</td></tr>';
+  }
+  el.innerHTML = html;
+}
+
 /* Voicemail snapshot render. Top line carries mode (recording /
  * armed / disabled / idle) and total count; per-user list shows
  * who has unread mail. */
@@ -1412,6 +1449,11 @@ function connectSSE() {
           /* Authoritative snapshot from mod_voicemail: per-user
            * mailbox counts + recording/armed state. */
           renderVoicemail(evt.data || {});
+          break;
+        case 'cdr_updated':
+          /* Authoritative snapshot from mod_cdr: today's call totals
+           * + in-call state. */
+          renderCdr(evt.data || {});
           break;
         case 'dtmf_digit':
           addDtmf(evt.digit);

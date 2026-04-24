@@ -172,6 +172,55 @@ static void sq_audio_tap(const kerchevt_t *evt, void *ud)
         g_sq_peak_rms = frame_rms;
 }
 
+/* Authoritative CDR snapshot for admin dashboard. Sensitive
+ * (user names) → admin_only=1. Called from every state-change
+ * site: configure seed, COR assert/drop, caller_identified,
+ * announcement (today_calls++). */
+static void publish_cdr_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+
+    char e_name[64];
+    size_t j = 0;
+    for (const char *p = g_call_user_name; *p && j < sizeof(e_name) - 6; p++) {
+        switch (*p) {
+        case '"':  e_name[j++] = '\\'; e_name[j++] = '"';  break;
+        case '\\': e_name[j++] = '\\'; e_name[j++] = '\\'; break;
+        default:   e_name[j++] = *p;                       break;
+        }
+    }
+    e_name[j] = '\0';
+
+    long call_seconds = 0;
+    if (g_in_call && g_call_start > 0)
+        call_seconds = (long)(time(NULL) - g_call_start);
+
+    char json[768];
+    snprintf(json, sizeof(json),
+        "{\"enabled\":%s,"
+        "\"in_call\":%s,"
+        "\"call_started_at\":%lld,"
+        "\"call_seconds\":%ld,"
+        "\"call_user_id\":%d,"
+        "\"call_user_name\":\"%s\","
+        "\"call_method\":\"%s\","
+        "\"call_emergency\":%s,"
+        "\"today_calls\":%d,"
+        "\"today_seconds\":%.0f}",
+        g_enabled         ? "true" : "false",
+        g_in_call         ? "true" : "false",
+        (long long)g_call_start,
+        call_seconds,
+        g_call_user_id,
+        e_name,
+        g_call_method,
+        g_call_emergency  ? "true" : "false",
+        g_today_calls,
+        g_today_seconds);
+
+    g_core->sse_publish("cdr_updated", json, /*admin_only=*/1);
+}
+
 /* ── Event handlers ── */
 
 static void on_cor_assert(const kerchevt_t *evt, void *ud)
@@ -189,6 +238,8 @@ static void on_cor_assert(const kerchevt_t *evt, void *ud)
     g_sq_sum = 0;
     g_sq_count = 0;
     g_sq_peak_rms = 0;
+
+    publish_cdr_snapshot();
 }
 
 static void on_cor_drop(const kerchevt_t *evt, void *ud)
@@ -209,6 +260,8 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
     g_call_user_id = 0;
     g_call_user_name[0] = '\0';
     g_call_method[0] = '\0';
+
+    publish_cdr_snapshot();
 }
 
 static void on_caller_identified(const kerchevt_t *evt, void *ud)
@@ -229,6 +282,8 @@ static void on_caller_identified(const kerchevt_t *evt, void *ud)
     case 5: snprintf(g_call_method, sizeof(g_call_method), "WEB");   break;
     default: snprintf(g_call_method, sizeof(g_call_method), "unknown"); break;
     }
+
+    publish_cdr_snapshot();
 }
 
 static void on_recording_saved(const kerchevt_t *evt, void *ud)
@@ -268,6 +323,7 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
     fclose(fp);
 
     g_today_calls++;
+    publish_cdr_snapshot();
 }
 
 /* ── Module lifecycle ── */
@@ -300,6 +356,7 @@ static int cdr_configure(const kerchunk_config_t *cfg)
     }
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "enabled=%d dir=%s", g_enabled, g_dir);
+    publish_cdr_snapshot();
     return 0;
 }
 
