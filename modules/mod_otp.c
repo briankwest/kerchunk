@@ -58,12 +58,79 @@ static struct {
 
 /* Session table */
 typedef struct {
-    int user_id;
-    int active;
-    int timer_id;
+    int    user_id;
+    int    active;
+    int    timer_id;
+    time_t started_at;     /* wall-clock; remaining_sec computed live */
 } otp_session_t;
 
 static otp_session_t g_sessions[MAX_OTP_SESSIONS];
+
+/* Authoritative OTP-elevated-sessions snapshot for admin dashboard.
+ * Sensitive (names + elevated-access list) → admin_only=1. Called on
+ * every session transition: configure seed, session_start, session
+ * expire, otp_unload (cleared all sessions). g_otp_mutex MUST be
+ * held by the caller — reads g_sessions[] without locking. */
+static void publish_otp_snapshot_locked(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+
+    char list[2048];
+    size_t lp = 0;
+    list[0] = '\0';
+    int first = 1;
+    int count = 0;
+    time_t now = time(NULL);
+
+    for (int i = 0; i < MAX_OTP_SESSIONS; i++) {
+        if (!g_sessions[i].active) continue;
+        const kerchunk_user_t *u =
+            g_core->user_lookup_by_id(g_sessions[i].user_id);
+        const char *name = (u && u->name[0]) ? u->name : "";
+
+        char e_name[64];
+        size_t j = 0;
+        for (const char *p = name; *p && j < sizeof(e_name) - 6; p++) {
+            switch (*p) {
+            case '"':  e_name[j++] = '\\'; e_name[j++] = '"';  break;
+            case '\\': e_name[j++] = '\\'; e_name[j++] = '\\'; break;
+            default:   e_name[j++] = *p;                       break;
+            }
+        }
+        e_name[j] = '\0';
+
+        long remaining_sec = 0;
+        if (g_sessions[i].started_at > 0) {
+            long elapsed = (long)(now - g_sessions[i].started_at);
+            long total   = g_session_timeout_ms / 1000;
+            remaining_sec = (total > elapsed) ? (total - elapsed) : 0;
+        }
+
+        char frag[256];
+        int flen = snprintf(frag, sizeof(frag),
+            "%s{\"user_id\":%d,\"name\":\"%s\","
+            "\"started_at\":%lld,\"remaining_sec\":%ld}",
+            first ? "" : ",",
+            g_sessions[i].user_id, e_name,
+            (long long)g_sessions[i].started_at, remaining_sec);
+        if (flen < 0) continue;
+        if (lp + (size_t)flen >= sizeof(list)) break;
+        memcpy(list + lp, frag, (size_t)flen);
+        lp += (size_t)flen;
+        list[lp] = '\0';
+        first = 0;
+        count++;
+    }
+
+    char json[2400];
+    snprintf(json, sizeof(json),
+        "{\"active_count\":%d,"
+        "\"session_timeout_sec\":%d,"
+        "\"sessions\":[%s]}",
+        count, g_session_timeout_ms / 1000, list);
+
+    g_core->sse_publish("otp_sessions_updated", json, /*admin_only=*/1);
+}
 
 /* ── SHA-1 (FIPS 180-4) ── */
 
@@ -251,6 +318,8 @@ static void session_expire_cb(void *ud)
     kerchunk_core_set_otp_elevated(user_id, 0);
     s->active = 0;
     s->timer_id = -1;
+    s->started_at = 0;
+    publish_otp_snapshot_locked();
     pthread_mutex_unlock(&g_otp_mutex);
 
     if (g_core->tts_speak)
@@ -284,6 +353,7 @@ static void session_start(int user_id)
 
     s->user_id = user_id;
     s->active = 1;
+    s->started_at = time(NULL);
     s->timer_id = g_core->timer_create(g_session_timeout_ms, 0,
                                          session_expire_cb, s);
     kerchunk_core_set_otp_elevated(user_id, 1);
@@ -293,6 +363,8 @@ static void session_start(int user_id)
                 "elevated session started: %s (id=%d, timeout=%ds)",
                 u ? u->name : "unknown", user_id,
                 g_session_timeout_ms / 1000);
+
+    publish_otp_snapshot_locked();
 }
 
 /* ── Event handlers ── */
@@ -504,6 +576,10 @@ static int otp_configure(const kerchunk_config_t *cfg)
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "session_timeout=%ds time_skew=%d users_with_totp=%d",
                 g_session_timeout_ms / 1000, g_time_skew, count);
+
+    pthread_mutex_lock(&g_otp_mutex);
+    publish_otp_snapshot_locked();
+    pthread_mutex_unlock(&g_otp_mutex);
     return 0;
 }
 

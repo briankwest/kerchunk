@@ -299,6 +299,8 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
     <div id="voicemail" style="font-size:12px;color:var(--dim)">No data</div>
     <h2 style="margin-top:12px">Phone (FreeSWITCH)</h2>
     <div id="freeswitch" style="font-size:12px;color:var(--dim)">No data</div>
+    <h2 style="margin-top:12px">Elevated Sessions (OTP)</h2>
+    <div id="otp-sessions" style="font-size:12px;color:var(--dim)">None</div>
     <h2 style="margin-top:12px">Users</h2>
     <div id="users-list" style="font-size:12px">Loading...</div>
   </div>
@@ -1109,6 +1111,19 @@ function fmtDuration(sec){
   return s+'s';
 }
 
+/* OTP elevated-sessions snapshot render — empty list when nobody
+ * holds elevated access, otherwise one row per active session. */
+function renderOtpSessions(d){
+  const el = document.getElementById('otp-sessions');
+  if (!el) return;
+  const list = (d && Array.isArray(d.sessions)) ? d.sessions : [];
+  if (!list.length){ el.textContent = 'None'; return; }
+  el.innerHTML = list.map(s =>
+    '<div class="user-row"><span>'+
+    (s.name || ('user '+s.user_id))+'</span><span>'+
+    fmtRemaining(s.remaining_sec)+' left</span></div>').join('');
+}
+
 /* FreeSWITCH snapshot render — ESL link + call state + dialed
  * number with elapsed timer when CONNECTED. */
 function renderFreeswitch(d){
@@ -1528,6 +1543,11 @@ function connectSSE() {
           /* Authoritative snapshot from mod_freeswitch: ESL link
            * + call state + dialed digits. */
           renderFreeswitch(evt.data || {});
+          break;
+        case 'otp_sessions_updated':
+          /* Authoritative snapshot from mod_otp: list of currently
+           * elevated users + remaining session time. */
+          renderOtpSessions(evt.data || {});
           break;
         case 'dtmf_digit':
           addDtmf(evt.digit);
