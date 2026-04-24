@@ -33,10 +33,18 @@ static size_t   g_len;
 static size_t   g_cap;
 
 /* Signal quality — accumulated during recording */
-static int64_t  g_sq_sum;
-static int64_t  g_sq_count;
+static int64_t  g_sq_sum;           /* sum of squared samples — all frames */
+static int64_t  g_sq_count;         /* sample count for g_sq_sum */
+static int64_t  g_sq_active_sum;    /* sum of squared samples — speech-only */
+static int64_t  g_sq_active_count;  /* sample count for g_sq_active_sum */
 static int32_t  g_sq_peak_rms;      /* loudest 20 ms-frame RMS (diagnostic) */
 static int32_t  g_sq_peak_sample;   /* |max sample|, what users call "peak" */
+
+/* A frame counts as "speech" when its RMS exceeds this threshold.
+ * 327 ≈ 1% of full scale = -40 dBFS — well above the residual mic
+ * noise floor of typical USB sound cards but well below speech RMS
+ * (which sits near 5-15% of full scale during voiced segments). */
+#define PARROT_SPEECH_RMS_GATE 327
 
 /* ── Audio tap callback ── */
 
@@ -81,6 +89,17 @@ static void parrot_audio_tap(const kerchevt_t *evt, void *ud)
     while ((int64_t)frame_rms * frame_rms < avg) frame_rms++;
     if (frame_rms > g_sq_peak_rms) g_sq_peak_rms = frame_rms;
 
+    /* Speech-active accumulator: only frames whose per-frame RMS is
+     * above the noise gate count toward the average. This makes the
+     * "average level" report the loudness of the spoken portion
+     * rather than dilution from inter-syllable pauses and pre/post
+     * silence — a 6 s clip with 2 s of actual speech otherwise
+     * reports ~0% even when peaks hit 40%. */
+    if (frame_rms >= PARROT_SPEECH_RMS_GATE) {
+        g_sq_active_sum   += frame_sum;
+        g_sq_active_count += (int64_t)n;
+    }
+
     g_len += n;
 }
 
@@ -97,6 +116,8 @@ static void start_recording(void)
 
     g_sq_sum = 0;
     g_sq_count = 0;
+    g_sq_active_sum = 0;
+    g_sq_active_count = 0;
     g_sq_peak_rms = 0;
     g_sq_peak_sample = 0;
     g_recording = 1;
@@ -115,25 +136,43 @@ static void stop_and_playback(void)
     if (g_buf && g_len > 0) {
         float dur = (float)g_len / (float)g_core->sample_rate;
 
-        /* Compute average RMS */
-        int32_t avg_rms = 0;
+        /* Long-term RMS over all captured samples — diagnostic only
+         * (silence between syllables drags it well below the actual
+         * speech level). */
+        int32_t avg_rms_all = 0;
         if (g_sq_count > 0) {
             int64_t avg = g_sq_sum / g_sq_count;
-            while ((int64_t)avg_rms * avg_rms < avg) avg_rms++;
+            while ((int64_t)avg_rms_all * avg_rms_all < avg) avg_rms_all++;
         }
 
-        /* Convert to percentage of full scale for readability. "Peak"
-         * is the max absolute sample — what a user intuitively means
-         * by peak level. peak_frame_rms is kept as a diagnostic (it is
-         * always smaller than peak_sample for speech). */
-        int avg_pct        = (int)((avg_rms         * 100L) / 32767);
+        /* Active-speech RMS — averaged only over frames whose RMS
+         * cleared the noise gate. This is what gets announced as
+         * "Average level" because it tracks how loud the voice
+         * actually was, independent of how much silence the user
+         * left around it. */
+        int32_t avg_rms_active = 0;
+        if (g_sq_active_count > 0) {
+            int64_t avg = g_sq_active_sum / g_sq_active_count;
+            while ((int64_t)avg_rms_active * avg_rms_active < avg)
+                avg_rms_active++;
+        }
+
+        /* Convert to percentage of full scale for readability. */
+        int avg_pct        = (int)((avg_rms_active * 100L) / 32767);
+        int avg_all_pct    = (int)((avg_rms_all    * 100L) / 32767);
         int peak_pct       = (int)((g_sq_peak_sample * 100L) / 32767);
         int peak_frame_pct = (int)((g_sq_peak_rms   * 100L) / 32767);
+        float speech_frac  = g_sq_count > 0
+            ? (float)g_sq_active_count / (float)g_sq_count : 0.0f;
 
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                    "playing back %.1fs (%zu samples) avg_rms=%d(%d%%) "
+                    "playing back %.1fs (%zu samples) "
+                    "avg_rms_active=%d(%d%%) speech_frac=%.0f%% "
+                    "avg_rms_all=%d(%d%%) "
                     "peak_sample=%d(%d%%) peak_frame_rms=%d(%d%%)",
-                    dur, g_len, (int)avg_rms, avg_pct,
+                    dur, g_len,
+                    (int)avg_rms_active, avg_pct, speech_frac * 100.0f,
+                    (int)avg_rms_all, avg_all_pct,
                     (int)g_sq_peak_sample, peak_pct,
                     (int)g_sq_peak_rms, peak_frame_pct);
 
