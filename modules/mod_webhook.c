@@ -35,19 +35,31 @@ typedef struct {
 } evt_map_t;
 
 static const evt_map_t g_event_map[] = {
-    { "cor_assert",       KERCHEVT_COR_ASSERT       },
+    { "cor_assert",       KERCHEVT_COR_ASSERT        },
     { "cor_drop",         KERCHEVT_COR_DROP          },
+    { "vcor_assert",      KERCHEVT_VCOR_ASSERT       },
+    { "vcor_drop",        KERCHEVT_VCOR_DROP         },
     { "ptt_assert",       KERCHEVT_PTT_ASSERT        },
     { "ptt_drop",         KERCHEVT_PTT_DROP          },
+    { "ctcss_detect",     KERCHEVT_CTCSS_DETECT      },
+    { "dcs_detect",       KERCHEVT_DCS_DETECT        },
+    { "dtmf_digit",       KERCHEVT_DTMF_DIGIT        },
+    { "dtmf_end",         KERCHEVT_DTMF_END          },
     { "caller_identified", KERCHEVT_CALLER_IDENTIFIED },
     { "caller_cleared",   KERCHEVT_CALLER_CLEARED    },
+    { "tail_start",       KERCHEVT_TAIL_START        },
+    { "tail_expire",      KERCHEVT_TAIL_EXPIRE       },
+    { "queue_drain",      KERCHEVT_QUEUE_DRAIN       },
+    { "queue_complete",   KERCHEVT_QUEUE_COMPLETE    },
+    { "queue_preempted",  KERCHEVT_QUEUE_PREEMPTED   },
     { "announcement",     KERCHEVT_ANNOUNCEMENT      },
     { "recording_saved",  KERCHEVT_RECORDING_SAVED   },
     { "rx_state_change",  KERCHEVT_RX_STATE_CHANGE   },
     { "tx_state_change",  KERCHEVT_TX_STATE_CHANGE   },
     { "rx_timeout",       KERCHEVT_RX_TIMEOUT        },
-    { "shutdown",         KERCHEVT_SHUTDOWN           },
-    { "config_reload",    KERCHEVT_CONFIG_RELOAD      },
+    { "heartbeat",        KERCHEVT_HEARTBEAT         },
+    { "shutdown",         KERCHEVT_SHUTDOWN          },
+    { "config_reload",    KERCHEVT_CONFIG_RELOAD     },
 };
 
 #define EVENT_MAP_COUNT ((int)(sizeof(g_event_map) / sizeof(g_event_map[0])))
@@ -65,7 +77,7 @@ static int   g_retry_count   = 2;
 
 /* Subscribed event types — tracks which events we subscribed to so we
  * can cleanly unsubscribe on unload or config reload. */
-#define MAX_SUBS 16
+#define MAX_SUBS 32
 static kerchevt_type_t g_subs[MAX_SUBS];
 static int             g_sub_count;
 
