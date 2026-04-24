@@ -1038,6 +1038,18 @@ static void *audio_thread_fn(void *arg)
         kerchevt_fire(&audio_evt);
         kerchunk_core_dispatch_taps(&audio_evt);
 
+        /* Reset DTMF decoder on COR assert BEFORE processing this
+         * tick's audio — otherwise the first frame of a new
+         * transmission is fed into a decoder still holding Goertzel
+         * accumulators, hysteresis counters, and current_digit from
+         * the PREVIOUS transmission. That lets a spurious DTMF_DIGIT
+         * leak into the new session and (intermittently) locks the
+         * decoder onto the wrong digit for the first real tone.
+         * Particularly bad when the user rekeys during the courtesy
+         * tone / relay drain window. */
+        if (relay_active && !g_relay_was_active)
+            plcode_dtmf_dec_reset(ctx->dtmf_dec);
+
         /* ── DTMF decoder: only process when COR active or draining ──
          * Saves CPU and prevents false detections from noise/silence.
          * The relay drain window catches late digits in the squelch tail. */
@@ -1111,10 +1123,6 @@ static void *audio_thread_fn(void *arg)
          * captured audio (relay_drain countdown) so the last few frames
          * of speech aren't cut off mid-word.
          */
-        /* Reset DTMF decoder on COR assert — clean slate for each transmission */
-        if (relay_active && !g_relay_was_active)
-            plcode_dtmf_dec_reset(ctx->dtmf_dec);
-
         /* Detect COR drop → start drain countdown */
         if (g_software_relay && g_relay_was_active && !relay_active) {
             g_relay_drain = (g_sample_rate * g_relay_drain_ms) / 1000;
