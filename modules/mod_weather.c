@@ -132,20 +132,52 @@ static int json_int(const char *json, const char *key, int *out)
 /* Extract a quoted string after "key": "value" */
 static int json_str(const char *json, const char *key, char *out, size_t max)
 {
+    if (!out || max == 0) return -1;
+    out[0] = '\0';
+
     char needle[64];
     snprintf(needle, sizeof(needle), "\"%s\":", key);
     const char *p = strstr(json, needle);
     if (!p) return -1;
     p += strlen(needle);
-    while (*p == ' ') p++;
+    while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') p++;
     if (*p != '"') return -1;
     p++;
-    const char *end = strchr(p, '"');
-    if (!end) return -1;
-    size_t len = (size_t)(end - p);
-    if (len >= max) len = max - 1;
-    memcpy(out, p, len);
-    out[len] = '\0';
+
+    size_t w = 0;
+    while (*p && *p != '"') {
+        if (*p == '\\' && p[1]) {
+            char c = p[1];
+            char decoded;
+            switch (c) {
+                case 'n':  decoded = '\n'; break;
+                case 'r':  decoded = '\r'; break;
+                case 't':  decoded = '\t'; break;
+                case '"':  decoded = '"';  break;
+                case '\\': decoded = '\\'; break;
+                case '/':  decoded = '/';  break;
+                case 'u':
+                    /* Preserve raw \uXXXX — saves writing UTF-8 emit. */
+                    if (p[2] && p[3] && p[4] && p[5]) {
+                        if (w + 6 < max) {
+                            memcpy(out + w, p, 6);
+                            w += 6;
+                        }
+                        p += 6;
+                        continue;
+                    }
+                    p++;
+                    continue;
+                default:   decoded = c;    break;
+            }
+            if (w + 1 < max) out[w++] = decoded;
+            p += 2;
+        } else {
+            if (w + 1 < max) out[w++] = *p;
+            p++;
+        }
+    }
+    out[w] = '\0';
     return 0;
 }
 
