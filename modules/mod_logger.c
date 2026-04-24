@@ -8,6 +8,7 @@
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
+#include "kerchunk_tx_state.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -174,6 +175,14 @@ static void log_event(const kerchevt_t *evt, void *ud)
                  state_name(evt->state.new_state));
         break;
 
+    case KERCHEVT_TX_STATE_CHANGE:
+        snprintf(detail, sizeof(detail), " %s → %s",
+                 kerchunk_tx_state_name(
+                     (kerchunk_tx_state_t)evt->state.old_state),
+                 kerchunk_tx_state_name(
+                     (kerchunk_tx_state_t)evt->state.new_state));
+        break;
+
     case KERCHEVT_CALLER_IDENTIFIED: {
         const kerchunk_user_t *u = g_core->user_lookup_by_id(evt->caller.user_id);
         snprintf(detail, sizeof(detail), " user=%d (%s) via %s",
@@ -278,7 +287,8 @@ static int logger_load(kerchunk_core_t *core)
     kerchevt_type_t types[] = {
         KERCHEVT_CTCSS_DETECT, KERCHEVT_DCS_DETECT, KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
         KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
-        KERCHEVT_RX_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_RX_TIMEOUT,
+        KERCHEVT_RX_STATE_CHANGE, KERCHEVT_TX_STATE_CHANGE,
+        KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_RX_TIMEOUT,
         KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
         KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_QUEUE_PREEMPTED,
         KERCHEVT_ANNOUNCEMENT,
@@ -320,7 +330,8 @@ static int logger_configure(const kerchunk_config_t *cfg)
 static const kerchevt_type_t g_sub_types[] = {
     KERCHEVT_CTCSS_DETECT, KERCHEVT_DCS_DETECT, KERCHEVT_DTMF_DIGIT, KERCHEVT_DTMF_END,
     KERCHEVT_COR_ASSERT, KERCHEVT_COR_DROP, KERCHEVT_PTT_ASSERT, KERCHEVT_PTT_DROP,
-    KERCHEVT_RX_STATE_CHANGE, KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_RX_TIMEOUT,
+    KERCHEVT_RX_STATE_CHANGE, KERCHEVT_TX_STATE_CHANGE,
+    KERCHEVT_TAIL_START, KERCHEVT_TAIL_EXPIRE, KERCHEVT_RX_TIMEOUT,
     KERCHEVT_CALLER_IDENTIFIED, KERCHEVT_CALLER_CLEARED,
     KERCHEVT_QUEUE_DRAIN, KERCHEVT_QUEUE_COMPLETE, KERCHEVT_QUEUE_PREEMPTED,
     KERCHEVT_CONFIG_RELOAD, KERCHEVT_SHUTDOWN,
