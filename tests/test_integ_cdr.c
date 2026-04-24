@@ -12,6 +12,25 @@
 /* Pull in the module source */
 #include "../modules/mod_cdr.c"
 
+/* Count rows in today's CSV (headers + data lines). Used to verify
+ * announcements still write CSV rows even though they no longer
+ * bump the today_calls counter. */
+static long count_csv_rows(void)
+{
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char path[256];
+    snprintf(path, sizeof(path), "/tmp/kerchunk_test_cdr/%04d-%02d-%02d.csv",
+             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+    long n = 0;
+    int c;
+    while ((c = fgetc(fp)) != EOF) if (c == '\n') n++;
+    fclose(fp);
+    return n;
+}
+
 /* Helper: fire a COR assert/drop cycle with optional caller */
 static void sim_transmission(int user_id, int method)
 {
@@ -127,41 +146,48 @@ void test_integ_cdr(void)
     mock_fire_simple(KERCHEVT_COR_DROP);
     test_end();
 
-    /* 8. Announcement event creates CDR row */
-    test_begin("cdr: announcement event creates CDR row");
+    /* 8. Announcement event writes a CSV row but does NOT bump
+     *    today_calls — that counter is voice-only so the dashboard
+     *    "Today" panel reflects actual user traffic, not CW IDs /
+     *    weather / TTS / VM-prompt chatter. */
+    test_begin("cdr: announcement writes row, leaves today_calls alone");
     {
         int calls_before = g_today_calls;
+        long rows_before = count_csv_rows();
         kerchevt_t e = {
             .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "test", .description = "test announcement" },
         };
         kerchevt_fire(&e);
-        test_assert(g_today_calls == calls_before + 1,
-                    "announcement not counted");
+        test_assert(g_today_calls == calls_before,
+                    "announcement bumped today_calls (should not)");
+        test_assert(count_csv_rows() == rows_before + 1,
+                    "announcement did not write CSV row");
     }
     test_end();
 
-    /* 9. Announcement row has system user and zero duration */
-    test_begin("cdr: announcement row format correct");
+    /* 9. Same for cwid-source announcement — row written, count unchanged */
+    test_begin("cdr: cwid announcement row written, count unchanged");
     {
-        /* The on_announcement handler writes user_id=0, user_name=system,
-         * duration=0.0 — verify via the call count (we can't easily
-         * read the file in white-box, but stats confirm it was written) */
         int calls_before = g_today_calls;
+        long rows_before = count_csv_rows();
         kerchevt_t e = {
             .type = KERCHEVT_ANNOUNCEMENT,
             .announcement = { .source = "cwid", .description = "WRDP519" },
         };
         kerchevt_fire(&e);
-        test_assert(g_today_calls == calls_before + 1,
-                    "cwid announcement not counted");
+        test_assert(g_today_calls == calls_before,
+                    "cwid announcement bumped today_calls");
+        test_assert(count_csv_rows() == rows_before + 1,
+                    "cwid announcement did not write CSV row");
     }
     test_end();
 
-    /* 10. Mix of COR cycles and announcements both counted */
-    test_begin("cdr: mixed COR + announcements counted");
+    /* 10. Mix of COR cycle (counts) + announcement (doesn't count) */
+    test_begin("cdr: mixed COR + announcement — only COR bumps count");
     {
         int calls_before = g_today_calls;
+        long rows_before = count_csv_rows();
         sim_transmission(0, 0);
         mock_fire_simple(KERCHEVT_COR_DROP);
         kerchevt_t e = {
@@ -169,8 +195,10 @@ void test_integ_cdr(void)
             .announcement = { .source = "weather", .description = "current conditions" },
         };
         kerchevt_fire(&e);
-        test_assert(g_today_calls == calls_before + 2,
-                    "mixed count wrong");
+        test_assert(g_today_calls == calls_before + 1,
+                    "expected +1 from COR cycle (announcement is voice-only excluded)");
+        test_assert(count_csv_rows() == rows_before + 2,
+                    "expected 2 new CSV rows (1 COR + 1 announcement)");
     }
     test_end();
 
