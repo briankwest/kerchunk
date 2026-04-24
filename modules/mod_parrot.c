@@ -35,7 +35,8 @@ static size_t   g_cap;
 /* Signal quality — accumulated during recording */
 static int64_t  g_sq_sum;
 static int64_t  g_sq_count;
-static int32_t  g_sq_peak_rms;
+static int32_t  g_sq_peak_rms;      /* loudest 20 ms-frame RMS (diagnostic) */
+static int32_t  g_sq_peak_sample;   /* |max sample|, what users call "peak" */
 
 /* ── Audio tap callback ── */
 
@@ -70,6 +71,8 @@ static void parrot_audio_tap(const kerchevt_t *evt, void *ud)
     for (size_t j = 0; j < n; j++) {
         int32_t v = evt->audio.samples[j];
         frame_sum += v * v;
+        int32_t a = v < 0 ? -v : v;
+        if (a > g_sq_peak_sample) g_sq_peak_sample = a;
     }
     g_sq_sum += frame_sum;
     g_sq_count += (int64_t)n;
@@ -95,6 +98,7 @@ static void start_recording(void)
     g_sq_sum = 0;
     g_sq_count = 0;
     g_sq_peak_rms = 0;
+    g_sq_peak_sample = 0;
     g_recording = 1;
     g_core->audio_tap_register(parrot_audio_tap, NULL);
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "recording started (max %ds)",
@@ -118,14 +122,20 @@ static void stop_and_playback(void)
             while ((int64_t)avg_rms * avg_rms < avg) avg_rms++;
         }
 
-        /* Convert to percentage of full scale for readability */
-        int avg_pct = (int)((avg_rms * 100L) / 32767);
-        int peak_pct = (int)((g_sq_peak_rms * 100L) / 32767);
+        /* Convert to percentage of full scale for readability. "Peak"
+         * is the max absolute sample — what a user intuitively means
+         * by peak level. peak_frame_rms is kept as a diagnostic (it is
+         * always smaller than peak_sample for speech). */
+        int avg_pct        = (int)((avg_rms         * 100L) / 32767);
+        int peak_pct       = (int)((g_sq_peak_sample * 100L) / 32767);
+        int peak_frame_pct = (int)((g_sq_peak_rms   * 100L) / 32767);
 
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                    "playing back %.1fs (%zu samples) avg_rms=%d(%d%%) peak_rms=%d(%d%%)",
+                    "playing back %.1fs (%zu samples) avg_rms=%d(%d%%) "
+                    "peak_sample=%d(%d%%) peak_frame_rms=%d(%d%%)",
                     dur, g_len, (int)avg_rms, avg_pct,
-                    (int)g_sq_peak_rms, peak_pct);
+                    (int)g_sq_peak_sample, peak_pct,
+                    (int)g_sq_peak_rms, peak_frame_pct);
 
         g_core->queue_silence(200, KERCHUNK_PRI_NORMAL);
         g_core->queue_audio_buffer(g_buf, g_len, KERCHUNK_PRI_NORMAL, 0);
