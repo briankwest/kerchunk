@@ -28,13 +28,18 @@ static kerchunk_core_t *g_core;
 static char g_api_key[128];
 static char g_location[64]    = "74104";
 static int  g_auto_announce   = 0;         /* off by default (FCC 95.1733) */
-static int  g_interval_ms     = 1800000;   /* 30 min */
+/* Two cadences — the dashboard refresh and the on-air announcement
+ * have different latency expectations. Fetch runs whenever an
+ * api_key is set; announce only when auto_announce is on. */
+static int  g_fetch_interval_ms    = 300000;    /* 5 min */
+static int  g_announce_interval_ms = 1800000;   /* 30 min */
 static int  g_announce_temp   = 1;
 static int  g_announce_cond   = 1;
 static int  g_announce_wind   = 1;
 static char g_sounds_dir[256] = "/etc/kerchunk/sounds";
 
-static int  g_timer = -1;
+static int  g_fetch_timer    = -1;
+static int  g_announce_timer = -1;
 
 /* ---- cached current conditions ---- */
 static float g_temp_f;
@@ -286,7 +291,8 @@ static int weather_parse_json(const char *json)
 static void render_weather_resp(kerchunk_resp_t *r)
 {
     resp_str(r, "location", g_location);
-    resp_int(r, "interval_ms", g_interval_ms);
+    resp_int(r, "fetch_interval_ms",    g_fetch_interval_ms);
+    resp_int(r, "announce_interval_ms", g_announce_interval_ms);
     resp_str(r, "api_key", g_api_key[0] ? "configured" : "NOT SET");
     resp_bool(r, "valid", g_valid);
     if (g_valid) {
@@ -666,6 +672,28 @@ static void weather_update(void *ud)
         weather_announce();
 }
 
+/* Fetch-only timer: refreshes the dashboard snapshot at
+ * g_fetch_interval_ms and never speaks. Runs whenever an api_key
+ * is set, regardless of auto_announce, so the dashboard stays
+ * current even on FCC-compliant default configs. */
+static void weather_fetch_cb(void *ud)
+{
+    (void)ud;
+    if (kerchunk_core_get_emergency()) return;
+    weather_fetch();
+}
+
+/* Announce-only timer: speaks the cached values at
+ * g_announce_interval_ms. Skips the fetch — that's the dashboard
+ * cadence's job. The announce uses whatever's most-recently in
+ * the cache, which is at most fetch_interval old. */
+static void weather_announce_cb(void *ud)
+{
+    (void)ud;
+    if (kerchunk_core_get_emergency()) return;
+    weather_announce();
+}
+
 static void on_dtmf_weather(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
@@ -717,7 +745,14 @@ static int weather_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "weather", "location");
     if (v) snprintf(g_location, sizeof(g_location), "%s", v);
 
-    g_interval_ms = kerchunk_config_get_duration_ms(cfg, "weather", "interval", 1800000);
+    /* Two cadences: dashboard refresh (fetch_interval, default 5m)
+     * and on-air announcement (interval, default 30m). Operators
+     * upgrading from the old single-knob `interval` get the same
+     * announce cadence; the dashboard simply gets fresher data. */
+    g_fetch_interval_ms    = kerchunk_config_get_duration_ms(cfg, "weather",
+                                                              "fetch_interval", 300000);
+    g_announce_interval_ms = kerchunk_config_get_duration_ms(cfg, "weather",
+                                                              "interval", 1800000);
 
     v = kerchunk_config_get(cfg, "weather", "announce_temp");
     g_announce_temp = (!v || strcmp(v, "on") == 0);
@@ -734,17 +769,32 @@ static int weather_configure(const kerchunk_config_t *cfg)
     v = kerchunk_config_get(cfg, "general", "sounds_dir");
     if (v) snprintf(g_sounds_dir, sizeof(g_sounds_dir), "%s", v);
 
-    /* Start periodic timer only if auto_announce is on */
-    if (g_timer >= 0)
-        g_core->timer_cancel(g_timer);
-    g_timer = -1;
-    if (g_auto_announce && g_api_key[0] != '\0' && g_interval_ms > 0)
-        g_timer = g_core->timer_create(g_interval_ms, 1, weather_update, NULL);
+    /* Cancel any existing timers — configure() runs on every SIGHUP
+     * config reload, so we re-arm with current intervals. */
+    if (g_fetch_timer >= 0)    g_core->timer_cancel(g_fetch_timer);
+    if (g_announce_timer >= 0) g_core->timer_cancel(g_announce_timer);
+    g_fetch_timer    = -1;
+    g_announce_timer = -1;
+
+    /* Dashboard refresh runs whenever an api_key is set — independent
+     * of auto_announce so FCC-compliant default configs still get a
+     * live weather card. */
+    if (g_api_key[0] != '\0' && g_fetch_interval_ms > 0)
+        g_fetch_timer = g_core->timer_create(g_fetch_interval_ms, 1,
+                                              weather_fetch_cb, NULL);
+
+    /* On-air announcement is gated by auto_announce (default off,
+     * FCC 95.1733). It speaks from the cache without re-fetching —
+     * the fetch timer keeps that fresh enough. */
+    if (g_auto_announce && g_api_key[0] != '\0' && g_announce_interval_ms > 0)
+        g_announce_timer = g_core->timer_create(g_announce_interval_ms, 1,
+                                                 weather_announce_cb, NULL);
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
-                "location=%s interval=%dms auto_announce=%d temp=%d cond=%d wind=%d",
-                g_location, g_interval_ms, g_auto_announce,
-                g_announce_temp, g_announce_cond, g_announce_wind);
+                "location=%s fetch_interval=%dms announce_interval=%dms "
+                "auto_announce=%d temp=%d cond=%d wind=%d",
+                g_location, g_fetch_interval_ms, g_announce_interval_ms,
+                g_auto_announce, g_announce_temp, g_announce_cond, g_announce_wind);
 
     /* Fetch weather on startup so dashboard has data immediately */
     if (g_api_key[0] != '\0')
@@ -761,8 +811,8 @@ static void weather_unload(void)
     }
     g_core->unsubscribe(DTMF_EVT_WEATHER,  on_dtmf_weather);
     g_core->unsubscribe(DTMF_EVT_FORECAST, on_dtmf_forecast);
-    if (g_timer >= 0)
-        g_core->timer_cancel(g_timer);
+    if (g_fetch_timer >= 0)    g_core->timer_cancel(g_fetch_timer);
+    if (g_announce_timer >= 0) g_core->timer_cancel(g_announce_timer);
     curl_global_cleanup();
 }
 
