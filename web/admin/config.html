@@ -123,21 +123,34 @@ const TOGGLE_KEYS = new Set([
 ]);
 
 const NUMBER_KEYS = new Set([
-  'tail_time','hang_time','timeout_time','cor_debounce','tx_delay','tx_tail',
-  'relay_drain','cwid_interval','cwid_wpm','cwid_freq','cwid_amplitude',
+  'cwid_wpm','cwid_freq','cwid_amplitude',
   'cor_drop_hold','quiet_start','quiet_end','solar_offset',
   'end_silence_ms','end_silence_dtmf_ms','dtmf_grace_ms',
   'hits_to_begin','misses_to_end','min_off_frames',
-  'freq','duration','amplitude','ani_window','login_timeout','max_messages',
-  'max_duration','inter_digit_timeout','interval','timeout',
-  'session_timeout','time_skew','port','hw_rate','preemphasis_alpha',
-  'cor_bit','ptt_bit','max_size_mb','poll_interval','reannounce_interval',
-  'wyoming_port','max_capture','min_duration','ptt_max_duration','ptt_priority',
+  'freq','amplitude','max_messages',
+  'time_skew','port','hw_rate','preemphasis_alpha',
+  'cor_bit','ptt_bit','max_size_mb',
+  'wyoming_port','ptt_priority',
   'priority','virtual_user_id','rf_bridge_group',
   'carrier_freq','scrambler_code','tx_level',
   'default_speed','cap_code','udp_base_port',
-  'dial_timeout','inactivity_timeout','max_call_duration','vad_threshold','vad_hold_ms',
+  'vad_threshold','vad_hold_ms',
   'center_freq','sample_rate_sdr','gain','squelch'
+]);
+
+/* Duration values — accept human-readable strings ("15m", "300s",
+ * "500ms") that the daemon's parse_duration_ms / parse_duration_s
+ * handles. Bare numbers still work (interpreted as ms by the _ms
+ * parser, s by the _s parser); render as text with a placeholder
+ * hint so the user isn't forced to think in milliseconds. */
+const DURATION_KEYS = new Set([
+  'tail_time','hang_time','timeout_time','cor_debounce','tx_delay','tx_tail',
+  'relay_drain','cwid_interval','cwid_tail',
+  'ani_window','login_timeout','inter_digit_timeout',
+  'interval','timeout','duration','session_timeout',
+  'poll_interval','reannounce_interval','fetch_interval',
+  'max_capture','min_duration','max_duration','ptt_max_duration',
+  'dial_timeout','inactivity_timeout','max_call_duration','vad_hold_ms'
 ]);
 
 const PASSWORD_KEYS = new Set([
@@ -259,6 +272,7 @@ function getFieldType(key, section) {
   if (key === 'enabled') return 'toggle';
   if (TOGGLE_KEYS.has(key)) return 'toggle';
   if (NUMBER_KEYS.has(key)) return 'number';
+  if (DURATION_KEYS.has(key)) return 'duration';
   if (PASSWORD_KEYS.has(key)) return 'password';
   if (SELECT_KEYS[key]) return 'select';
   return 'text';
@@ -337,6 +351,13 @@ function renderConfig(data) {
           if (type === 'number') {
             inp.type = 'number';
             inp.step = 'any';
+          } else if (type === 'duration') {
+            /* Free-form text so the daemon's duration parser can
+             * accept "15m", "300s", "500ms" — bare numbers still
+             * work (ms for *_ms fields, s for *_s fields). */
+            inp.type = 'text';
+            inp.placeholder = 'e.g. 15m, 300s, 500ms';
+            inp.pattern = '^\\d+(\\.\\d+)?(ms|s|m|h)?$|^\\d+(h\\d+m?)?(\\d+m\\d+s?)?$';
           } else if (type === 'password') {
             inp.type = 'password';
           } else if (type === 'readonly') {
@@ -348,6 +369,12 @@ function renderConfig(data) {
 
           group.appendChild(inp);
 
+          if (type === 'duration') {
+            var note = document.createElement('div');
+            note.className = 'field-note';
+            note.textContent = 'Duration: 15m, 30s, 500ms (bare numbers = ms)';
+            group.appendChild(note);
+          }
           if (type === 'readonly') {
             var note = document.createElement('div');
             note.className = 'field-note';
