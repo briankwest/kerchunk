@@ -5,16 +5,28 @@
 
 #include "kerchunk.h"
 
-static int g_emergency_flag;
+static int    g_emergency_flag;
+static time_t g_emergency_expires_at;
 
 void kerchunk_core_set_emergency(int active)
 {
     g_emergency_flag = active;
+    if (!active) g_emergency_expires_at = 0;
 }
 
 int kerchunk_core_get_emergency(void)
 {
     return g_emergency_flag;
+}
+
+void kerchunk_core_set_emergency_expires_at(time_t when)
+{
+    g_emergency_expires_at = when;
+}
+
+time_t kerchunk_core_get_emergency_expires_at(void)
+{
+    return g_emergency_expires_at;
 }
 
 void kerchunk_socket_broadcast_log(int level, const char *formatted_line)
