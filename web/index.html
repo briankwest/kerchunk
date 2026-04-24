@@ -83,6 +83,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 <header>
   <h1 id="callsign">Repeater</h1>
   <span id="state-badge" class="badge badge-idle">IDLE</span>
+  <span id="tx-badge" class="badge badge-off" title="Kerchunk transmitting">TX idle</span>
   <span id="ptt-badge" class="badge badge-off">PTT off</span>
   <nav style="margin-left:auto;display:flex;gap:8px">
     <a href="index.html" class="btn" style="border-color:var(--accent);color:var(--accent)">Public</a>
@@ -171,12 +172,26 @@ function tr(k,v) { return '<tr><td>'+k+'</td><td>'+v+'</td></tr>'; }
  *   TIMEOUT    — red, TOT fault */
 function stateBadgeClass(state) {
   return (
-    state === 'IDLE'       ? 'badge-idle'    :
-    state === 'RECEIVING'  ? 'badge-rx'      :
-    state === 'TAIL_WAIT'  ? 'badge-tx'      :
-    state === 'HANG_WAIT'  ? 'badge-hang'    :
-    state === 'TIMEOUT'    ? 'badge-timeout' :
+    state === 'IDLE'        ? 'badge-idle'    :
+    state === 'RECEIVING'   ? 'badge-rx'      :
+    state === 'TAIL_WAIT'   ? 'badge-tx'      :
+    state === 'HANG_WAIT'   ? 'badge-hang'    :
+    state === 'RX_TIMEOUT'  ? 'badge-timeout' :
     'badge-tx');
+}
+
+/* Minimalist TX indicator for the public page — "TX active" whenever
+ * the repeater is transmitting (any TX state other than IDLE),
+ * "TX idle" otherwise. No phase breakdown; that belongs on the admin
+ * dashboard. Driven entirely by the backend 'status' snapshot +
+ * 'tx_state_change' SSE events — no client-side synthesis. */
+function updateTxIndicator(txstate) {
+  const b = document.getElementById('tx-badge');
+  if (!b) return;
+  const active = typeof txstate === 'string' && txstate !== 'TX_IDLE';
+  b.textContent = active ? 'TX ' + txstate.replace(/^TX_/, '').toLowerCase()
+                         : 'TX idle';
+  b.className = 'badge ' + (active ? 'badge-tx' : 'badge-off');
 }
 
 function updateState(state) {
@@ -187,7 +202,7 @@ function updateState(state) {
    * tap, relay tail). In IDLE / HANG_WAIT / TIMEOUT the stream is
    * silent, so clear the stale RX/TX direction chip on the Live Audio
    * card. */
-  if (state === 'IDLE' || state === 'HANG_WAIT' || state === 'TIMEOUT') {
+  if (state === 'IDLE' || state === 'HANG_WAIT' || state === 'RX_TIMEOUT') {
     audioLastDir = -1;
     const dir = document.getElementById('audio-dir');
     if (dir) dir.style.display = 'none';
@@ -230,8 +245,9 @@ let streamServerStats = {};
 async function refreshStatus() {
   try {
     const d = await (await fetch('/api/status')).json();
-    if (d.rx_state) updateState(d.rx_state);
-    if (typeof d.ptt === 'boolean') updatePTT(d.ptt);
+    /* State fields (rx_state, tx_state, ptt, cor) come via the SSE
+     * 'status' snapshot — don't set them here. This call only feeds
+     * non-state dashboard items (stream stats). */
     streamServerStats = {
       listeners:   d.audio_listeners,
       sampleRate:  d.audio_sample_rate,
@@ -323,8 +339,21 @@ function connectSSE() {
     sseEvents.onmessage = function(ev) {
       let e; try { e = JSON.parse(ev.data); } catch(_) { return; }
       switch (e.type) {
+        case 'status': {
+          /* Authoritative snapshot from the daemon. First message on
+           * every SSE connect + republished on every state-affecting
+           * event. Source of truth for rx/tx/ptt; no synthesis. */
+          const s = e.data || {};
+          if (typeof s.rx_state === 'string') updateState(s.rx_state);
+          if (typeof s.tx_state === 'string') updateTxIndicator(s.tx_state);
+          if (typeof s.ptt === 'boolean') updatePTT(s.ptt);
+          break;
+        }
         case 'rx_state_change':
           updateState(e.new_state);
+          break;
+        case 'tx_state_change':
+          updateTxIndicator(e.new_state);
           break;
         case 'ptt_assert':
           updatePTT(true);

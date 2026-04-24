@@ -41,7 +41,18 @@ table td:last-child { text-align: right; font-weight: 600; font-variant-numeric:
               text-align: center; font-weight: 500; }
 .state-item.active { background: var(--accent); color: #000; font-weight: 700; }
 [data-tx].active { background: var(--yellow); color: #000; }
+/* RX_TIMEOUT and any warn-flavored state — red when active, muted when idle */
+.state-item.warn { color: var(--red); }
+.state-item.warn.active { background: var(--red); color: #fff; }
 .arrow { text-align: center; color: var(--border); font-size: 9px; line-height: 1; }
+
+/* Connection-lost overlay: all state markers grey out, arrows dim,
+ * and the badge carries a "DISCONNECTED" label. Cleared as soon
+ * as we receive our first 'status' snapshot after reconnect. */
+body.sse-disconnected .state-flow .state-item { opacity: 0.35; }
+body.sse-disconnected .state-flow .state-item.active { background: var(--border); color: var(--dim); }
+body.sse-disconnected #state-badge::before { content: "⚠ "; color: var(--yellow); }
+body.sse-disconnected #state-badge::after { content: " (disconnected)"; font-weight: 400; opacity: 0.7; }
 .alert { padding: 6px 10px; border-left: 3px solid var(--red); margin-bottom: 6px;
          font-size: 12px; background: rgba(248,81,73,0.08); border-radius: 0 3px 3px 0; }
 .alert.moderate { border-color: var(--yellow); background: rgba(210,153,34,0.08); }
@@ -165,6 +176,8 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
       <div class="state-item" data-state="TAIL_WAIT">TAIL_WAIT</div>
       <div class="arrow">&#9660;</div>
       <div class="state-item" data-state="HANG_WAIT">HANG_WAIT</div>
+      <div class="arrow">&#9660;</div>
+      <div class="state-item warn" data-state="RX_TIMEOUT">RX_TIMEOUT</div>
     </div>
     <h2 style="margin-top:12px">TX (Outbound)</h2>
     <div class="state-flow" id="tx-flow">
@@ -172,9 +185,13 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
       <div class="arrow">&#9660;</div>
       <div class="state-item" data-tx="TX_RELAY">RELAY</div>
       <div class="arrow">&#9660;</div>
-      <div class="state-item" data-tx="TX_QUEUE">PLAYING</div>
+      <div class="state-item" data-tx="TX_DELAY">DELAY</div>
+      <div class="arrow">&#9660;</div>
+      <div class="state-item" data-tx="TX_DRAIN">DRAIN</div>
       <div class="arrow">&#9660;</div>
       <div class="state-item" data-tx="TX_TAIL">TAIL</div>
+      <div class="arrow">&#9660;</div>
+      <div class="state-item" data-tx="TX_HOLD">HOLD</div>
     </div>
     <h2 style="margin-top:12px">Current Caller</h2>
     <div id="caller" style="font-size:13px">None</div>
@@ -293,7 +310,9 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
 const API = '/admin';
 let dtmfBuf = '';
 let dtmfTimer = null;
-let relaying = false;  // COR active — TX is in relay mode
+/* `relaying` flag removed in Phase 3 — the TX state comes from the
+ * backend's 'status' snapshot + 'tx_state_change' events via
+ * updateTxState(). Nothing on the UI should derive TX state locally. */
 
 const CRED = {credentials:'same-origin'};
 async function fetchJSON(p) { return (await fetch(API+p, CRED)).json(); }
@@ -456,11 +475,11 @@ function stateBadgeClass(state) {
    * state that isn't explicitly listed falls through to badge-tx so a
    * newly added state doesn't accidentally look idle. */
   return (
-    state === 'IDLE'       ? 'badge-idle'    :
-    state === 'RECEIVING'  ? 'badge-rx'      :
-    state === 'TAIL_WAIT'  ? 'badge-tx'      :
-    state === 'HANG_WAIT'  ? 'badge-hang'    :
-    state === 'TIMEOUT'    ? 'badge-timeout' :
+    state === 'IDLE'        ? 'badge-idle'    :
+    state === 'RECEIVING'   ? 'badge-rx'      :
+    state === 'TAIL_WAIT'   ? 'badge-tx'      :
+    state === 'HANG_WAIT'   ? 'badge-hang'    :
+    state === 'RX_TIMEOUT'  ? 'badge-timeout' :
     'badge-tx');
 }
 
@@ -475,7 +494,7 @@ function updateState(state) {
    * clear the stale RX/TX direction chip on the Live Audio card —
    * otherwise 'TX' lingers next to 'Playing' after the repeater goes
    * idle. Matches the public page's behavior. */
-  if (state==='IDLE' || state==='HANG_WAIT' || state==='TIMEOUT') {
+  if (state==='IDLE' || state==='HANG_WAIT' || state==='RX_TIMEOUT') {
     audioLastDir = -1;
     const dir = document.getElementById('audio-dir');
     if (dir) dir.style.display = 'none';
@@ -490,7 +509,6 @@ function updatePTT(on) {
 }
 
 function updateCOR(on) {
-  relaying = !!on;
   syncToggle('cor', on);
 }
 
@@ -538,16 +556,12 @@ async function refreshStatus() {
   try {
     const d=await fetchJSON('/api/status');
     if(d.sample_rate) serverRate = d.sample_rate;
-    if(d.rx_state) updateState(d.rx_state);
-    if(d.tx_state) updateTxState(d.tx_state);
-    updatePTT(d.ptt);
-    updateCOR(d.cor);
-    if(d.cor) {
-      liveStats.corActive=true; liveStats.corStart=Date.now();
-      updateTxState('TX_RELAY');
-    } else {
-      liveStats.corActive=false;
-    }
+    /* State markers (rx_state, tx_state, cor, ptt) arrive via SSE
+     * 'status' snapshot — do not set them here. This path only
+     * populates non-state dashboard fields (sample rate, stream
+     * stats, liveStats bookkeeping). */
+    if(d.cor) { liveStats.corActive=true; liveStats.corStart=Date.now(); }
+    else      { liveStats.corActive=false; }
     streamServerStats = {
       listeners:   d.audio_listeners,
       sampleRate:  d.audio_sample_rate,
@@ -1068,20 +1082,25 @@ function connectSSE() {
       const evt=JSON.parse(e.data);
       switch(evt.type){
         case 'status': {
-          // Authoritative snapshot from the daemon. Published on every
-          // state-affecting event and cached in mod_web for SSE replay
-          // on connect, so this fires both as the very first message
-          // after we open the stream AND on every rx/tx/cor/ptt change.
-          // Treat this as the source of truth; the case-specific
-          // handlers below still fire for event-driven UI (log lines,
-          // counters) but the underlying state markers come from here.
+          // Authoritative snapshot from the daemon. Published on module
+          // load, on every state-affecting event, and replayed on SSE
+          // reconnect. Source of truth for rx_state, tx_state, cor,
+          // ptt, emergency, queue_depth. No UI-side synthesis — the
+          // per-event handlers below only do log lines and counters.
           const s = evt.data || {};
           if (typeof s.rx_state === 'string') updateState(s.rx_state);
           if (typeof s.tx_state === 'string') updateTxState(s.tx_state);
           if (typeof s.cor === 'boolean') updateCOR(s.cor);
           if (typeof s.ptt === 'boolean' && typeof updatePTT === 'function') updatePTT(s.ptt);
+          // First authoritative payload since (re)connect — clear the
+          // disconnection overlay.
+          document.body.classList.remove('sse-disconnected');
           break;
         }
+        case 'tx_state_change':
+          updateTxState(evt.new_state);
+          addLog('TX: '+evt.old_state+' → '+evt.new_state,'log-ptt');
+          break;
         case 'rx_state_change':
           updateState(evt.new_state);
           // Don't reset TX on RX state changes — TX has its own lifecycle.
@@ -1089,9 +1108,9 @@ function connectSSE() {
           addLog('RX: '+evt.old_state+' \u2192 '+evt.new_state,'log-state');
           break;
         case 'cor_assert':
-          updateCOR(true);
+          /* TX state comes from the backend 'status' / 'tx_state_change'
+           * path. Don't synthesise it here — just update per-event UI. */
           liveStats.corActive=true; liveStats.corStart=Date.now();
-          updateTxState('TX_RELAY');
           addLog('COR assert \u2192 relay active','log-state');
           break;
         case 'cor_drop':
@@ -1100,14 +1119,14 @@ function connectSSE() {
             liveStats.rx_count++;
             liveStats.corActive=false;
           }
-          updateCOR(false);
-          updateTxState('TX_TAIL');
+          /* TX state comes from backend; no synthesis here. */
           addLog('COR drop \u2192 relay draining','log-state');
           renderStats();
           break;
         case 'ptt_assert':
+          /* PTT badge is driven by the backend snapshot; this handler
+           * only does per-event work (live stats, log line). */
           liveStats.pttActive=true; liveStats.pttStart=Date.now();
-          updatePTT(true);
           addLog('PTT on','log-ptt');
           break;
         case 'ptt_drop':
@@ -1115,8 +1134,7 @@ function connectSSE() {
             liveStats.tx_time_ms += Date.now()-liveStats.pttStart;
             liveStats.pttActive=false;
           }
-          updatePTT(false);
-          if (!relaying) updateTxState('TX_IDLE');
+          /* PTT + TX state both come from backend snapshot now. */
           /* Clear RX/TX direction chip — announcements (CW ID, TTS,
            * parrot) transmit while state is IDLE, so state_change
            * never fires to clean it up. */
@@ -1144,13 +1162,12 @@ function connectSSE() {
           addLog('Recording: '+evt.direction+' '+evt.path,'log-rec');
           break;
         case 'queue_drain':
-          if (!relaying) updateTxState('TX_QUEUE');
+          /* TX state comes from backend; just log + update stats. */
           addLog('TX: queue playback started','log-ptt');
           break;
         case 'queue_complete':
           liveStats.tx_count++;
           liveStats.queue_items++;
-          if (!relaying) updateTxState('TX_TAIL');
           addLog('TX: queue complete \u2192 tail','log-ptt');
           renderStats();
           break;
@@ -1217,6 +1234,10 @@ function connectSSE() {
   es.onerror=()=>{
     es.close();
     if (window._sseShutdown) return;
+    /* Mark the dashboard as disconnected — CSS greys out state
+     * markers and decorates #state-badge. Cleared in the 'status'
+     * handler on the first payload after reconnect. */
+    document.body.classList.add('sse-disconnected');
     sseRetry++;
     let delay=Math.min(3000*Math.pow(2,sseRetry-1),30000);
     if (sseRetry<=10) setTimeout(connectSSE,delay);
