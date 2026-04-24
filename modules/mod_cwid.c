@@ -216,6 +216,66 @@ static void spell_number(const char *num, char *out, size_t outsz)
     out[pos] = '\0';
 }
 
+/* Forward declaration so on_state_change/quiet/oc handlers can call. */
+static int is_quiet_hour(void);
+
+/* Authoritative CW ID snapshot for admin dashboard. Public-safe
+ * (callsign is intentionally on-air anyway). Called from configure
+ * seed, send_cwid (CW just fired so next-fire window resets), and
+ * on every state-change site that flips g_pending or g_oc_state. */
+static void publish_cwid_snapshot(void)
+{
+    if (!g_core || !g_core->sse_publish) return;
+
+    const char *mode = (g_mode == CWID_MODE_ON_CALL) ? "on_call" : "always";
+    const char *oc_state =
+        (g_oc_state == OC_ACTIVE) ? "active" :
+        (g_oc_state == OC_TAIL)   ? "tail"   : "idle";
+
+    /* For the always-mode wall-clock scheduler, next fire lands on
+     * the next interval boundary (offset_ms = 0). On-call mode has
+     * no fixed schedule — next ID happens when the channel goes
+     * quiet after a key-up. */
+    long long next_fire_epoch = 0;
+    if (g_mode == CWID_MODE_ALWAYS && g_cwid_interval_ms > 0) {
+        long now_ms = (long)time(NULL) * 1000L;
+        long delta_ms = (long)g_cwid_interval_ms -
+                        (now_ms % (long)g_cwid_interval_ms);
+        next_fire_epoch = (long long)(time(NULL) + (delta_ms + 999) / 1000);
+    }
+
+    char json[768];
+    snprintf(json, sizeof(json),
+        "{\"mode\":\"%s\","
+        "\"callsign\":\"%s\","
+        "\"frequency\":\"%s\","
+        "\"pl_tone\":\"%s\","
+        "\"interval_sec\":%d,"
+        "\"wpm\":%d,"
+        "\"freq_hz\":%d,"
+        "\"in_quiet_hours\":%s,"
+        "\"quiet_start_hour\":%d,"
+        "\"quiet_end_hour\":%d,"
+        "\"pending\":%s,"
+        "\"on_call_state\":\"%s\","
+        "\"next_fire_epoch\":%lld}",
+        mode,
+        g_callsign,
+        g_frequency,
+        g_pl_tone,
+        g_cwid_interval_ms / 1000,
+        g_cwid_wpm,
+        g_cwid_freq,
+        is_quiet_hour() ? "true" : "false",
+        g_quiet_start,
+        g_quiet_end,
+        g_pending ? "true" : "false",
+        oc_state,
+        next_fire_epoch);
+
+    g_core->sse_publish("cwid_updated", json, /*admin_only=*/0);
+}
+
 static void send_cwid(void)
 {
     if (g_callsign[0] == '\0')
@@ -288,6 +348,7 @@ static void send_cwid(void)
     kerchevt_fire(&ae);
 
     g_pending = 0;
+    publish_cwid_snapshot();
 }
 
 static int is_quiet_hour(void)
@@ -352,6 +413,7 @@ static void oc_tail_expire(void *ud)
 
     g_oc_state = OC_IDLE;
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: TAIL→IDLE (final ID)");
+    publish_cwid_snapshot();
 }
 
 /* Transition to ACTIVE: start repeating timer.
@@ -374,6 +436,7 @@ static void oc_enter_active(int from_idle)
                                           oc_active_tick, NULL);
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: →ACTIVE (%s, timer %dms)",
                 from_idle ? "initial, pending" : "rekey", g_cwid_interval_ms);
+    publish_cwid_snapshot();
 }
 
 /* Transition to TAIL: cancel repeating timer, start one-shot tail timer */
@@ -386,6 +449,7 @@ static void oc_enter_tail(void)
     g_oc_timer_id = g_core->timer_create(tail_ms, 0, oc_tail_expire, NULL);
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "on_call: →TAIL (final ID in %dms)",
                 tail_ms);
+    publish_cwid_snapshot();
 }
 
 /* ── event handlers (shared by both modes) ── */
@@ -402,6 +466,7 @@ static void on_queue_preempted(const kerchevt_t *evt, void *ud)
     g_pending = 1;
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "CW ID preempted by COR — will re-send after channel clears");
+    publish_cwid_snapshot();
 }
 
 static void on_tail_start(const kerchevt_t *evt, void *ud)
@@ -562,6 +627,8 @@ static int cwid_configure(const kerchunk_config_t *cfg)
     if (g_quiet_start >= 0 && g_quiet_end >= 0)
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "quiet hours: %02d:00-%02d:00",
                     g_quiet_start, g_quiet_end);
+
+    publish_cwid_snapshot();
     return 0;
 }
 

@@ -174,6 +174,10 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24p
     <table id="cdr-table">
       <tr><td colspan="2" style="color:var(--dim)">No data</td></tr>
     </table>
+    <h2 style="margin-top:12px">CW ID</h2>
+    <table id="cwid-table">
+      <tr><td colspan="2" style="color:var(--dim)">No data</td></tr>
+    </table>
   </div>
 
   <!-- State Machines -->
@@ -1103,6 +1107,30 @@ function fmtDuration(sec){
   return s+'s';
 }
 
+/* CW ID snapshot render — countdown to next ID + mode/quiet flags. */
+function renderCwid(d){
+  const el = document.getElementById('cwid-table');
+  if (!el) return;
+  if (!d || !d.callsign){
+    el.innerHTML = '<tr><td colspan="2" style="color:var(--dim)">No data</td></tr>';
+    return;
+  }
+  let html = '';
+  html += '<tr><td>Callsign</td><td>'+d.callsign+'</td></tr>';
+  html += '<tr><td>Mode</td><td>'+(d.mode||'?')+'</td></tr>';
+  if (d.in_quiet_hours){
+    html += '<tr><td>Status</td><td><span style="color:var(--yellow)">Quiet hours</span></td></tr>';
+  } else if (d.pending){
+    html += '<tr><td>Status</td><td><span style="color:var(--yellow)">Pending</span> (channel busy)</td></tr>';
+  } else if (d.mode === 'always' && d.next_fire_epoch){
+    const sec = Math.max(0, d.next_fire_epoch - Math.floor(Date.now()/1000));
+    html += '<tr><td>Next ID</td><td>'+fmtDuration(sec)+'</td></tr>';
+  } else if (d.mode === 'on_call'){
+    html += '<tr><td>State</td><td>'+(d.on_call_state||'idle')+'</td></tr>';
+  }
+  el.innerHTML = html;
+}
+
 /* CDR snapshot render — today's call totals plus an in-call line
  * with the current caller (if any) and elapsed seconds. */
 function renderCdr(d){
@@ -1454,6 +1482,11 @@ function connectSSE() {
           /* Authoritative snapshot from mod_cdr: today's call totals
            * + in-call state. */
           renderCdr(evt.data || {});
+          break;
+        case 'cwid_updated':
+          /* Authoritative snapshot from mod_cwid: next-fire ETA,
+           * mode, quiet-hours state. */
+          renderCwid(evt.data || {});
           break;
         case 'dtmf_digit':
           addDtmf(evt.digit);
