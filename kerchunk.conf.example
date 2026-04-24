@@ -140,11 +140,11 @@ ptt_bit = 2                      ; GPIO number (0-7), CM119 GPIO2 = PTT
 ; ----------------------------------------------------------------------------
 [repeater]
 tail_time = 2s                   ; Tail hang time after COR drop
-hang_time = 500                  ; Hang time after tail before idle (ms)
+hang_time = 500ms                ; Hang time after tail before idle
 timeout_time = 3m                ; Time-Out Timer — max TX duration
-cor_debounce = 150               ; COR debounce / kerchunk filter (ms)
-tx_delay = 100                   ; Silence after PTT assert before audio (ms)
-tx_tail = 200                    ; Silence after audio before PTT release (ms)
+cor_debounce = 150ms             ; COR debounce / kerchunk filter
+tx_delay = 100ms                 ; Silence after PTT assert before audio
+tx_tail = 200ms                  ; Silence after audio before PTT release
 ; cor_drop_hold = 1s             ; DEPRECATED — use [txactivity] end_silence_ms.
 ;                                ; Still read as a fallback for back-compat;
 ;                                ; ignored if [txactivity] end_silence_ms is set.
@@ -154,7 +154,7 @@ tx_tail = 200                    ; Silence after audio before PTT release (ms)
 ; Enables full software control over retransmitted audio (recording, filtering).
 ; Queue playback pauses when COR is active — live voice always has priority.
 software_relay = off             ; on | off
-relay_drain = 500                ; ms to continue relaying after COR drop (0-5000)
+relay_drain = 500ms              ; continue relaying after COR drop (0-5s)
 ;                                ; Prevents cutting off speech mid-word. Audio in
 ;                                ; the playback buffer also drains fully before PTT
 ;                                ; releases regardless of this timer.
@@ -563,7 +563,8 @@ directory = /var/lib/kerchunk/cdr  ; Output directory
 ; wyoming_port = 10200           ; Wyoming server port (same as TTS if combined)
 ; language = en                  ; Language code (or empty for auto-detect)
 ; max_capture = 30               ; Max seconds to capture per transmission
-; min_duration = 500             ; Min duration (ms) to transcribe (skip kerchunks)
+;                                ; (bare integer — seconds, no suffix accepted)
+; min_duration = 500ms           ; Min duration to transcribe (skip kerchunks)
 ; normalize_far_dir =            ; Path to NeMo FAR grammar files (optional).
 ;                                ; Same FARs as [tts] — normalizes transcript
 ;                                ; output before downstream dispatch (mod_ai).
@@ -668,7 +669,7 @@ time_skew = 1                    ; Accept +/- N time steps (each 30s)
 ; dial_timeout = 30s
 ; inactivity_timeout = 60s
 ; vad_threshold = 800
-; vad_hold_ms = 500
+; vad_hold_ms = 500ms
 ; admin_only = off
 
 ; ----------------------------------------------------------------------------
@@ -869,7 +870,7 @@ group = 2
 ;   sound  plays standby_sound.wav
 ;   tts    speaks standby_text via tts_speak
 ;   none   silence
-; standby_delay_ms = 2000
+; standby_delay_ms = 2000ms
 ; standby_cue = sound
 ; standby_sound = system/standby
 ; standby_text = stand by
@@ -883,4 +884,4 @@ group = 2
 ; Persistent-failure circuit breaker: after N consecutive failures,
 ; disable AI for disable_after_fail_s seconds.
 ; max_consecutive_failures = 5
-; disable_after_fail_s = 300
+; disable_after_fail_s = 5m
