@@ -250,25 +250,12 @@ async function refreshStation() {
   } catch(e) {}
 }
 
-/* ── Status fetch (bootstrap + SSE resync only) ──
- * This replaces the previous 5s poll. Live state is driven by the SSE
- * stream; /api/status is only hit on page load and after an SSE
- * disconnect so we resync against whatever transitions we missed. */
+/* All non-station live state (rx_state, tx_state, ptt, cor,
+ * audio_listeners, audio_sample_rate, audio_bitrate_kbps,
+ * registration_enabled, emergency, queue_depth) arrives via the
+ * SSE 'status' snapshot — emitted on page load (cache replay) and
+ * on every state-affecting event. No /api/status fetch needed. */
 let streamServerStats = {};
-async function refreshStatus() {
-  try {
-    const d = await (await fetch('/api/status')).json();
-    /* State fields (rx_state, tx_state, ptt, cor) come via the SSE
-     * 'status' snapshot — don't set them here. This call only feeds
-     * non-state dashboard items (stream stats). */
-    streamServerStats = {
-      listeners:   d.audio_listeners,
-      sampleRate:  d.audio_sample_rate,
-      bitrateKbps: d.audio_bitrate_kbps
-    };
-    renderStreamTable();
-  } catch(e) {}
-}
 
 /* ── Stream card ── */
 let streamWorkerStats = null;  /* set only while playing */
@@ -464,10 +451,10 @@ function connectSSE() {
     if (sseEvents) { try { sseEvents.close(); } catch(_) {} }
     sseEvents = new EventSource('/api/events');
     sseEvents.onopen = function() {
-      /* Fresh stream — resync against current truth. Also covers the
-       * initial connect; subsequent onopen fires after auto-reconnect. */
+      /* Fresh stream — the daemon replays cached snapshots (status,
+       * weather, nws, …) as the first messages, so we don't need
+       * an HTTP resync. */
       sseConnected = true;
-      refreshStatus();
     };
     sseEvents.onmessage = function(ev) {
       let e; try { e = JSON.parse(ev.data); } catch(_) { return; }
@@ -480,11 +467,20 @@ function connectSSE() {
           if (typeof s.rx_state === 'string') updateState(s.rx_state);
           if (typeof s.tx_state === 'string') updateTxIndicator(s.tx_state);
           if (typeof s.ptt === 'boolean') updatePTT(s.ptt);
-          /* Live listener count — republished on every WS audio
-           * connect/disconnect. */
-          if (typeof s.audio_listeners === 'number') {
+          /* Live listener count + stream parameters republished on
+           * every WS audio connect/disconnect and on every state
+           * event. */
+          if (typeof s.audio_listeners === 'number')
             streamServerStats.listeners = s.audio_listeners;
-            renderStreamTable();
+          if (typeof s.audio_sample_rate === 'number')
+            streamServerStats.sampleRate = s.audio_sample_rate;
+          if (typeof s.audio_bitrate_kbps === 'number')
+            streamServerStats.bitrateKbps = s.audio_bitrate_kbps;
+          renderStreamTable();
+          /* Registration link only shown when configured. */
+          if (s.registration_enabled){
+            const r = document.getElementById('register-link');
+            if (r) r.style.display = '';
           }
           /* First authoritative payload since (re)connect — clear
            * the disconnection overlay. */
@@ -525,11 +521,11 @@ function connectSSE() {
       }
     };
     sseEvents.onerror = function() {
-      /* EventSource auto-reconnects with its own backoff. When it
-       * succeeds, onopen fires and resyncs via refreshStatus. Mark
-       * the page as disconnected — CSS dims the badges and decorates
-       * #state-badge with ⚠ (disconnected). Cleared in the 'status'
-       * handler on the first payload after reconnect. */
+      /* EventSource auto-reconnects with its own backoff. On success
+       * the daemon replays the cached 'status' snapshot as the first
+       * message, which clears the overlay below and resyncs all
+       * fields. Mark the page as disconnected — CSS dims the badges
+       * and decorates #state-badge with ⚠ (disconnected). */
       sseConnected = false;
       document.body.classList.add('sse-disconnected');
     };
@@ -630,10 +626,10 @@ function renderBulletin(d) {
 
 /* ── Init ── */
 refreshStation();
-/* Everything else — state, PTT, bulletin, weather, alerts — comes in
- * via SSE. connectSSE's onopen calls refreshStatus for state/PTT
- * bootstrap, and the snapshot-on-connect burst delivers the current
- * weather, alerts, and bulletin. No HTTP polling. */
+/* Everything else — state, PTT, audio_listeners, sample/bitrate,
+ * registration_enabled, bulletin, weather, alerts — comes in via
+ * SSE. The daemon replays cached snapshots as the first messages
+ * on connect, so no /api/status fetch is needed. */
 connectSSE();
 
 window.openCoverageOverlay = function() {

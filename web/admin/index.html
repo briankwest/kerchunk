@@ -594,24 +594,10 @@ function renderStreamTable() {
   t.innerHTML = h || '<tr><td colspan="2" style="color:var(--dim)">No data</td></tr>';
 }
 
-async function refreshStatus() {
-  try {
-    const d=await fetchJSON('/api/status');
-    if(d.sample_rate) serverRate = d.sample_rate;
-    /* State markers (rx_state, tx_state, cor, ptt) arrive via SSE
-     * 'status' snapshot — do not set them here. This path only
-     * populates non-state dashboard fields (sample rate, stream
-     * stats, liveStats bookkeeping). */
-    if(d.cor) { liveStats.corActive=true; liveStats.corStart=Date.now(); }
-    else      { liveStats.corActive=false; }
-    streamServerStats = {
-      listeners:   d.audio_listeners,
-      sampleRate:  d.audio_sample_rate,
-      bitrateKbps: d.audio_bitrate_kbps
-    };
-    renderStreamTable();
-  } catch(e) {}
-}
+/* refreshStatus is no longer required — all live state comes via
+ * the SSE 'status' snapshot (cached, replayed on connect). Kept as
+ * a no-op so legacy call sites compile. */
+function refreshStatus() {}
 
 async function refreshStation() {
   try {
@@ -1478,11 +1464,26 @@ function connectSSE() {
           if (typeof s.tx_state === 'string') updateTxState(s.tx_state);
           if (typeof s.cor === 'boolean') updateCOR(s.cor);
           if (typeof s.ptt === 'boolean' && typeof updatePTT === 'function') updatePTT(s.ptt);
-          /* Live listener count — republished by mod_web on every
-           * WebSocket audio connect/disconnect. */
-          if (typeof s.audio_listeners === 'number') {
+          /* Stream stats: listeners + sample rate + bitrate are
+           * pushed via the same snapshot, so we don't need a
+           * separate /api/status fetch. */
+          if (typeof s.audio_listeners === 'number')
             streamServerStats.listeners = s.audio_listeners;
-            renderStreamTable();
+          if (typeof s.audio_sample_rate === 'number'){
+            streamServerStats.sampleRate = s.audio_sample_rate;
+            serverRate = s.audio_sample_rate;
+          }
+          if (typeof s.audio_bitrate_kbps === 'number')
+            streamServerStats.bitrateKbps = s.audio_bitrate_kbps;
+          renderStreamTable();
+          /* COR bookkeeping for liveStats. */
+          if (typeof s.cor === 'boolean'){
+            if (s.cor && !liveStats.corActive){
+              liveStats.corActive = true;
+              liveStats.corStart  = Date.now();
+            } else if (!s.cor){
+              liveStats.corActive = false;
+            }
           }
           renderEmergency(s);
           // First authoritative payload since (re)connect — clear the

@@ -2574,20 +2574,25 @@ static void publish_status_snapshot(void)
     int em  = kerchunk_core_get_emergency();
     long long em_exp = (long long)kerchunk_core_get_emergency_expires_at();
     int listeners = atomic_load(&g_ws_audio_count);
+    int sr = g_core->sample_rate;
 
-    char payload[320];
+    char payload[480];
     int n = snprintf(payload, sizeof(payload),
         "{\"rx_state\":\"%s\",\"tx_state\":\"%s\","
         "\"cor\":%s,\"ptt\":%s,"
         "\"emergency\":%s,\"emergency_expires_at\":%lld,"
-        "\"queue_depth\":%d,\"audio_listeners\":%d}",
+        "\"queue_depth\":%d,\"audio_listeners\":%d,"
+        "\"audio_sample_rate\":%d,\"audio_bitrate_kbps\":%d,"
+        "\"registration_enabled\":%s}",
         rx ? rx : "IDLE",
         tx ? tx : "TX_IDLE",
         cor ? "true" : "false",
         ptt ? "true" : "false",
         em  ? "true" : "false",
         em_exp,
-        q, listeners);
+        q, listeners,
+        sr, sr * 16 / 1000,
+        g_registration_enabled ? "true" : "false");
     if (n <= 0 || (size_t)n >= sizeof(payload)) return;
 
     g_core->sse_publish("status", payload, 0 /* public-safe */);
