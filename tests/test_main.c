@@ -64,6 +64,7 @@ extern void test_repeater(void);
 extern void test_cwid(void);
 extern void test_resp(void);
 extern void test_txactivity(void);
+extern void test_audio_ring(void);
 extern void test_integration(void);
 
 int main(void)
@@ -97,6 +98,9 @@ int main(void)
 
     printf("\nTX-activity detector tests:\n");
     test_txactivity();
+
+    printf("\nAudio ring + commit tests:\n");
+    test_audio_ring();
 
     printf("\nIntegration tests:\n");
     test_integration();

@@ -11,6 +11,7 @@
  */
 
 #include "kerchunk_audio.h"
+#include "kerchunk_audio_ring.h"
 #include "kerchunk.h"  /* for KERCHUNK_MAX_FRAME_SAMPLES */
 #include "kerchunk_log.h"
 #include <portaudio.h>
@@ -51,62 +52,17 @@ void kerchunk_audio_preemphasis(int16_t *buf, size_t n, float alpha)
     }
 }
 
-/* ── Lock-free SPSC ring buffer ── */
-
-#define RING_SIZE 262144        /* ~5.5s at 48 kHz, must be power of 2 */
-#define RING_MASK (RING_SIZE - 1)
-
-typedef struct {
-    int16_t       buf[RING_SIZE];
-    atomic_size_t head;         /* producer write position */
-    atomic_size_t tail;         /* consumer read position */
-} ring_t;
-
-static void ring_init(ring_t *r)
-{
-    memset(r->buf, 0, sizeof(r->buf));
-    atomic_store(&r->head, 0);
-    atomic_store(&r->tail, 0);
-}
-
-static size_t ring_readable(const ring_t *r)
-{
-    return (atomic_load(&r->head) - atomic_load(&r->tail)) & RING_MASK;
-}
-
-static size_t ring_writable(const ring_t *r)
-{
-    return RING_SIZE - 1 - ring_readable(r);
-}
-
-static size_t ring_write(ring_t *r, const int16_t *src, size_t n)
-{
-    size_t space = ring_writable(r);
-    if (n > space) n = space;
-    size_t h = atomic_load(&r->head);
-    for (size_t i = 0; i < n; i++)
-        r->buf[(h + i) & RING_MASK] = src[i];
-    atomic_store(&r->head, (h + n) & RING_MASK);
-    return n;
-}
-
-static size_t ring_read(ring_t *r, int16_t *dst, size_t n)
-{
-    size_t avail = ring_readable(r);
-    if (n > avail) n = avail;
-    size_t t = atomic_load(&r->tail);
-    for (size_t i = 0; i < n; i++)
-        dst[i] = r->buf[(t + i) & RING_MASK];
-    atomic_store(&r->tail, (t + n) & RING_MASK);
-    return n;
-}
-
-/* ── PortAudio state ── */
+/* ── PortAudio state ──
+ *
+ * SPSC ring impl lives in src/kerchunk_audio_ring.c (Phase 1 of
+ * PLAN-AUDIO-TICK.md). The ring-commit function there handles the
+ * underflow drop + capture resample paths that used to live inline
+ * in cap_cb / duplex_cb below. */
 
 static PaStream *g_cap_stream;
 static PaStream *g_play_stream;
-static ring_t    g_cap_ring;
-static ring_t    g_play_ring;
+static kerchunk_audio_ring_t g_cap_ring;
+static kerchunk_audio_ring_t g_play_ring;
 static int       g_rate;        /* Target rate (8000) */
 static int       g_hw_rate;     /* Actual hardware rate (may differ) */
 static int       g_available;
@@ -135,33 +91,19 @@ static int duplex_cb(const void *in, void *out, unsigned long n,
     /* Capture side — skip if PA flagged input underflow (zero-filled
      * buffer); the audio thread's repeat-last path covers the gap.
      * Same rationale as cap_cb. */
-    if (in && !(fl & paInputUnderflow)) {
-        const int16_t *src = (const int16_t *)in;
-        if (g_hw_rate == g_rate) {
-            ring_write(&g_cap_ring, src, n);
-        } else {
-            double step = (double)g_hw_rate / (double)g_rate;
-            int16_t tmp[512];
-            size_t out_i = 0;
-            while (g_cap_resample_pos < (double)n) {
-                size_t idx = (size_t)g_cap_resample_pos;
-                double frac = g_cap_resample_pos - (double)idx;
-                int16_t s0 = (idx < n) ? src[idx] : 0;
-                int16_t s1 = (idx + 1 < n) ? src[idx + 1] : s0;
-                tmp[out_i++] = (int16_t)(s0 + frac * (s1 - s0));
-                if (out_i == 512) { ring_write(&g_cap_ring, tmp, 512); out_i = 0; }
-                g_cap_resample_pos += step;
-            }
-            g_cap_resample_pos -= (double)n;
-            if (out_i > 0) ring_write(&g_cap_ring, tmp, out_i);
-        }
+    if (in) {
+        kerchunk_audio_ring_commit(&g_cap_ring,
+                                   (const int16_t *)in, n,
+                                   g_hw_rate, g_rate,
+                                   &g_cap_resample_pos,
+                                   (fl & paInputUnderflow) ? 1 : 0);
     }
 
     /* Playback side */
     if (out) {
         int16_t *dst = (int16_t *)out;
         if (g_hw_rate == g_rate) {
-            size_t got = ring_read(&g_play_ring, dst, n);
+            size_t got = kerchunk_audio_ring_read(&g_play_ring, dst, n);
             if (got < n) memset(dst + got, 0, (n - got) * sizeof(int16_t));
         } else {
             double step = (double)g_rate / (double)g_hw_rate;
@@ -169,7 +111,7 @@ static int duplex_cb(const void *in, void *out, unsigned long n,
                 while (g_play_resample_pos >= 1.0) {
                     g_play_prev = g_play_cur;
                     int16_t s;
-                    if (ring_read(&g_play_ring, &s, 1) == 1) g_play_cur = s;
+                    if (kerchunk_audio_ring_read(&g_play_ring, &s, 1) == 1) g_play_cur = s;
                     else g_play_cur = g_play_cur / 2;  /* Ramp down on underrun */
                     g_play_resample_pos -= 1.0;
                 }
@@ -190,45 +132,15 @@ static int cap_cb(const void *in, void *out, unsigned long n,
     (void)out; (void)ti; (void)ud;
     if (!in) return paContinue;
 
-    /* PortAudio sets paInputUnderflow when the input device couldn't
-     * deliver fresh samples for this callback period. Drop the
-     * (zero-filled) buffer rather than push it into the capture ring,
-     * so the audio thread's empty-ring path uses repeat-last to keep
-     * the DTMF decoder + audio taps fed with continuous-looking audio
-     * instead of an injected silence dropout. */
-    if (fl & paInputUnderflow) {
-        return paContinue;
-    }
-
-    const int16_t *src = (const int16_t *)in;
-
-    if (g_hw_rate == g_rate) {
-        ring_write(&g_cap_ring, src, n);
-    } else {
-        /* Downsample hw_rate → g_rate with persistent fractional position.
-         * Maintains phase continuity across callback boundaries. */
-        double step = (double)g_hw_rate / (double)g_rate;
-        int16_t tmp[512];
-        size_t out_i = 0;
-
-        while (g_cap_resample_pos < (double)n) {
-            size_t idx = (size_t)g_cap_resample_pos;
-            double frac = g_cap_resample_pos - (double)idx;
-            int16_t s0 = (idx < n) ? src[idx] : 0;
-            int16_t s1 = (idx + 1 < n) ? src[idx + 1] : s0;
-            tmp[out_i++] = (int16_t)(s0 + frac * (s1 - s0));
-
-            if (out_i == 512) {
-                ring_write(&g_cap_ring, tmp, 512);
-                out_i = 0;
-            }
-            g_cap_resample_pos += step;
-        }
-        g_cap_resample_pos -= (double)n;  /* Carry fractional remainder */
-
-        if (out_i > 0)
-            ring_write(&g_cap_ring, tmp, out_i);
-    }
+    /* Commit this callback's buffer to the capture ring. Drops the
+     * buffer on paInputUnderflow (zero-filled / stale input), resamples
+     * hw_rate → target_rate when they differ. See
+     * include/kerchunk_audio_ring.h for the contract. */
+    kerchunk_audio_ring_commit(&g_cap_ring,
+                               (const int16_t *)in, n,
+                               g_hw_rate, g_rate,
+                               &g_cap_resample_pos,
+                               (fl & paInputUnderflow) ? 1 : 0);
     return paContinue;
 }
 
@@ -251,7 +163,7 @@ static int play_cb(const void *in, void *out, unsigned long n,
     }
 
     if (g_hw_rate == g_rate) {
-        size_t got = ring_read(&g_play_ring, dst, n);
+        size_t got = kerchunk_audio_ring_read(&g_play_ring, dst, n);
         if (got < n)
             memset(dst + got, 0, (n - got) * sizeof(int16_t));
     } else {
@@ -265,7 +177,7 @@ static int play_cb(const void *in, void *out, unsigned long n,
             while (g_play_resample_pos >= 1.0) {
                 g_play_prev = g_play_cur;
                 int16_t s;
-                if (ring_read(&g_play_ring, &s, 1) == 1)
+                if (kerchunk_audio_ring_read(&g_play_ring, &s, 1) == 1)
                     g_play_cur = s;
                 else
                     g_play_cur = 0;  /* Underrun — silence */
@@ -321,8 +233,8 @@ int kerchunk_audio_init(const kerchunk_audio_config_t *cfg)
     g_preemph_alpha = cfg->preemphasis_alpha;
     g_preemph_prev = 0;
 
-    ring_init(&g_cap_ring);
-    ring_init(&g_play_ring);
+    kerchunk_audio_ring_init(&g_cap_ring);
+    kerchunk_audio_ring_init(&g_play_ring);
 
 #ifdef __linux__
     /* Set ALSA mixer levels from config before opening the stream.
@@ -481,10 +393,10 @@ int kerchunk_audio_init(const kerchunk_audio_config_t *cfg)
             Pa_StartStream(g_duplex_stream);
             g_available = 1;
 
-            KERCHUNK_LOG_I(LOG_MOD, "audio: duplex='%s' target=%dHz hw=%dHz%s ring=%d",
+            KERCHUNK_LOG_I(LOG_MOD, "audio: duplex='%s' target=%dHz hw=%dHz%s ring=%u",
                          cd->name, g_rate, g_hw_rate,
                          g_hw_rate != g_rate ? " (resampling)" : "",
-                         RING_SIZE);
+                         KERCHUNK_AUDIO_RING_SIZE);
             return 0;
         }
 
@@ -526,10 +438,10 @@ int kerchunk_audio_init(const kerchunk_audio_config_t *cfg)
     g_available = 1;
 
     KERCHUNK_LOG_I(LOG_MOD, "audio: capture='%s' playback='%s' "
-                 "target=%dHz hw=%dHz%s ring=%d",
+                 "target=%dHz hw=%dHz%s ring=%u",
                  cd->name, pd->name, g_rate, g_hw_rate,
                  g_hw_rate != g_rate ? " (resampling)" : "",
-                 RING_SIZE);
+                 KERCHUNK_AUDIO_RING_SIZE);
     return 0;
 }
 
@@ -545,7 +457,7 @@ void kerchunk_audio_shutdown(void)
 int kerchunk_audio_capture(int16_t *buf, size_t n)
 {
     if (!buf) return -1;
-    size_t got = ring_read(&g_cap_ring, buf, n);
+    size_t got = kerchunk_audio_ring_read(&g_cap_ring, buf, n);
     if (got == 0) return 0;  /* Nothing available — caller should skip */
     if (got < n) {
         /* Partial read: instead of zero-padding the tail (which
@@ -598,13 +510,13 @@ void kerchunk_audio_capture_repeat_last(int16_t *buf, size_t n)
 int kerchunk_audio_playback(const int16_t *buf, size_t n)
 {
     if (!buf) return -1;
-    ring_write(&g_play_ring, buf, n);
+    kerchunk_audio_ring_write(&g_play_ring, buf, n);
     return (int)n;
 }
 
-size_t kerchunk_audio_playback_writable(void) { return ring_writable(&g_play_ring); }
-size_t kerchunk_audio_playback_pending(void)  { return ring_readable(&g_play_ring); }
-size_t kerchunk_audio_capture_pending(void)   { return ring_readable(&g_cap_ring); }
+size_t kerchunk_audio_playback_writable(void) { return kerchunk_audio_ring_writable(&g_play_ring); }
+size_t kerchunk_audio_playback_pending(void)  { return kerchunk_audio_ring_readable(&g_play_ring); }
+size_t kerchunk_audio_capture_pending(void)   { return kerchunk_audio_ring_readable(&g_cap_ring); }
 
 int kerchunk_audio_available(void) { return g_available; }
 
