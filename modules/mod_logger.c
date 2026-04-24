@@ -36,40 +36,25 @@ static const char *caller_method_name(int m)
     }
 }
 
+/* Upper-case label for log lines, derived from the central
+ * kerchunk_event_name() vocabulary. Custom events get a "CUSTOM+N"
+ * label. Non-reentrant: caller must consume the result before the
+ * next event_name() call (matches the previous switch's behaviour
+ * for the CUSTOM+ branch). */
 static const char *event_name(kerchevt_type_t type)
 {
-    switch (type) {
-    case KERCHEVT_AUDIO_FRAME:       return "AUDIO_FRAME";
-    case KERCHEVT_CTCSS_DETECT:      return "CTCSS_DETECT";
-    case KERCHEVT_DCS_DETECT:        return "DCS_DETECT";
-    case KERCHEVT_DTMF_DIGIT:        return "DTMF_DIGIT";
-    case KERCHEVT_DTMF_END:          return "DTMF_END";
-    case KERCHEVT_COR_ASSERT:        return "COR_ASSERT";
-    case KERCHEVT_COR_DROP:          return "COR_DROP";
-    case KERCHEVT_PTT_ASSERT:        return "PTT_ASSERT";
-    case KERCHEVT_PTT_DROP:          return "PTT_DROP";
-    case KERCHEVT_RX_STATE_CHANGE:      return "RX_STATE_CHANGE";
-    case KERCHEVT_TX_STATE_CHANGE:      return "TX_STATE_CHANGE";
-    case KERCHEVT_TAIL_START:        return "TAIL_START";
-    case KERCHEVT_TAIL_EXPIRE:       return "TAIL_EXPIRE";
-    case KERCHEVT_RX_TIMEOUT:           return "RX_TIMEOUT";
-    case KERCHEVT_CALLER_IDENTIFIED: return "CALLER_IDENTIFIED";
-    case KERCHEVT_CALLER_CLEARED:    return "CALLER_CLEARED";
-    case KERCHEVT_QUEUE_DRAIN:       return "QUEUE_DRAIN";
-    case KERCHEVT_QUEUE_COMPLETE:    return "QUEUE_COMPLETE";
-    case KERCHEVT_QUEUE_PREEMPTED:  return "QUEUE_PREEMPTED";
-    case KERCHEVT_ANNOUNCEMENT:      return "ANNOUNCEMENT";
-    case KERCHEVT_CONFIG_RELOAD:     return "CONFIG_RELOAD";
-    case KERCHEVT_SHUTDOWN:          return "SHUTDOWN";
-    case KERCHEVT_TICK:              return "TICK";
-    default:
-        if ((int)type >= KERCHEVT_CUSTOM) {
-            static char buf[32];
-            snprintf(buf, sizeof(buf), "CUSTOM+%d", (int)type - KERCHEVT_CUSTOM);
-            return buf;
-        }
-        return "UNKNOWN";
+    static char buf[48];
+    if ((int)type >= KERCHEVT_CUSTOM) {
+        snprintf(buf, sizeof(buf), "CUSTOM+%d", (int)type - KERCHEVT_CUSTOM);
+        return buf;
     }
+    const char *lower = kerchunk_event_name(type);
+    if (!lower || !*lower) return "UNKNOWN";
+    size_t i = 0;
+    for (; lower[i] && i + 1 < sizeof(buf); i++)
+        buf[i] = (lower[i] >= 'a' && lower[i] <= 'z') ? lower[i] - 32 : lower[i];
+    buf[i] = '\0';
+    return buf;
 }
 
 /* Map custom event offsets to names */

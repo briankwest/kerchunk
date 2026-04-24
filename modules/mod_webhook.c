@@ -27,42 +27,10 @@
 #define QUEUE_SIZE     32
 #define PAYLOAD_MAX    1024
 
-/* ── Event name-to-type mapping ── */
-
-typedef struct {
-    const char       *name;
-    kerchevt_type_t   type;
-} evt_map_t;
-
-static const evt_map_t g_event_map[] = {
-    { "cor_assert",       KERCHEVT_COR_ASSERT        },
-    { "cor_drop",         KERCHEVT_COR_DROP          },
-    { "vcor_assert",      KERCHEVT_VCOR_ASSERT       },
-    { "vcor_drop",        KERCHEVT_VCOR_DROP         },
-    { "ptt_assert",       KERCHEVT_PTT_ASSERT        },
-    { "ptt_drop",         KERCHEVT_PTT_DROP          },
-    { "ctcss_detect",     KERCHEVT_CTCSS_DETECT      },
-    { "dcs_detect",       KERCHEVT_DCS_DETECT        },
-    { "dtmf_digit",       KERCHEVT_DTMF_DIGIT        },
-    { "dtmf_end",         KERCHEVT_DTMF_END          },
-    { "caller_identified", KERCHEVT_CALLER_IDENTIFIED },
-    { "caller_cleared",   KERCHEVT_CALLER_CLEARED    },
-    { "tail_start",       KERCHEVT_TAIL_START        },
-    { "tail_expire",      KERCHEVT_TAIL_EXPIRE       },
-    { "queue_drain",      KERCHEVT_QUEUE_DRAIN       },
-    { "queue_complete",   KERCHEVT_QUEUE_COMPLETE    },
-    { "queue_preempted",  KERCHEVT_QUEUE_PREEMPTED   },
-    { "announcement",     KERCHEVT_ANNOUNCEMENT      },
-    { "recording_saved",  KERCHEVT_RECORDING_SAVED   },
-    { "rx_state_change",  KERCHEVT_RX_STATE_CHANGE   },
-    { "tx_state_change",  KERCHEVT_TX_STATE_CHANGE   },
-    { "rx_timeout",       KERCHEVT_RX_TIMEOUT        },
-    { "heartbeat",        KERCHEVT_HEARTBEAT         },
-    { "shutdown",         KERCHEVT_SHUTDOWN          },
-    { "config_reload",    KERCHEVT_CONFIG_RELOAD     },
-};
-
-#define EVENT_MAP_COUNT ((int)(sizeof(g_event_map) / sizeof(g_event_map[0])))
+/* Event-name parsing delegates to the central kerchunk_event_from_name()
+ * helper in kerchunk_events.c — single source of truth for the
+ * vocabulary so adding a new event type doesn't require editing this
+ * file. */
 
 /* ── Static globals ── */
 
@@ -298,21 +266,16 @@ static void subscribe_events(const char *events_str)
             continue;
         }
 
-        int found = 0;
-        for (int i = 0; i < EVENT_MAP_COUNT; i++) {
-            if (strcmp(tok, g_event_map[i].name) == 0) {
-                g_core->subscribe(g_event_map[i].type, on_event, NULL);
-                g_subs[g_sub_count++] = g_event_map[i].type;
-                g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
-                            "subscribed to %s", tok);
-                found = 1;
-                break;
-            }
-        }
-
-        if (!found)
+        kerchevt_type_t t = kerchunk_event_from_name(tok);
+        if ((int)t >= 0) {
+            g_core->subscribe(t, on_event, NULL);
+            g_subs[g_sub_count++] = t;
+            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                        "subscribed to %s", tok);
+        } else {
             g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
                         "unknown event name '%s' — skipped", tok);
+        }
 
         tok = strtok_r(NULL, ",", &saveptr);
     }

@@ -13,7 +13,7 @@
 #include <string.h>
 
 /* RX FSM state-name lookup is centralized in kerchunk_events.c —
- * see kerchunk_rx_kerchunk_rx_state_name() in kerchunk_events.h. */
+ * see kerchunk_rx_state_name() in kerchunk_events.h. */
 
 static const char *method_name(int m)
 {

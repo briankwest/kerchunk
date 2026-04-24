@@ -108,4 +108,17 @@ int  kerchevt_subscriber_count(kerchevt_type_t type);
  * TX FSM. */
 const char *kerchunk_rx_state_name(int s);
 
+/* Canonical event-type vocabulary. Two views over one static
+ * table — the wire-format string (lowercase, e.g. "rx_state_change")
+ * and a reverse name→type lookup. Replaces parallel switch
+ * statements in mod_logger / mod_webhook / kerchunk_evt_json.
+ *
+ *   kerchunk_event_name(t)       — wire string, "" if unknown.
+ *   kerchunk_event_from_name(s)  — type, returns -1 on miss.
+ *
+ * Custom events (KERCHEVT_CUSTOM + N) report as "custom" / "custom_N".
+ */
+const char     *kerchunk_event_name(kerchevt_type_t type);
+kerchevt_type_t kerchunk_event_from_name(const char *name);
+
 #endif /* KERCHUNK_EVENTS_H */

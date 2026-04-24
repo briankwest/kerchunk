@@ -43,6 +43,66 @@ const char *kerchunk_rx_state_name(int s)
     }
 }
 
+/* Single source of truth for the event-type ↔ wire-name vocabulary.
+ * Adding a new built-in event type now means one row here instead of
+ * three switch statements. KERCHEVT_TICK / KERCHEVT_AUDIO_FRAME stay
+ * in the table for completeness even though they aren't typically
+ * serialized (high-frequency, dropped by SSE/log/webhook filters). */
+typedef struct {
+    kerchevt_type_t type;
+    const char     *name;
+} evt_name_row_t;
+
+static const evt_name_row_t g_evt_names[] = {
+    { KERCHEVT_AUDIO_FRAME,       "audio_frame"       },
+    { KERCHEVT_CTCSS_DETECT,      "ctcss_detect"      },
+    { KERCHEVT_DCS_DETECT,        "dcs_detect"        },
+    { KERCHEVT_DTMF_DIGIT,        "dtmf_digit"        },
+    { KERCHEVT_DTMF_END,          "dtmf_end"          },
+    { KERCHEVT_COR_ASSERT,        "cor_assert"        },
+    { KERCHEVT_COR_DROP,          "cor_drop"          },
+    { KERCHEVT_VCOR_ASSERT,       "vcor_assert"       },
+    { KERCHEVT_VCOR_DROP,         "vcor_drop"         },
+    { KERCHEVT_PTT_ASSERT,        "ptt_assert"        },
+    { KERCHEVT_PTT_DROP,          "ptt_drop"          },
+    { KERCHEVT_RX_STATE_CHANGE,   "rx_state_change"   },
+    { KERCHEVT_TX_STATE_CHANGE,   "tx_state_change"   },
+    { KERCHEVT_TAIL_START,        "tail_start"        },
+    { KERCHEVT_TAIL_EXPIRE,       "tail_expire"       },
+    { KERCHEVT_RX_TIMEOUT,        "rx_timeout"        },
+    { KERCHEVT_CALLER_IDENTIFIED, "caller_identified" },
+    { KERCHEVT_CALLER_CLEARED,    "caller_cleared"    },
+    { KERCHEVT_QUEUE_DRAIN,       "queue_drain"       },
+    { KERCHEVT_QUEUE_COMPLETE,    "queue_complete"    },
+    { KERCHEVT_QUEUE_PREEMPTED,   "queue_preempted"   },
+    { KERCHEVT_RECORDING_SAVED,   "recording_saved"   },
+    { KERCHEVT_ANNOUNCEMENT,      "announcement"      },
+    { KERCHEVT_CONFIG_RELOAD,     "config_reload"     },
+    { KERCHEVT_SHUTDOWN,          "shutdown"          },
+    { KERCHEVT_TICK,              "tick"              },
+    { KERCHEVT_HEARTBEAT,         "heartbeat"         },
+};
+#define EVT_NAMES_COUNT ((int)(sizeof(g_evt_names) / sizeof(g_evt_names[0])))
+
+const char *kerchunk_event_name(kerchevt_type_t t)
+{
+    for (int i = 0; i < EVT_NAMES_COUNT; i++)
+        if (g_evt_names[i].type == t)
+            return g_evt_names[i].name;
+    if ((int)t >= KERCHEVT_CUSTOM)
+        return "custom";
+    return "";
+}
+
+kerchevt_type_t kerchunk_event_from_name(const char *name)
+{
+    if (!name) return (kerchevt_type_t)-1;
+    for (int i = 0; i < EVT_NAMES_COUNT; i++)
+        if (strcmp(g_evt_names[i].name, name) == 0)
+            return g_evt_names[i].type;
+    return (kerchevt_type_t)-1;
+}
+
 /* Per-thread event dispatch depth. Synchronous event dispatch means a
  * handler can fire another event, which dispatches more handlers on the
  * same thread's stack. Without a ceiling, a buggy fire→handler→fire
