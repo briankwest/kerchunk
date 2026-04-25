@@ -66,6 +66,18 @@ input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-s
 .status.err { color: var(--red); }
 .tg-list { display: flex; flex-wrap: wrap; gap: 4px; max-width: 200px; }
 .tg-list .badge { font-size: 10px; }
+.picker { border: 1px solid var(--border); border-radius: 4px;
+          padding: 8px; max-height: 220px; overflow-y: auto;
+          background: var(--bg); }
+.picker label { display: flex; align-items: center; gap: 8px;
+                margin: 0; padding: 6px 4px; text-transform: none;
+                letter-spacing: 0; font-size: 13px; color: var(--text);
+                cursor: pointer; border-radius: 3px; }
+.picker label:hover { background: #21262d; }
+.picker label input { width: auto; margin: 0; }
+.picker .empty { color: var(--dim); font-size: 12px; padding: 8px 4px; }
+.picker-actions { display: flex; gap: 6px; margin-top: 4px; }
+.picker-actions .btn { font-size: 11px; padding: 3px 8px; min-height: 0; }
 
 @media (max-width: 600px) {
   body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
@@ -167,8 +179,14 @@ input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-s
     <input type="number" id="tgNum" min="1" max="65535">
     <label>Name</label>
     <input type="text" id="tgName" maxlength="63" placeholder="Local Net">
-    <label>Members <span class="status">(comma-separated node IDs)</span></label>
-    <input type="text" id="tgMembers" placeholder="WK7ABC-1, WK7DEF-1">
+    <label>Members <span class="status">(pick from the roster)</span></label>
+    <div class="picker" id="tgMembers">
+      <span class="empty">no nodes — add one on the Nodes table first</span>
+    </div>
+    <div class="picker-actions">
+      <button type="button" class="btn" onclick="tgPickAll(true)">Select all</button>
+      <button type="button" class="btn" onclick="tgPickAll(false)">Clear</button>
+    </div>
     <div class="err" id="tgErr"></div>
     <div class="actions">
       <button class="btn" onclick="closeDlg('dlgTg')">Cancel</button>
@@ -327,6 +345,30 @@ async function delNode(id) {
     await load();
 }
 
+function renderMemberPicker(selected) {
+    const sel = new Set(selected || []);
+    const box = $('tgMembers');
+    if (!cfg.nodes || cfg.nodes.length === 0) {
+        box.innerHTML = '<span class="empty">no nodes — add one on the Nodes table first</span>';
+        return;
+    }
+    box.innerHTML = cfg.nodes.map(n => {
+        const id = escHtml(n.id);
+        return `<label><input type="checkbox" value="${id}"${
+            sel.has(n.id) ? ' checked' : ''}> <span class="mono">${id}</span></label>`;
+    }).join('');
+}
+
+function tgPickAll(on) {
+    $('tgMembers').querySelectorAll('input[type=checkbox]')
+        .forEach(cb => { cb.checked = on; });
+}
+
+function getTgMembers() {
+    return [...$('tgMembers').querySelectorAll('input[type=checkbox]:checked')]
+        .map(cb => cb.value);
+}
+
 function openTg(num) {
     $('tgErr').textContent = '';
     if (num != null) {
@@ -336,13 +378,13 @@ function openTg(num) {
         $('tgNum').value     = t.tg;
         $('tgNum').readOnly  = true;
         $('tgName').value    = t.name || '';
-        $('tgMembers').value = (t.nodes || []).join(', ');
+        renderMemberPicker(t.nodes || []);
     } else {
         $('dlgTgTitle').textContent = 'Add talkgroup';
         $('tgNum').value     = '';
         $('tgNum').readOnly  = false;
         $('tgName').value    = '';
-        $('tgMembers').value = '';
+        renderMemberPicker([]);
     }
     openDlg('dlgTg');
 }
@@ -350,16 +392,13 @@ function openTg(num) {
 async function saveTg() {
     const tg      = parseInt($('tgNum').value, 10);
     const name    = $('tgName').value.trim();
-    const members = $('tgMembers').value
-        .split(',').map(s => s.trim()).filter(Boolean);
+    const members = getTgMembers();
     const err     = $('tgErr');
 
     if (!(tg >= 1 && tg <= 65535))
         return err.textContent = 'TG must be 1..65535';
     if (!name)
         return err.textContent = 'Name is required';
-    if (members.some(id => !/^[A-Za-z0-9_-]{1,63}$/.test(id)))
-        return err.textContent = 'Members must be valid node IDs';
 
     try {
         const r = await fetch('/api/admin/talkgroup', {
