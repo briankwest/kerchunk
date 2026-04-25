@@ -38,6 +38,7 @@ kerchunkd_SOURCES = \
 	src/kerchunk_hid.c \
 	src/kerchunk_socket.c \
 	src/kerchunk_config.c \
+	src/kerchunk_ini_edit.c \
 	src/kerchunk_log.c \
 	src/kerchunk_user.c \
 	src/kerchunk_wav.c \
@@ -88,6 +89,7 @@ kerchunk_reflectd_SOURCES = src/reflectd/main.c \
 			    src/reflectd/audio.c \
 			    src/reflectd/recordings.c \
 			    src/kerchunk_config.c \
+			    src/kerchunk_ini_edit.c \
 			    vendor/mongoose.c
 kerchunk_reflectd_CFLAGS  = -std=c11 -Wall -O2 \
 			    $(PLATFORM_CFLAGS) -D_DEFAULT_SOURCE \
@@ -457,7 +459,8 @@ reflectdconfdir = $(sysconfdir)/kerchunk-reflectd
 reflectdconf_DATA = reflectd.conf.example
 
 reflectdwebdir = $(datadir)/kerchunk-reflectd/web
-reflectdweb_DATA = web/reflectd/index.html web/reflectd/recordings.html
+reflectdweb_DATA = web/reflectd/index.html web/reflectd/recordings.html \
+                   web/reflectd/config.html
 
 # Systemd service
 systemddir = $(prefix)/lib/systemd/system

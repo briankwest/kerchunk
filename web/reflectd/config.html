@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>kerchunk-reflectd — Config</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px;
+       max-width: 1400px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+header nav { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; width: 100%; }
+header nav .btn { text-decoration: none; white-space: nowrap; flex: 1; text-align: center;
+                  padding: 5px 10px; }
+header .sub { color: var(--dim); font-size: 14px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+        padding: 14px; margin-bottom: 12px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px;
+           margin-bottom: 10px; display: flex; align-items: center; }
+.card h2 .right { margin-left: auto; }
+.btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
+       text-decoration: none; display: inline-block; font-family: inherit; }
+.btn:hover  { border-color: var(--accent); color: var(--accent); }
+.btn-warn { border-color: var(--yellow); color: var(--yellow); }
+.btn-red  { border-color: var(--red); color: var(--red); }
+.btn-go   { border-color: var(--green); color: var(--green); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border);
+         vertical-align: top; }
+th { color: var(--dim); font-size: 11px; text-transform: uppercase;
+     letter-spacing: 1px; font-weight: 600; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.badge { display: inline-block; padding: 1px 6px; border-radius: 3px;
+         font-size: 11px; background: #21262d; color: var(--dim); }
+.badge-banned { background: #3a1d1d; color: var(--red); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.row > * { flex: 0 0 auto; }
+label { display: block; font-size: 11px; color: var(--dim);
+        text-transform: uppercase; letter-spacing: 1px; margin: 6px 0 3px; }
+input[type=text], input[type=number], input[type=password], select, textarea {
+        background: var(--bg); color: var(--text); border: 1px solid var(--border);
+        border-radius: 4px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+        width: 100%; }
+input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.dialog-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100;
+             display: none; align-items: flex-start; justify-content: center;
+             padding: 20px; overflow-y: auto; }
+.dialog-bg.open { display: flex; }
+.dialog { background: var(--card); border: 1px solid var(--border);
+          border-radius: 8px; padding: 18px; width: 100%; max-width: 540px;
+          margin-top: 40px; }
+.dialog h3 { font-size: 14px; margin-bottom: 10px; }
+.dialog .actions { display: flex; gap: 8px; justify-content: flex-end;
+                   margin-top: 14px; }
+.dialog .err { color: var(--red); font-size: 12px; margin-top: 6px;
+               min-height: 14px; }
+.status { font-size: 12px; color: var(--dim); }
+.status.ok  { color: var(--green); }
+.status.err { color: var(--red); }
+.tg-list { display: flex; flex-wrap: wrap; gap: 4px; max-width: 200px; }
+.tg-list .badge { font-size: 10px; }
+
+@media (max-width: 600px) {
+  body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  header { gap: 8px; margin-bottom: 10px; }
+  header h1 { font-size: 16px; }
+  header nav .btn { min-height: 36px; display: flex;
+                    align-items: center; justify-content: center; }
+  .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+  table { font-size: 11px; }
+  th, td { padding: 4px 6px; }
+  .dialog { margin-top: 0; padding: 14px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>kerchunk-reflectd</h1>
+  <span class="sub">Config editor</span>
+  <nav>
+    <a href="/admin/" class="btn">Roster</a>
+    <a href="/admin/recordings.html" class="btn">Recordings</a>
+    <a href="/admin/config.html" class="btn"
+       style="border-color:var(--accent);color:var(--accent)">Config</a>
+  </nav>
+</header>
+
+<div class="card">
+  <h2>
+    <span>Reflector config — /etc/kerchunk-reflectd/reflectd.conf</span>
+    <span class="right status" id="status">loading…</span>
+  </h2>
+  <div class="status">
+    Edits are written back to the file (comments preserved) and the
+    daemon hot-reloads on save. PSKs are 32-byte hex.
+  </div>
+</div>
+
+<div class="card">
+  <h2>
+    <span>Nodes</span>
+    <span class="right">
+      <button class="btn btn-go" onclick="openNode(null)">+ Add node</button>
+    </span>
+  </h2>
+  <table>
+    <thead><tr>
+      <th>ID</th><th>Default TG</th><th>Allowed TGs</th>
+      <th>PSK (first 8)</th><th>Status</th><th>Actions</th>
+    </tr></thead>
+    <tbody id="nodes"><tr><td colspan="6">loading…</td></tr></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>
+    <span>Talkgroups</span>
+    <span class="right">
+      <button class="btn btn-go" onclick="openTg(null)">+ Add talkgroup</button>
+    </span>
+  </h2>
+  <table>
+    <thead><tr>
+      <th>TG</th><th>Name</th><th>Members</th><th>Actions</th>
+    </tr></thead>
+    <tbody id="tgs"><tr><td colspan="4">loading…</td></tr></tbody>
+  </table>
+</div>
+
+<!-- Node edit dialog -->
+<div class="dialog-bg" id="dlgNode">
+  <div class="dialog">
+    <h3 id="dlgNodeTitle">Edit node</h3>
+    <label>Node ID <span class="status">(letters, digits, dash, underscore — e.g. WK7ABC-1)</span></label>
+    <input type="text" id="ndId" autocomplete="off">
+    <label>Pre-shared key <span class="status">(64 hex chars / 32 bytes)</span></label>
+    <div class="row" style="gap:6px">
+      <input type="text" id="ndPsk" class="mono" autocomplete="off" style="flex:1">
+      <button class="btn" onclick="genPsk()">Generate</button>
+    </div>
+    <label>Default TG</label>
+    <input type="number" id="ndDtg" min="1" max="65535">
+    <label>Allowed TGs <span class="status">(comma-separated; blank = just the default)</span></label>
+    <input type="text" id="ndAllowed" placeholder="1, 2, 99">
+    <label><input type="checkbox" id="ndBan"> Banned (auth-rejected at login)</label>
+    <div class="err" id="ndErr"></div>
+    <div class="actions">
+      <button class="btn" onclick="closeDlg('dlgNode')">Cancel</button>
+      <button class="btn btn-go" onclick="saveNode()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- TG edit dialog -->
+<div class="dialog-bg" id="dlgTg">
+  <div class="dialog">
+    <h3 id="dlgTgTitle">Edit talkgroup</h3>
+    <label>TG number <span class="status">(1..65535)</span></label>
+    <input type="number" id="tgNum" min="1" max="65535">
+    <label>Name</label>
+    <input type="text" id="tgName" maxlength="63" placeholder="Local Net">
+    <label>Members <span class="status">(comma-separated node IDs)</span></label>
+    <input type="text" id="tgMembers" placeholder="WK7ABC-1, WK7DEF-1">
+    <div class="err" id="tgErr"></div>
+    <div class="actions">
+      <button class="btn" onclick="closeDlg('dlgTg')">Cancel</button>
+      <button class="btn btn-go" onclick="saveTg()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+function setStatus(html, cls = '') {
+    const el = $('status');
+    el.innerHTML = html;
+    el.className = 'right status ' + cls;
+}
+function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+}
+
+let cfg = { nodes: [], talkgroups: [] };
+
+async function load() {
+    setStatus('loading…');
+    try {
+        const r = await fetch('/api/admin/config', { credentials: 'same-origin' });
+        if (!r.ok) throw new Error(r.statusText);
+        cfg = await r.json();
+        render();
+        setStatus('loaded ' + cfg.nodes.length + ' nodes / ' +
+                  cfg.talkgroups.length + ' TGs', 'ok');
+    } catch (e) {
+        setStatus('load failed: ' + e.message, 'err');
+    }
+}
+
+function render() {
+    $('nodes').innerHTML = (cfg.nodes || []).map(n => `
+        <tr>
+          <td class="mono">${escHtml(n.id)}</td>
+          <td class="num">${n.default_tg}</td>
+          <td><div class="tg-list">${
+              (n.allowed_tgs || []).map(t =>
+                  `<span class="badge">${t}</span>`).join('') || '—'
+          }</div></td>
+          <td class="mono" style="color:var(--dim)">${
+              (n.preshared_key_hex || '').slice(0, 8)}…</td>
+          <td>${n.banned ? '<span class="badge badge-banned">banned</span>' : ''}</td>
+          <td>
+            <button class="btn" onclick="openNode('${escHtml(n.id)}')">Edit</button>
+            <button class="btn btn-red"
+                    onclick="delNode('${escHtml(n.id)}')">Delete</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="6">no nodes — add one to get started</td></tr>';
+
+    $('tgs').innerHTML = (cfg.talkgroups || []).map(t => `
+        <tr>
+          <td class="num">${t.tg}</td>
+          <td>${escHtml(t.name)}</td>
+          <td><div class="tg-list">${
+              (t.nodes || []).map(id =>
+                  `<span class="badge mono">${escHtml(id)}</span>`).join('') || '—'
+          }</div></td>
+          <td>
+            <button class="btn" onclick="openTg(${t.tg})">Edit</button>
+            <button class="btn btn-red" onclick="delTg(${t.tg})">Delete</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="4">no talkgroups — add one to get started</td></tr>';
+}
+
+function openDlg(id)  { $(id).classList.add('open'); }
+function closeDlg(id) { $(id).classList.remove('open'); }
+
+function genPsk() {
+    const buf = new Uint8Array(32);
+    crypto.getRandomValues(buf);
+    $('ndPsk').value = Array.from(buf,
+        b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function openNode(id) {
+    $('ndErr').textContent = '';
+    if (id) {
+        const n = cfg.nodes.find(x => x.id === id);
+        if (!n) return;
+        $('dlgNodeTitle').textContent = 'Edit node — ' + id;
+        $('ndId').value      = n.id;
+        $('ndId').readOnly   = true;
+        $('ndPsk').value     = n.preshared_key_hex || '';
+        $('ndDtg').value     = n.default_tg;
+        $('ndAllowed').value = (n.allowed_tgs || []).join(', ');
+        $('ndBan').checked   = !!n.banned;
+    } else {
+        $('dlgNodeTitle').textContent = 'Add node';
+        $('ndId').value      = '';
+        $('ndId').readOnly   = false;
+        $('ndPsk').value     = '';
+        genPsk();
+        $('ndDtg').value     = '';
+        $('ndAllowed').value = '';
+        $('ndBan').checked   = false;
+    }
+    openDlg('dlgNode');
+}
+
+async function saveNode() {
+    const id      = $('ndId').value.trim();
+    const psk     = $('ndPsk').value.trim().toLowerCase();
+    const dtg     = parseInt($('ndDtg').value, 10);
+    const allowed = $('ndAllowed').value
+        .split(',').map(s => s.trim()).filter(Boolean)
+        .map(s => parseInt(s, 10));
+    const banned  = $('ndBan').checked;
+    const err     = $('ndErr');
+
+    if (!/^[A-Za-z0-9_-]{1,63}$/.test(id))
+        return err.textContent = 'ID must be 1..63 chars: letters, digits, _, -';
+    if (!/^[0-9a-f]{64}$/.test(psk))
+        return err.textContent = 'PSK must be exactly 64 hex chars (32 bytes)';
+    if (!(dtg >= 1 && dtg <= 65535))
+        return err.textContent = 'Default TG must be 1..65535';
+    if (allowed.some(t => !(t >= 1 && t <= 65535)))
+        return err.textContent = 'Allowed TGs must all be 1..65535';
+
+    try {
+        const r = await fetch('/api/admin/node', {
+            method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                id, preshared_key_hex: psk,
+                default_tg: dtg, allowed_tgs: allowed, banned
+            })
+        });
+        if (!r.ok) {
+            const j = await r.json().catch(() => ({error: r.statusText}));
+            return err.textContent = j.error || r.statusText;
+        }
+        closeDlg('dlgNode');
+        await load();
+    } catch (e) {
+        err.textContent = e.message;
+    }
+}
+
+async function delNode(id) {
+    if (!confirm(`Delete node "${id}"? This removes the [node.${id}] section ` +
+                 `from reflectd.conf. (TGs that list it as a member will need ` +
+                 `manual cleanup.)`)) return;
+    const r = await fetch('/api/admin/node?id=' + encodeURIComponent(id),
+        { method: 'DELETE', credentials: 'same-origin' });
+    if (!r.ok) {
+        setStatus('delete failed: ' + r.statusText, 'err');
+        return;
+    }
+    await load();
+}
+
+function openTg(num) {
+    $('tgErr').textContent = '';
+    if (num != null) {
+        const t = cfg.talkgroups.find(x => x.tg === num);
+        if (!t) return;
+        $('dlgTgTitle').textContent = 'Edit talkgroup — ' + num;
+        $('tgNum').value     = t.tg;
+        $('tgNum').readOnly  = true;
+        $('tgName').value    = t.name || '';
+        $('tgMembers').value = (t.nodes || []).join(', ');
+    } else {
+        $('dlgTgTitle').textContent = 'Add talkgroup';
+        $('tgNum').value     = '';
+        $('tgNum').readOnly  = false;
+        $('tgName').value    = '';
+        $('tgMembers').value = '';
+    }
+    openDlg('dlgTg');
+}
+
+async function saveTg() {
+    const tg      = parseInt($('tgNum').value, 10);
+    const name    = $('tgName').value.trim();
+    const members = $('tgMembers').value
+        .split(',').map(s => s.trim()).filter(Boolean);
+    const err     = $('tgErr');
+
+    if (!(tg >= 1 && tg <= 65535))
+        return err.textContent = 'TG must be 1..65535';
+    if (!name)
+        return err.textContent = 'Name is required';
+    if (members.some(id => !/^[A-Za-z0-9_-]{1,63}$/.test(id)))
+        return err.textContent = 'Members must be valid node IDs';
+
+    try {
+        const r = await fetch('/api/admin/talkgroup', {
+            method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ tg, name, nodes: members })
+        });
+        if (!r.ok) {
+            const j = await r.json().catch(() => ({error: r.statusText}));
+            return err.textContent = j.error || r.statusText;
+        }
+        closeDlg('dlgTg');
+        await load();
+    } catch (e) {
+        err.textContent = e.message;
+    }
+}
+
+async function delTg(num) {
+    if (!confirm(`Delete talkgroup ${num}? This removes [talkgroup.${num}] ` +
+                 `from reflectd.conf and clears its membership.`)) return;
+    const r = await fetch('/api/admin/talkgroup?tg=' + num,
+        { method: 'DELETE', credentials: 'same-origin' });
+    if (!r.ok) {
+        setStatus('delete failed: ' + r.statusText, 'err');
+        return;
+    }
+    await load();
+}
+
+load();
+</script>
+</body>
+</html>

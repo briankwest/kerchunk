@@ -33,6 +33,7 @@
 
 #include "../../vendor/mongoose.h"
 #include "../../include/kerchunk_link_proto.h"
+#include "../../include/kerchunk_ini_edit.h"
 #include "audio.h"
 #include "config.h"
 #include "recordings.h"
@@ -1259,6 +1260,238 @@ static void admin_recording_delete(struct mg_connection *c,
                   "{\"ok\":true,\"deleted\":\"%s\"}", rel);
 }
 
+/* ── Roster + TG editor (text-level INI surgery) ──────────────────── */
+
+/* Config-file path captured at startup; the editor writes back to it. */
+extern const char *g_cfg_path;
+
+static int valid_node_id(const char *s)
+{
+    if (!s || !s[0] || strlen(s) >= RCFG_MAX_NODE_ID) return 0;
+    for (const char *p = s; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_' || *p == '-'))
+            return 0;
+    }
+    return 1;
+}
+
+static int valid_hex(const char *s, int n_bytes)
+{
+    if (!s || (int)strlen(s) != 2 * n_bytes) return 0;
+    for (const char *p = s; *p; p++)
+        if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') ||
+              (*p >= 'A' && *p <= 'F'))) return 0;
+    return 1;
+}
+
+static int render_int_csv(struct mg_str arr, char *out, size_t max)
+{
+    int off = 0; size_t ofs = 0;
+    struct mg_str key, val;
+    int first = 1;
+    while ((ofs = mg_json_next(arr, ofs, &key, &val)) > 0) {
+        long v = strtol(val.buf, NULL, 10);
+        if (v <= 0 || v > 65535) return -1;
+        off += snprintf(out + off, max - off, "%s%ld", first ? "" : ", ", v);
+        first = 0;
+    }
+    return off;
+}
+
+static int render_str_csv(struct mg_str arr, char *out, size_t max)
+{
+    int off = 0; size_t ofs = 0;
+    struct mg_str key, val;
+    int first = 1;
+    while ((ofs = mg_json_next(arr, ofs, &key, &val)) > 0) {
+        if (val.len < 2 || val.buf[0] != '"') return -1;
+        char id[RCFG_MAX_NODE_ID];
+        if (val.len - 2 >= sizeof(id)) return -1;
+        memcpy(id, val.buf + 1, val.len - 2);
+        id[val.len - 2] = '\0';
+        if (!valid_node_id(id)) return -1;
+        off += snprintf(out + off, max - off, "%s%s", first ? "" : ", ", id);
+        first = 0;
+    }
+    return off;
+}
+
+/* GET /api/admin/config — full editable view of roster + TGs.
+ *
+ * Includes preshared_key_hex (the dashboard is admin-auth gated; the
+ * file is on disk anyway and operators need the key to share it with
+ * new repeater owners). */
+static void admin_config_get(struct mg_connection *c)
+{
+    size_t cap = 16384, off = 0;
+    char  *body = malloc(cap);
+    if (!body) { mg_http_reply(c, 500, "", "{\"error\":\"OOM\"}"); return; }
+    off = (size_t)snprintf(body, cap, "{\"nodes\":[");
+    for (int i = 0; i < g_cfg.n_nodes; i++) {
+        if (cap - off < 1024) {
+            cap *= 2;
+            char *nb = realloc(body, cap);
+            if (!nb) { free(body); mg_http_reply(c, 500, "", "{\"error\":\"OOM\"}"); return; }
+            body = nb;
+        }
+        char psk_hex[2 * KERCHUNK_LINK_PSK_BYTES + 1];
+        for (int j = 0; j < KERCHUNK_LINK_PSK_BYTES; j++)
+            snprintf(psk_hex + j * 2, 3, "%02x", g_cfg.nodes[i].psk[j]);
+        off += (size_t)snprintf(body + off, cap - off,
+            "%s{\"id\":\"%s\",\"preshared_key_hex\":\"%s\","
+            "\"default_tg\":%u,\"banned\":%s,\"allowed_tgs\":[",
+            i ? "," : "",
+            g_cfg.nodes[i].id, psk_hex,
+            g_cfg.nodes[i].default_tg,
+            g_cfg.nodes[i].banned ? "true" : "false");
+        for (int j = 0; j < g_cfg.nodes[i].n_allowed_tgs; j++)
+            off += (size_t)snprintf(body + off, cap - off, "%s%u",
+                                    j ? "," : "",
+                                    g_cfg.nodes[i].allowed_tgs[j]);
+        off += (size_t)snprintf(body + off, cap - off, "]}");
+    }
+    off += (size_t)snprintf(body + off, cap - off, "],\"talkgroups\":[");
+    for (int i = 0; i < g_cfg.n_tgs; i++) {
+        if (cap - off < 4096) {
+            cap *= 2;
+            char *nb = realloc(body, cap);
+            if (!nb) { free(body); mg_http_reply(c, 500, "", "{\"error\":\"OOM\"}"); return; }
+            body = nb;
+        }
+        off += (size_t)snprintf(body + off, cap - off,
+            "%s{\"tg\":%u,\"name\":\"%s\",\"nodes\":[",
+            i ? "," : "",
+            g_cfg.tgs[i].number, g_cfg.tgs[i].name);
+        for (int j = 0; j < g_cfg.tgs[i].n_members; j++) {
+            int idx = g_cfg.tgs[i].member_node_idxs[j];
+            if (idx < 0 || idx >= g_cfg.n_nodes) continue;
+            off += (size_t)snprintf(body + off, cap - off,
+                "%s\"%s\"", j ? "," : "", g_cfg.nodes[idx].id);
+        }
+        off += (size_t)snprintf(body + off, cap - off, "]}");
+    }
+    off += (size_t)snprintf(body + off, cap - off, "]}");
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", body);
+    free(body);
+}
+
+/* POST /api/admin/node — create or update [node.<id>]. Body:
+ *   {id, preshared_key_hex, allowed_tgs:[...], default_tg, banned} */
+static void admin_node_save(struct mg_connection *c, struct mg_http_message *hm)
+{
+    char *id  = mg_json_get_str(hm->body, "$.id");
+    char *psk = mg_json_get_str(hm->body, "$.preshared_key_hex");
+    long  dtg = mg_json_get_long(hm->body, "$.default_tg", 0);
+    bool  ban = false; mg_json_get_bool(hm->body, "$.banned", &ban);
+    struct mg_str at = mg_json_get_tok(hm->body, "$.allowed_tgs");
+
+    if (!valid_node_id(id))
+        { mg_http_reply(c, 400, "", "{\"error\":\"bad id\"}"); goto out; }
+    if (!valid_hex(psk, KERCHUNK_LINK_PSK_BYTES))
+        { mg_http_reply(c, 400, "", "{\"error\":\"preshared_key_hex must be 64 hex chars\"}"); goto out; }
+    if (dtg <= 0 || dtg > 65535)
+        { mg_http_reply(c, 400, "", "{\"error\":\"default_tg out of range\"}"); goto out; }
+    char tgs[256];
+    int  n = render_int_csv(at, tgs, sizeof(tgs));
+    if (n < 0)
+        { mg_http_reply(c, 400, "", "{\"error\":\"allowed_tgs must be an array of 1..65535\"}"); goto out; }
+    if (n == 0) snprintf(tgs, sizeof(tgs), "%ld", dtg);
+
+    char section[80], body[1024];
+    snprintf(section, sizeof(section), "node.%s", id);
+    snprintf(body, sizeof(body),
+        "preshared_key_hex = %s\n"
+        "allowed_tgs       = %s\n"
+        "default_tg        = %ld\n"
+        "%s",
+        psk, tgs, dtg, ban ? "banned            = 1\n" : "");
+
+    if (kerchunk_ini_replace_section(g_cfg_path, section, body) != 0)
+        { mg_http_reply(c, 500, "", "{\"error\":\"ini write failed: %s\"}", strerror(errno)); goto out; }
+    log_msg("admin: saved [%s]", section);
+    g_reload = 1;
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"id\":\"%s\"}", id);
+out:
+    free(id); free(psk);
+}
+
+static void admin_node_delete(struct mg_connection *c, struct mg_http_message *hm)
+{
+    char id[RCFG_MAX_NODE_ID];
+    if (mg_http_get_var(&hm->query, "id", id, sizeof(id)) <= 0 || !valid_node_id(id))
+        { mg_http_reply(c, 400, "", "{\"error\":\"missing or bad id\"}"); return; }
+    char section[80];
+    snprintf(section, sizeof(section), "node.%s", id);
+    if (kerchunk_ini_remove_section(g_cfg_path, section) != 0)
+        { mg_http_reply(c, 500, "", "{\"error\":\"ini remove failed\"}"); return; }
+    log_msg("admin: removed [%s]", section);
+    g_reload = 1;
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"id\":\"%s\"}", id);
+}
+
+/* POST /api/admin/talkgroup — create/update [talkgroup.N]. Body:
+ *   {tg, name, nodes:["WK7ABC-1", ...]} */
+static void admin_tg_save(struct mg_connection *c, struct mg_http_message *hm)
+{
+    long  tg   = mg_json_get_long(hm->body, "$.tg", 0);
+    char *name = mg_json_get_str(hm->body, "$.name");
+    struct mg_str ns = mg_json_get_tok(hm->body, "$.nodes");
+
+    if (tg <= 0 || tg > 65535)
+        { mg_http_reply(c, 400, "", "{\"error\":\"tg out of range\"}"); free(name); return; }
+    char members[1024];
+    int  n = render_str_csv(ns, members, sizeof(members));
+    if (n < 0)
+        { mg_http_reply(c, 400, "", "{\"error\":\"nodes must be an array of valid node ids\"}"); free(name); return; }
+
+    char safe_name[64] = "";
+    if (name) {
+        size_t j = 0;
+        for (size_t i = 0; name[i] && j < sizeof(safe_name) - 1; i++) {
+            char ch = name[i];
+            if (ch == '\n' || ch == '\r' || ch == '"') continue;
+            safe_name[j++] = ch;
+        }
+        safe_name[j] = '\0';
+    }
+
+    char section[40], body[1280];
+    snprintf(section, sizeof(section), "talkgroup.%ld", tg);
+    snprintf(body, sizeof(body),
+        "name  = \"%s\"\n"
+        "nodes = %s\n",
+        safe_name, members);
+
+    if (kerchunk_ini_replace_section(g_cfg_path, section, body) != 0)
+        { mg_http_reply(c, 500, "", "{\"error\":\"ini write failed: %s\"}", strerror(errno)); free(name); return; }
+    log_msg("admin: saved [%s]", section);
+    g_reload = 1;
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"tg\":%ld}", tg);
+    free(name);
+}
+
+static void admin_tg_delete(struct mg_connection *c, struct mg_http_message *hm)
+{
+    char tgs[16];
+    if (mg_http_get_var(&hm->query, "tg", tgs, sizeof(tgs)) <= 0)
+        { mg_http_reply(c, 400, "", "{\"error\":\"missing tg\"}"); return; }
+    long tg = strtol(tgs, NULL, 10);
+    if (tg <= 0 || tg > 65535)
+        { mg_http_reply(c, 400, "", "{\"error\":\"tg out of range\"}"); return; }
+    char section[40];
+    snprintf(section, sizeof(section), "talkgroup.%ld", tg);
+    if (kerchunk_ini_remove_section(g_cfg_path, section) != 0)
+        { mg_http_reply(c, 500, "", "{\"error\":\"ini remove failed\"}"); return; }
+    log_msg("admin: removed [%s]", section);
+    g_reload = 1;
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"tg\":%ld}", tg);
+}
+
 /* DELETE /api/recordings?date=YYYY-MM-DD — remove a whole day's WAVs
  * + the day CSV. */
 static void admin_recordings_delete_day(struct mg_connection *c,
@@ -1346,6 +1579,31 @@ static void route_admin(struct mg_connection *c, struct mg_http_message *hm)
         admin_prune_now(c);
         return;
     }
+    if (mg_match(hm->uri, mg_str("/api/admin/config"), NULL) &&
+        mg_match(hm->method, mg_str("GET"), NULL)) {
+        admin_config_get(c);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/admin/node"), NULL) &&
+        mg_match(hm->method, mg_str("POST"), NULL)) {
+        admin_node_save(c, hm);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/admin/node"), NULL) &&
+        mg_match(hm->method, mg_str("DELETE"), NULL)) {
+        admin_node_delete(c, hm);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/admin/talkgroup"), NULL) &&
+        mg_match(hm->method, mg_str("POST"), NULL)) {
+        admin_tg_save(c, hm);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/admin/talkgroup"), NULL) &&
+        mg_match(hm->method, mg_str("DELETE"), NULL)) {
+        admin_tg_delete(c, hm);
+        return;
+    }
     if (!mg_match(hm->method, mg_str("POST"), NULL)) {
         mg_http_reply(c, 405, "", "{\"error\":\"POST required\"}");
         return;
@@ -1367,7 +1625,7 @@ static void route_admin(struct mg_connection *c, struct mg_http_message *hm)
 /* Apply a config reload. Reads the current file fresh, diffs each
  * connected node's TG membership, and tells anyone whose default_tg
  * changed (or who lost access entirely) via tg_membership_changed. */
-static const char *g_cfg_path;
+const char *g_cfg_path;
 static void do_reload(void)
 {
     rcfg_t newcfg;
