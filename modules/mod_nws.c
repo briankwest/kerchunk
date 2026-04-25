@@ -517,11 +517,28 @@ static void process_alerts(const char *json)
         if (p == json + strlen(json)) break;
     }
 
-    /* Any tracked alert not seen has expired */
+    /* Any tracked alert not seen MIGHT have expired — but a single
+     * missing-from-poll is not authoritative. NWS API CDN
+     * inconsistency, transient status-field flips (Actual ↔
+     * Test/Exercise), partial responses, or simply >MAX_ALERTS in
+     * one poll can all make a still-valid alert disappear from one
+     * response and reappear on the next.
+     *
+     * Gate on the stored `expires` timestamp: if it hasn't passed
+     * yet, treat the gap as transient and keep tracking. Only
+     * declare expired when the alert's own deadline has arrived. */
+    time_t now = time(NULL);
     for (int i = 0; i < MAX_ALERTS; i++) {
-        if (g_alerts[i].active && !seen[i]) {
+        if (!g_alerts[i].active || seen[i]) continue;
+        if (g_alerts[i].expires == 0 || now >= g_alerts[i].expires) {
             announce_expired(&g_alerts[i]);
             remove_alert(&g_alerts[i]);
+        } else {
+            g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                "alert missing from poll but expires in %lds — "
+                "keeping (event=%s id=%s)",
+                (long)(g_alerts[i].expires - now),
+                g_alerts[i].event, g_alerts[i].id);
         }
     }
 }
