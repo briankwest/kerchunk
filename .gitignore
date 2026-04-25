@@ -10,6 +10,8 @@
 kerchunkd
 kerchunk
 kerchunk-diag
+kerchunk-reflectd
+kerchunk-link-probe
 test_kerchunk
 test_web_acl
 
