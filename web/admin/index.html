@@ -91,7 +91,11 @@ body.sse-disconnected #state-badge::after { content: " (disconnected)"; font-wei
 @media (max-width: 600px) {
   body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
   header { gap: 8px; margin-bottom: 10px; }
-  header h1 { font-size: 16px; }
+  header h1 { font-size: 16px; flex: 1 1 100%; }
+  /* h1 takes its own row so the 3 badges (IDLE / TX / PTT) all wrap
+   * onto row 2 together — otherwise on a 390px iPhone h1+badges
+   * doesn't fit and only PTT wraps alone, looking broken. */
+  .badge { min-width: 7ch; font-size: 11px; }
   header nav .btn { min-height: 36px; display: flex;
                     align-items: center; justify-content: center; }
   .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
