@@ -8,8 +8,16 @@
  *                 src ssrc = reflector_ssrc).
  *
  * The reflector picks a fresh master key + salt + ssrc pair per node at
- * login time and ships them in login_ok. libsrtp owns sequence numbers
- * internally per stream so we don't have to track them.
+ * login time and ships them in login_ok.
+ *
+ * Outbound RTP is RESEQUENCED per receiving node — see audio_node_send_to.
+ * Without this, talker handovers (different senders' independent seq
+ * spaces) cause the receiver's gap-attribution algorithm to charge
+ * phantom packet loss every time the floor changes hands. By rewriting
+ * seq + timestamp under the reflector's own monotonic counter, every
+ * receiver sees one clean continuous stream regardless of who's actually
+ * speaking. RFC 3550 § 7.1 — this is what an "RTP translator" should do
+ * when emitting under its own SSRC.
  */
 
 #include "audio.h"
@@ -20,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 
 #include <srtp2/srtp.h>
 
@@ -33,6 +42,13 @@ struct audio_node_s {
     uint32_t node_ssrc;        /* what we expect on packets FROM the node */
     uint32_t reflector_ssrc;   /* what we set on packets TO the node */
     uint8_t  master[MASTER_KEY_LEN];   /* keep for debug; not strictly needed */
+
+    /* Outbound RTP resequencing state (per receiving node). Initial
+     * values are randomized at session create per RFC 3550 § 5.1; both
+     * advance by exactly 1 / FRAME_TS_TICKS per sendto, regardless of
+     * which talker the audio originated from. */
+    uint16_t out_seq;
+    uint32_t out_ts;
 
     struct sockaddr_storage rtp_addr;
     socklen_t               rtp_addr_len;
@@ -68,6 +84,13 @@ audio_node_t *audio_node_create(const uint8_t *master_key,
            KERCHUNK_LINK_SRTP_SALT_BYTES);
     an->node_ssrc      = node_ssrc;
     an->reflector_ssrc = reflector_ssrc;
+
+    /* Random initial seq + timestamp so different sessions don't start
+     * at predictable values. Cast to the wire widths so libsrtp's ROC
+     * tracking starts in a sane place. */
+    unsigned int seed = (unsigned int)time(NULL) ^ reflector_ssrc;
+    an->out_seq = (uint16_t)(rand_r(&seed) & 0xFFFF);
+    an->out_ts  = (uint32_t)rand_r(&seed) ^ (uint32_t)(rand_r(&seed) << 16);
 
     /* IN session: decrypt packets from the node. Sender's SSRC is
      * node_ssrc; receiver context is the reflector. */
@@ -157,9 +180,19 @@ int audio_node_send_to(audio_node_t *an, int udp_fd,
     uint8_t buf[KERCHUNK_LINK_RTP_MAX_PACKET];
     memcpy(buf, cleartext_rtp, (size_t)rtp_len);
 
-    /* Rewrite SSRC field (offset 8, network order). */
+    /* Rewrite seq (offset 2), timestamp (offset 4), and SSRC (offset 8)
+     * so receivers see one continuous stream from the reflector
+     * regardless of which talker the audio came from. Without this
+     * the original sender's seq passes through verbatim and the
+     * receiver's gap-attribution algorithm flags every talker
+     * handover as packet loss. */
+    uint16_t seq_n  = htons(an->out_seq++);
+    uint32_t ts_n   = htonl(an->out_ts);
     uint32_t ssrc_n = htonl(an->reflector_ssrc);
+    memcpy(buf + 2, &seq_n,  2);
+    memcpy(buf + 4, &ts_n,   4);
     memcpy(buf + 8, &ssrc_n, 4);
+    an->out_ts += KERCHUNK_LINK_RTP_FRAME_TS_TICKS;
 
     int len = rtp_len;
     if (srtp_protect(an->out_session, buf, &len) != srtp_err_status_ok)
