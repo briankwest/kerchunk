@@ -177,6 +177,45 @@ static void send_json_then_close(struct mg_connection *c, const char *json)
 
 /* ── Floor control ────────────────────────────────────────────────── */
 
+/* Build the JSON roster array for a TG: [{"id":"X","connected":bool},...].
+ * Returns the byte count written into out (excluding NUL). */
+static int build_tg_members_json(int tg_idx, char *out, size_t max)
+{
+    const rcfg_tg_t *t = &g_cfg.tgs[tg_idx];
+    int off = 0;
+    if (off < (int)max) out[off++] = '[';
+    for (int j = 0; j < t->n_members && off < (int)max - 80; j++) {
+        int p = t->member_node_idxs[j];
+        off += snprintf(out + off, max - off,
+            "%s{\"id\":\"%s\",\"connected\":%s}",
+            j == 0 ? "" : ",",
+            g_cfg.nodes[p].id,
+            g_node_rt[p].connected ? "true" : "false");
+    }
+    if (off < (int)max) out[off++] = ']';
+    if (off < (int)max) out[off]   = '\0';
+    return off;
+}
+
+/* Push a fresh tg_roster to every connected member of this TG. Called
+ * whenever membership state changes — login completes, disconnect, or
+ * a node moves in or out via set_tg. */
+static void broadcast_tg_roster(int tg_idx)
+{
+    char members[512];
+    build_tg_members_json(tg_idx, members, sizeof(members));
+    char buf[640];
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"%s\",\"tg\":%u,\"members\":%s}",
+             LINK_MSG_TG_ROSTER, g_cfg.tgs[tg_idx].number, members);
+    const rcfg_tg_t *t = &g_cfg.tgs[tg_idx];
+    for (int j = 0; j < t->n_members; j++) {
+        int p = t->member_node_idxs[j];
+        if (g_node_rt[p].connected && g_node_rt[p].c)
+            send_json(g_node_rt[p].c, buf);
+    }
+}
+
 /* Send a `talker` event to every node on a TG except `except_node_idx`
  * (which is usually the talker themself; pass -1 to broadcast to all). */
 static void broadcast_talker(int tg_idx, int talker_node_idx,
@@ -501,21 +540,11 @@ static void handle_login(struct mg_connection *c, conn_t *cs,
     /* Build the TG-members list for the dashboard's "who else is on this
      * TG" pane. Lists every node configured for this TG by id+connected. */
     char members[512];
-    int  m_off = 0;
-    int  tg_idx_for_members = rcfg_tg_idx(&g_cfg, tg);
-    members[m_off++] = '[';
-    if (tg_idx_for_members >= 0) {
-        const rcfg_tg_t *t = &g_cfg.tgs[tg_idx_for_members];
-        for (int j = 0; j < t->n_members && m_off < (int)sizeof(members) - 80; j++) {
-            int p = t->member_node_idxs[j];
-            m_off += snprintf(members + m_off, sizeof(members) - m_off,
-                "%s{\"id\":\"%s\",\"connected\":%s}",
-                j == 0 ? "" : ",",
-                g_cfg.nodes[p].id,
-                g_node_rt[p].connected ? "true" : "false");
-        }
-    }
-    members[m_off++] = ']'; members[m_off] = '\0';
+    int tg_idx_for_members = rcfg_tg_idx(&g_cfg, tg);
+    if (tg_idx_for_members >= 0)
+        build_tg_members_json(tg_idx_for_members, members, sizeof(members));
+    else
+        snprintf(members, sizeof(members), "[]");
 
     char buf[KERCHUNK_LINK_MAX_MSG];
     snprintf(buf, sizeof(buf),
@@ -534,6 +563,12 @@ static void handle_login(struct mg_connection *c, conn_t *cs,
 
     log_msg("node %s logged in (client %s) on TG %u (ssrc=%u)",
             node_id, client_ver ? client_ver : "?", tg, node_ssrc);
+
+    /* Tell every other member of this TG a fresh roster so their
+     * dashboards flip "offline" → "connected" without waiting for the
+     * next talker event. */
+    if (tg_idx_for_members >= 0)
+        broadcast_tg_roster(tg_idx_for_members);
 
 out:
     free(node_id); free(key_hmac); free(nonce_hex); free(client_ver);
@@ -587,6 +622,13 @@ static void handle_set_tg(struct mg_connection *c, conn_t *cs,
              LINK_MSG_TG_OK, tg, g_cfg.tgs[tg_idx].name);
     send_json(c, buf);
     log_msg("node %s switched to TG %u", g_cfg.nodes[cs->node_idx].id, tg);
+
+    /* Update rosters: the OLD TG loses this node, the NEW TG gains it. */
+    if (old_tg && old_tg != tg) {
+        int old_tg_idx2 = rcfg_tg_idx(&g_cfg, old_tg);
+        if (old_tg_idx2 >= 0) broadcast_tg_roster(old_tg_idx2);
+    }
+    broadcast_tg_roster(tg_idx);
 }
 
 static void handle_ping(struct mg_connection *c, struct mg_str body)
@@ -1007,12 +1049,20 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
                     if (g_tg_rt[i].talker_node_idx == cs->node_idx)
                         floor_release(i, NULL);
                 }
+                /* Capture which TG this node was on before tearing the
+                 * runtime state down — we need it to push the updated
+                 * roster to the remaining members. */
+                int gone_tg_idx = rcfg_tg_idx(&g_cfg,
+                                              g_node_rt[cs->node_idx].cur_tg);
+
                 audio_node_destroy(g_node_rt[cs->node_idx].audio);
                 g_node_rt[cs->node_idx].audio     = NULL;
                 g_node_rt[cs->node_idx].connected = false;
                 g_node_rt[cs->node_idx].c         = NULL;
                 log_msg("node %s disconnected",
                         g_cfg.nodes[cs->node_idx].id);
+
+                if (gone_tg_idx >= 0) broadcast_tg_roster(gone_tg_idx);
             }
             free(cs);
             c->fn_data = NULL;

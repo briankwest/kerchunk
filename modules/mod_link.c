@@ -791,6 +791,19 @@ static void on_target_bitrate(struct mg_str body)
                 "target_bitrate from reflector: %ld bps", bps);
 }
 
+/* Reflector pushes a fresh roster whenever a peer joins/leaves this TG
+ * (login, disconnect, set_tg). We re-stash the JSON array so the next
+ * SSE snapshot reflects current online/offline state in real time. */
+static void on_tg_roster(struct mg_str body)
+{
+    struct mg_str members = mg_json_get_tok(body, "$.members");
+    if (!members.buf || members.len == 0 ||
+        members.len >= sizeof(g_tg_members_json)) return;
+    memcpy(g_tg_members_json, members.buf, members.len);
+    g_tg_members_json[members.len] = '\0';
+    publish_snapshot();   /* push to dashboard immediately */
+}
+
 static void on_tg_membership_changed(struct mg_str body)
 {
     long old_tg = mg_json_get_long(body, "$.old_tg", 0);
@@ -828,6 +841,7 @@ static void on_ws_msg(struct mg_str body)
     else if (!strcmp(type, LINK_MSG_MUTE))              on_mute(body);
     else if (!strcmp(type, LINK_MSG_UNMUTE))            on_unmute();
     else if (!strcmp(type, LINK_MSG_TARGET_BITRATE))    on_target_bitrate(body);
+    else if (!strcmp(type, LINK_MSG_TG_ROSTER))         on_tg_roster(body);
     else if (!strcmp(type, LINK_MSG_TG_MEMBERSHIP_CHANGED)) on_tg_membership_changed(body);
     else if (!strcmp(type, LINK_MSG_KICKED))            on_kicked(body);
     else if (!strcmp(type, LINK_MSG_PONG)) {
