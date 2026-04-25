@@ -528,7 +528,8 @@ keepalive_s = 15                           ; ping every N s
 hangtime_ms = 1500                         ; floor lease
 
 ; Auto-mute thresholds (server-driven)
-mute_threshold_pct = 8                     ; sustained loss% from a node
+mute_threshold_pct = 15                    ; sustained loss% from a node
+                                           ; (mute on ≥2 of last 3 reports)
 mute_window_s = 30
 auth_fail_kick = 200                       ; SRTP auth fails before kick (per 30s)
 max_reconnects_per_node_per_min = 6
@@ -604,7 +605,7 @@ busy_tone_interval_ms = 2000
 reconnect_min_ms = 1000          ; backoff schedule (§ 6.1)
 reconnect_max_ms = 60000
 nat_keepalive_ms = 10000         ; UDP heartbeat when not transmitting
-mute_threshold_pct = 8           ; client-side warning only
+mute_threshold_pct = 15          ; client-side warning only
 ```
 
 **Module surface:**

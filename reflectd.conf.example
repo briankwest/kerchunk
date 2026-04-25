@@ -49,7 +49,8 @@ keepalive_s = 15        ; ping every N s if no other traffic
 hangtime_ms = 1500      ; floor lease — if no RTP for this long, lease ends
 
 ; ── Server-driven mute / kick ───────────────────────────────────────────────
-mute_threshold_pct = 8                  ; if a node reports >this loss, mute
+mute_threshold_pct = 15                 ; mute when ≥2 of last 3 quality
+                                        ; reports exceed this loss%
 mute_window_s      = 30                 ; rolling window for the report
 auth_fail_kick     = 200                ; SRTP auth fails before kick (per 30s)
 max_reconnects_per_node_per_min = 6     ; storm protection

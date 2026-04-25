@@ -504,15 +504,12 @@ static void drain_and_encode(void)
 }
 
 /* Track loss for the quality report. Called every received audio packet
- * with the parsed RTP seq. */
+ * with the parsed RTP seq. The window is reset by send_quality_report()
+ * at the report tick — not lazily on next-packet — so each report
+ * covers exactly one window and a stale loss% can't be re-reported
+ * across silent periods. */
 static void quality_track_seq(uint16_t seq)
 {
-    int64_t now = now_ms();
-    if (now - g_quality_window_start_ms > QUALITY_REPORT_MS) {
-        g_quality_window_start_ms = now;
-        g_recv_lost     = 0;
-        g_recv_received = 0;
-    }
     if (g_recv_have_seq) {
         int16_t gap = (int16_t)(seq - g_recv_last_seq) - 1;
         if (gap > 0 && gap < 200) g_recv_lost += gap;
@@ -526,12 +523,24 @@ static void quality_track_seq(uint16_t seq)
 static void send_quality_report(void)
 {
     if (!g_ws || !g_session_active) return;
-    int total = g_recv_received + g_recv_lost;
-    int loss_pct_x10 = total > 0 ? (g_recv_lost * 1000 / total) : 0;
-    /* Estimate jitter buffer depth: count filled JB slots. */
+    /* Snapshot + clear so each report covers exactly the last window.
+     * Without this, a brief loss burst followed by silence would re-
+     * report the same loss% every 10s and trip the reflector's mute
+     * over and over. */
+    int lost     = g_recv_lost;
+    int received = g_recv_received;
+    g_recv_lost              = 0;
+    g_recv_received          = 0;
+    g_quality_window_start_ms = now_ms();
+
+    int total        = received + lost;
+    int loss_pct_x10 = total > 0 ? (lost * 1000 / total) : 0;
+
+    /* Suppress reports with no traffic — there's nothing to evaluate
+     * and the reflector treating a silent window as 0% is misleading. */
+    if (total == 0) return;
+
     int jb_depth_ms = 0;
-    /* g_jb_slots is defined later; just declare extern-like via the
-     * simple "look at the cursor delta to most recent received". */
     char buf[256];
     snprintf(buf, sizeof(buf),
         "{\"type\":\"%s\",\"loss_pct\":%d.%d,\"jitter_ms\":0,"

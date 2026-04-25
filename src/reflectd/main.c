@@ -73,6 +73,13 @@ typedef struct {
     int64_t               floor_started_ms; /* monotonic ms when current grant started */
     double                last_loss_pct;    /* most recent quality report */
     int64_t               last_quality_at;  /* epoch s of last quality */
+    /* Sustained-loss check: ring of the last N quality reports.
+     * We mute only when ≥ LOSS_HIST_TRIP of the last LOSS_HIST_LEN
+     * exceed mute_threshold_pct, so a single bad sample can't trip. */
+#define LOSS_HIST_LEN  3
+#define LOSS_HIST_TRIP 2
+    double                loss_hist[LOSS_HIST_LEN];
+    int                   loss_hist_n;      /* total samples seen (0..N…) */
     char                  client_version[32];
 } node_rt_t;
 static node_rt_t g_node_rt[RCFG_MAX_NODES];
@@ -593,6 +600,8 @@ static void handle_login(struct mg_connection *c, conn_t *cs,
     g_node_rt[idx].floor_holds = 0;
     g_node_rt[idx].floor_seconds = 0.0;
     g_node_rt[idx].last_loss_pct = 0.0;
+    g_node_rt[idx].loss_hist_n   = 0;
+    for (int k = 0; k < LOSS_HIST_LEN; k++) g_node_rt[idx].loss_hist[k] = 0.0;
     g_node_rt[idx].mute_reason[0] = '\0';
     snprintf(g_node_rt[idx].client_version,
              sizeof(g_node_rt[idx].client_version), "%s",
@@ -778,19 +787,33 @@ static void handle_message(struct mg_connection *c, conn_t *cs,
         double loss_pct = 0.0;
         mg_json_get_num(body, "$.loss_pct", &loss_pct);
         if (cs->node_idx >= 0) {
-            g_node_rt[cs->node_idx].last_loss_pct  = loss_pct;
-            g_node_rt[cs->node_idx].last_quality_at = time(NULL);
-        }
-        if (loss_pct > g_cfg.mute_threshold_pct &&
-            cs->node_idx >= 0 && !g_node_rt[cs->node_idx].muted) {
-            log_msg("node %s loss %.1f%% > threshold %d%% — muting",
-                    g_cfg.nodes[cs->node_idx].id, loss_pct,
-                    g_cfg.mute_threshold_pct);
-            g_node_rt[cs->node_idx].muted = true;
-            snprintf(g_node_rt[cs->node_idx].mute_reason,
-                     sizeof(g_node_rt[cs->node_idx].mute_reason),
-                     "loss_too_high");
-            send_mute(c, "loss_too_high", 60);
+            node_rt_t *n = &g_node_rt[cs->node_idx];
+            n->last_loss_pct   = loss_pct;
+            n->last_quality_at = time(NULL);
+            /* Push into the ring: shift left, append at tail. */
+            for (int k = 1; k < LOSS_HIST_LEN; k++)
+                n->loss_hist[k - 1] = n->loss_hist[k];
+            n->loss_hist[LOSS_HIST_LEN - 1] = loss_pct;
+            if (n->loss_hist_n < LOSS_HIST_LEN * 2) n->loss_hist_n++;
+
+            /* Wait until we have a full ring before tripping; with one
+             * sample we'd just be re-implementing the old bug. */
+            if (!n->muted && n->loss_hist_n >= LOSS_HIST_LEN) {
+                int trips = 0;
+                for (int k = 0; k < LOSS_HIST_LEN; k++)
+                    if (n->loss_hist[k] > g_cfg.mute_threshold_pct) trips++;
+                if (trips >= LOSS_HIST_TRIP) {
+                    log_msg("node %s sustained loss "
+                            "(%.1f / %.1f / %.1f %%) > threshold %d%% — muting",
+                            g_cfg.nodes[cs->node_idx].id,
+                            n->loss_hist[0], n->loss_hist[1], n->loss_hist[2],
+                            g_cfg.mute_threshold_pct);
+                    n->muted = true;
+                    snprintf(n->mute_reason, sizeof(n->mute_reason),
+                             "loss_too_high");
+                    send_mute(c, "loss_too_high", 60);
+                }
+            }
         }
         /* If any node on the TG reports >5% loss, suggest 24kbps to
          * everyone on that TG. Recovers up to 32kbps when loss drops. */
