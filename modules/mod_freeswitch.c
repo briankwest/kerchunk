@@ -37,7 +37,12 @@
 #define VAD_FRAME_SAMPLES    160   /* 20ms at 8kHz */
 #define VAD_THRESHOLD_DEF    800
 #define VAD_HOLD_MS_DEF      500
-#define VAD_ATTACK_FRAMES    2
+#define VAD_ATTACK_FRAMES_DEF 5    /* 100ms — confirms real speech, not a click */
+
+/* Pre-roll ring: keeps the last PREROLL_FRAMES (200ms) of jitter
+ * reads so when VAD finally declares speech, we can dump the leading
+ * edge into the queue instead of losing it to the attack window. */
+#define PREROLL_FRAMES       10
 
 /* Jitter buffer */
 #define JITTER_BUF_SAMPLES   1600  /* 200ms at 8kHz */
@@ -85,8 +90,12 @@ static int  g_udp_base_port       = 16000;
 static int  g_max_call_secs       = 180;
 static int  g_dial_timeout_ms     = 30000;
 static int  g_inactivity_ms       = 60000;
-static int  g_vad_threshold       = VAD_THRESHOLD_DEF;
-static int  g_vad_hold_ms         = VAD_HOLD_MS_DEF;
+static int   g_vad_threshold       = VAD_THRESHOLD_DEF;
+static int   g_vad_hold_ms         = VAD_HOLD_MS_DEF;
+static int   g_vad_attack_frames   = VAD_ATTACK_FRAMES_DEF;
+/* Phone-input gain (0.0..2.0). Default 0.5 = -6 dB to keep peaks
+ * below clipping on hot SignalWire/FS inbound audio. */
+static float g_phone_gain          = 0.5f;
 static int  g_enabled             = 0;
 static int  g_admin_only          = 0;
 static char g_dial_prefix[16]     = "1";
@@ -253,7 +262,7 @@ static int vad_process(const int16_t *buf, size_t n)
     if (rms >= g_vad_threshold) {
         g_speech_frames++;
         g_vad_hold_remaining = g_vad_hold_ms;
-        if (g_speech_frames >= VAD_ATTACK_FRAMES)
+        if (g_speech_frames >= g_vad_attack_frames)
             return 1;
         /* During attack phase, still holding if previously speaking */
         return (g_vox_ptt_held) ? 1 : 0;
@@ -1213,6 +1222,75 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
 /*  VOX processing (phone→radio)                                       */
 /* ================================================================== */
 
+/* Pre-roll ring of 8kHz jitter reads, populated every tick whether
+ * VAD said speech or not, so when speech IS finally confirmed we
+ * can replay the leading frames that the attack counter swallowed. */
+static int16_t g_preroll[PREROLL_FRAMES][VAD_FRAME_SAMPLES];
+static int     g_preroll_w;       /* next slot to write (mod size) */
+static int     g_preroll_count;   /* live frames, 0..PREROLL_FRAMES */
+
+/* Apply g_phone_gain in-place with saturation. */
+static inline void phone_gain_apply(int16_t *buf, size_t n)
+{
+    if (g_phone_gain == 1.0f) return;
+    for (size_t i = 0; i < n; i++) {
+        float v = (float)buf[i] * g_phone_gain;
+        if      (v >  32767.0f) buf[i] =  32767;
+        else if (v < -32768.0f) buf[i] = -32768;
+        else                    buf[i] = (int16_t)v;
+    }
+}
+
+/* Upsample one 8kHz frame to the pipeline rate, apply gain, queue
+ * at PRI_ELEVATED with the "phone" source tag. */
+static void queue_phone_frame(const int16_t *frame_in)
+{
+    int16_t frame[VAD_FRAME_SAMPLES];
+    memcpy(frame, frame_in, sizeof(frame));
+    phone_gain_apply(frame, VAD_FRAME_SAMPLES);
+
+    int dst_rate = g_core->sample_rate;
+    if (dst_rate > 8000) {
+        int ratio = dst_rate / 8000;
+        size_t out_n = VAD_FRAME_SAMPLES * (size_t)ratio;
+        int16_t us[960]; /* max 160 * 6 = 960 */
+        if (out_n > sizeof(us)/sizeof(us[0])) out_n = sizeof(us)/sizeof(us[0]);
+        for (size_t i = 0; i < out_n; i++) {
+            size_t src_idx = i / (size_t)ratio;
+            size_t frac = i % (size_t)ratio;
+            if (src_idx + 1 < VAD_FRAME_SAMPLES) {
+                int32_t a = frame[src_idx];
+                int32_t b = frame[src_idx + 1];
+                us[i] = (int16_t)(a + (b - a) * (int32_t)frac / ratio);
+            } else {
+                us[i] = frame[VAD_FRAME_SAMPLES - 1];
+            }
+        }
+        kerchunk_queue_add_buffer_src(us, out_n,
+                                      KERCHUNK_PRI_ELEVATED, 0, "phone");
+    } else {
+        kerchunk_queue_add_buffer_src(frame, VAD_FRAME_SAMPLES,
+                                      KERCHUNK_PRI_ELEVATED, 0, "phone");
+    }
+}
+
+/* Drain the pre-roll ring oldest→newest and queue each frame.
+ * Called once on PTT engage so the leading edge of the utterance
+ * (frames captured while VAD was still in attack) reaches the radio. */
+static void queue_preroll(void)
+{
+    int n = g_preroll_count;
+    if (n <= 0) return;
+    /* Oldest live frame index in the ring. */
+    int start = (g_preroll_w + PREROLL_FRAMES - n) % PREROLL_FRAMES;
+    for (int i = 0; i < n; i++) {
+        int idx = (start + i) % PREROLL_FRAMES;
+        queue_phone_frame(g_preroll[idx]);
+    }
+    g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
+                "phone PTT engage: replayed %d-frame pre-roll", n);
+}
+
 /*
  * Read from jitter buffer, run VAD, manage PTT and queue audio.
  * Called from tick handler when call is active and COR is inactive.
@@ -1224,9 +1302,14 @@ static void vox_process_and_queue(void)
     int16_t frame[VAD_FRAME_SAMPLES];  /* 8kHz frame from FS (160 samples = 20ms) */
     size_t got = jitter_buf_read(&g_jitter, frame, VAD_FRAME_SAMPLES);
 
+    /* Always update pre-roll, even on silence — captures the actual
+     * onset before VAD's attack counter has settled. */
+    memcpy(g_preroll[g_preroll_w], frame, sizeof(frame));
+    g_preroll_w = (g_preroll_w + 1) % PREROLL_FRAMES;
+    if (g_preroll_count < PREROLL_FRAMES) g_preroll_count++;
+
     g_vox_debug_count++;
     if (g_vox_debug_count <= 10 || g_vox_debug_count % 250 == 0) {
-        /* Compute RMS for debug */
         int64_t pwr = 0;
         for (size_t k = 0; k < (got > 0 ? got : 1); k++)
             pwr += (int64_t)frame[k] * frame[k];
@@ -1236,7 +1319,6 @@ static void vox_process_and_queue(void)
                     g_vox_debug_count, got, rms, g_vad_threshold, (int)g_cor_active);
     }
 
-    /* If no real data, treat as silence */
     int speaking = 0;
     if (got > 0)
         speaking = vad_process(frame, VAD_FRAME_SAMPLES);
@@ -1245,31 +1327,15 @@ static void vox_process_and_queue(void)
         if (!g_vox_ptt_held) {
             g_core->request_ptt("freeswitch");
             g_vox_ptt_held = 1;
+            /* Replay the buffered leading edge. The current frame
+             * is the LAST one in the pre-roll, so we don't double-
+             * queue: skip the trailing entry and queue it via the
+             * normal path below. */
+            g_preroll_count--;  /* drop the just-added current frame */
+            queue_preroll();
+            g_preroll_count = 0; /* fresh window after PTT engages */
         }
-        /* Upsample from 8kHz (FS) to pipeline rate (48kHz) before queuing */
-        int dst_rate = g_core->sample_rate;
-        if (dst_rate > 8000) {
-            int ratio = dst_rate / 8000;
-            size_t out_n = VAD_FRAME_SAMPLES * (size_t)ratio;
-            int16_t us[960]; /* max 160 * 6 = 960 */
-            if (out_n > sizeof(us)/sizeof(us[0])) out_n = sizeof(us)/sizeof(us[0]);
-            for (size_t i = 0; i < out_n; i++) {
-                size_t src_idx = i / (size_t)ratio;
-                size_t frac = i % (size_t)ratio;
-                if (src_idx + 1 < VAD_FRAME_SAMPLES) {
-                    int32_t a = frame[src_idx];
-                    int32_t b = frame[src_idx + 1];
-                    us[i] = (int16_t)(a + (b - a) * (int32_t)frac / ratio);
-                } else {
-                    us[i] = frame[VAD_FRAME_SAMPLES - 1];
-                }
-            }
-            kerchunk_queue_add_buffer_src(us, out_n,
-                                          KERCHUNK_PRI_ELEVATED, 0, "phone");
-        } else {
-            kerchunk_queue_add_buffer_src(frame, VAD_FRAME_SAMPLES,
-                                          KERCHUNK_PRI_ELEVATED, 0, "phone");
-        }
+        queue_phone_frame(frame);
     } else {
         if (g_vox_ptt_held) {
             g_core->release_ptt("freeswitch");
@@ -1378,8 +1444,17 @@ static int freeswitch_configure(const kerchunk_config_t *cfg)
     g_max_call_secs  = kerchunk_config_get_duration_s(cfg, "freeswitch", "max_call_duration", 180);
     g_dial_timeout_ms = kerchunk_config_get_duration_ms(cfg, "freeswitch", "dial_timeout", 30000);
     g_inactivity_ms  = kerchunk_config_get_duration_ms(cfg, "freeswitch", "inactivity_timeout", 60000);
-    g_vad_threshold  = kerchunk_config_get_int(cfg, "freeswitch", "vad_threshold", VAD_THRESHOLD_DEF);
-    g_vad_hold_ms    = kerchunk_config_get_duration_ms(cfg, "freeswitch", "vad_hold_ms", VAD_HOLD_MS_DEF);
+    g_vad_threshold     = kerchunk_config_get_int(cfg, "freeswitch", "vad_threshold", VAD_THRESHOLD_DEF);
+    g_vad_hold_ms       = kerchunk_config_get_duration_ms(cfg, "freeswitch", "vad_hold_ms", VAD_HOLD_MS_DEF);
+    g_vad_attack_frames = kerchunk_config_get_int(cfg, "freeswitch", "vad_attack_frames", VAD_ATTACK_FRAMES_DEF);
+    if (g_vad_attack_frames < 1) g_vad_attack_frames = 1;
+    if (g_vad_attack_frames > PREROLL_FRAMES) g_vad_attack_frames = PREROLL_FRAMES;
+    {
+        const char *gv = kerchunk_config_get(cfg, "freeswitch", "phone_gain");
+        g_phone_gain = gv ? (float)atof(gv) : 0.5f;
+        if (g_phone_gain < 0.0f) g_phone_gain = 0.0f;
+        if (g_phone_gain > 2.0f) g_phone_gain = 2.0f;
+    }
 
     v = kerchunk_config_get(cfg, "freeswitch", "admin_only");
     g_admin_only = (v && strcmp(v, "on") == 0);
