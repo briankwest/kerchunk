@@ -96,6 +96,7 @@ static link_state_t g_state;
 static int          g_reconnect_attempt;
 static int64_t      g_next_reconnect_ms;
 static int64_t      g_state_changed_ms;
+static int64_t      g_session_started_at;   /* epoch s when LST_CONNECTED last entered; 0 if not connected */
 static char         g_last_error[160];
 static char         g_current_talker[64];
 static int          g_current_tg;
@@ -112,11 +113,16 @@ static uint32_t      g_out_ts;
 static int           g_udp_fd = -1;
 static struct sockaddr_in g_rtp_dst;
 
-/* Counters for SSE snapshot. */
-static int g_pkts_sent;
-static int g_pkts_recv;
-static int g_srtp_auth_fail;
-static int g_decode_err;
+/* Counters for SSE snapshot. bytes_* count the wire bytes (RTP
+ * header + ciphertext payload + SRTP auth tag) — what actually
+ * crosses the socket — so they line up with reflectd's per-node
+ * bytes_in / bytes_out figures. */
+static int       g_pkts_sent;
+static int       g_pkts_recv;
+static uint64_t  g_bytes_sent;
+static uint64_t  g_bytes_recv;
+static int       g_srtp_auth_fail;
+static int       g_decode_err;
 
 /* SRTP-drift detection: a sliding 10s window. If we accumulate >1000
  * auth failures in any 10s span, force a reconnect to renegotiate the
@@ -252,13 +258,18 @@ static void publish_snapshot(void)
 {
     if (!g_core || !g_core->sse_publish) return;
     char json[1024];
+    int64_t now_s = (int64_t)time(NULL);
+    long uptime_s = g_session_started_at
+        ? (long)(now_s - g_session_started_at) : 0;
     snprintf(json, sizeof(json),
         "{\"type\":\"link\",\"state\":\"%s\",\"tg\":%d,"
         "\"current_talker\":%s%s%s,"
         "\"reconnect_attempt\":%d,\"last_error\":%s%s%s,"
         "\"muted\":%s,"
         "\"tg_members\":%s,"
+        "\"session_started_at\":%lld,\"uptime_s\":%ld,"
         "\"counters\":{\"sent\":%d,\"recv\":%d,"
+        "\"bytes_sent\":%llu,\"bytes_recv\":%llu,"
         "\"srtp_auth_fail\":%d,\"decode_err\":%d,"
         "\"loss_pct_x10\":%d,\"bitrate\":%d}}",
         state_name(g_state), g_current_tg,
@@ -269,7 +280,11 @@ static void publish_snapshot(void)
         g_last_error[0] ? "\"" : "",
         g_muted ? "true" : "false",
         g_tg_members_json[0] ? g_tg_members_json : "[]",
-        g_pkts_sent, g_pkts_recv, g_srtp_auth_fail, g_decode_err,
+        (long long)g_session_started_at, uptime_s,
+        g_pkts_sent, g_pkts_recv,
+        (unsigned long long)g_bytes_sent,
+        (unsigned long long)g_bytes_recv,
+        g_srtp_auth_fail, g_decode_err,
         g_recv_received + g_recv_lost > 0
             ? (g_recv_lost * 1000 / (g_recv_received + g_recv_lost)) : 0,
         g_current_bitrate);
@@ -279,6 +294,13 @@ static void publish_snapshot(void)
 static void set_state(link_state_t s)
 {
     if (g_state == s) return;
+    /* Latch a session start when we first enter CONNECTED, clear on
+     * any leave. Drives the dashboard's "Uptime" field — uses wall
+     * time so it survives display in human-friendly units. */
+    if (s == LST_CONNECTED && g_state != LST_CONNECTED)
+        g_session_started_at = (int64_t)time(NULL);
+    else if (s != LST_CONNECTED)
+        g_session_started_at = 0;
     g_state = s;
     g_state_changed_ms = now_ms();
     publish_snapshot();
@@ -484,6 +506,7 @@ static void encode_one_frame(const int16_t *pcm48k_2880)
                (struct sockaddr *)&g_rtp_dst, sizeof(g_rtp_dst)) ==
         rtp_len) {
         g_pkts_sent++;
+        g_bytes_sent += (uint64_t)rtp_len;
     }
 }
 
@@ -621,6 +644,7 @@ static void drain_udp_recv(void)
             break;
         }
         g_pkts_recv++;
+        g_bytes_recv += (uint64_t)n;
         int len = (int)n;
         if (srtp_unprotect(g_srtp_in, pkt, &len) != srtp_err_status_ok) {
             g_srtp_auth_fail++;
@@ -1080,8 +1104,14 @@ static int cli_link_status(kerchunk_resp_t *r)
     resp_str(r, "current_talker", g_current_talker[0] ? g_current_talker : "");
     resp_int(r, "reconnect_attempt", g_reconnect_attempt);
     resp_str(r, "last_error",     g_last_error);
+    long uptime_s = g_session_started_at
+        ? (long)((int64_t)time(NULL) - g_session_started_at) : 0;
+    resp_int(r, "session_started_at", (int)g_session_started_at);
+    resp_int(r, "uptime_s",       (int)uptime_s);
     resp_int(r, "pkts_sent",      g_pkts_sent);
     resp_int(r, "pkts_recv",      g_pkts_recv);
+    resp_int(r, "bytes_sent",     (int)g_bytes_sent);
+    resp_int(r, "bytes_recv",     (int)g_bytes_recv);
     resp_int(r, "srtp_auth_fail", g_srtp_auth_fail);
     resp_int(r, "decode_err",     g_decode_err);
     return 0;

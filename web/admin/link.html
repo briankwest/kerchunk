@@ -134,12 +134,24 @@ header .sub { color: var(--dim); font-size: 14px; }
   <div class="card">
     <h2>Counters</h2>
     <div class="row">
+      <span class="k">Session uptime</span>
+      <span class="v" id="uptime">—</span>
+    </div>
+    <div class="row">
       <span class="k">Packets sent → reflector</span>
       <span class="v" id="pkts_sent">0</span>
     </div>
     <div class="row">
       <span class="k">Packets recv ← reflector</span>
       <span class="v" id="pkts_recv">0</span>
+    </div>
+    <div class="row">
+      <span class="k">Bytes sent → reflector</span>
+      <span class="v" id="bytes_sent">0 B</span>
+    </div>
+    <div class="row">
+      <span class="k">Bytes recv ← reflector</span>
+      <span class="v" id="bytes_recv">0 B</span>
     </div>
     <div class="row">
       <span class="k">Loss % (rolling 10s)</span>
@@ -219,6 +231,25 @@ function setTg() {
 function reconnect()   { postCmd('link reconnect'); }
 function clearAlarm()  { postCmd('link clear-alarm'); }
 
+function fmtUptime(s) {
+    if (!s) return '—';
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (d) return `${d}d ${h}h ${m}m`;
+    if (h) return `${h}h ${m}m ${sec}s`;
+    if (m) return `${m}m ${sec}s`;
+    return `${sec}s`;
+}
+function fmtBytes(b) {
+    if (b == null)         return '—';
+    if (b < 1024)          return b + ' B';
+    if (b < 1024*1024)     return (b / 1024).toFixed(1) + ' KB';
+    if (b < 1024*1024*1024)return (b / (1024*1024)).toFixed(1) + ' MB';
+    return (b / (1024*1024*1024)).toFixed(2) + ' GB';
+}
+
 function applySnapshot(d) {
     const stateEl = $('state');
     stateEl.textContent = d.state || '—';
@@ -229,6 +260,7 @@ function applySnapshot(d) {
     $('reconnect_attempt').textContent = d.reconnect_attempt ?? 0;
     $('last_error').textContent        = d.last_error || '(none)';
     $('tg').textContent                = d.tg || '—';
+    $('uptime').textContent            = fmtUptime(d.uptime_s);
 
     const t = $('talker');
     if (d.current_talker) {
@@ -239,8 +271,10 @@ function applySnapshot(d) {
         t.className   = 'talker idle';
     }
     if (d.counters) {
-        $('pkts_sent').textContent      = d.counters.sent ?? 0;
-        $('pkts_recv').textContent      = d.counters.recv ?? 0;
+        $('pkts_sent').textContent      = (d.counters.sent  ?? 0).toLocaleString();
+        $('pkts_recv').textContent      = (d.counters.recv  ?? 0).toLocaleString();
+        $('bytes_sent').textContent     = fmtBytes(d.counters.bytes_sent ?? 0);
+        $('bytes_recv').textContent     = fmtBytes(d.counters.bytes_recv ?? 0);
         $('srtp_auth_fail').textContent = d.counters.srtp_auth_fail ?? 0;
         $('decode_err').textContent     = d.counters.decode_err ?? 0;
         const lp = d.counters.loss_pct_x10 ?? 0;
@@ -275,7 +309,9 @@ async function loadInitial() {
             state: j.state, node_id: j.node_id, reflector_ws: j.reflector_ws,
             tg: j.tg, current_talker: j.current_talker,
             reconnect_attempt: j.reconnect_attempt, last_error: j.last_error,
+            uptime_s: j.uptime_s,
             counters: { sent: j.pkts_sent, recv: j.pkts_recv,
+                        bytes_sent: j.bytes_sent, bytes_recv: j.bytes_recv,
                         srtp_auth_fail: j.srtp_auth_fail,
                         decode_err: j.decode_err }
         });
