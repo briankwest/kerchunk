@@ -1766,6 +1766,12 @@ function connectSSE() {
           /* Custom events: 8=weather, 9=forecast, 10=time */
           addLog('Command: custom event '+evt.id,'log-state');
           break;
+        case 'link':
+          /* mod_link's 1Hz state/counters snapshot. The link tab
+           * consumes this for its own live display; not relevant on
+           * the main dashboard log (and posting one per second
+           * spams the feed). Silently drop. */
+          break;
         default:
           addLog(evt.type,'log-state');
       }
