@@ -46,8 +46,23 @@ typedef struct {
     uint16_t              cur_tg;  /* talkgroup the node has joined */
     audio_node_t         *audio;   /* SRTP fan-out state, NULL until login */
     int64_t               last_floor_denied_ms;  /* throttle ws spam */
+
+    /* Sliding window of SRTP auth failures — see PLAN-LINK § 4.6 row
+     * "SRTP auth failures from a node (server)". */
+    int64_t               srtp_window_start_ms;
+    int                   srtp_fail_count;
+
+    /* Server-driven mute. While set, audio fan-out from this node is
+     * dropped before the floor check; control plane stays alive. */
+    bool                  muted;
 } node_rt_t;
 static node_rt_t g_node_rt[RCFG_MAX_NODES];
+
+/* Forward decl — used by audio_drain_udp before the function is defined. */
+static void send_kicked(struct mg_connection *c, const char *code,
+                        const char *msg);
+static void send_mute(struct mg_connection *c, const char *reason,
+                      int retry_in_s);
 
 /* Lex-compare two version strings of the form "kerchunk X.Y.Z" or
  * "X.Y.Z". Returns <0, 0, >0 like strcmp. Empty min ⇒ always pass. */
@@ -90,6 +105,11 @@ typedef struct {
     int64_t      last_traffic_ms;   /* monotonic — for idle timeout */
     int64_t      last_ping_ms;      /* when we last sent a ping */
     int          waiting_pong;      /* 1 if ping in flight */
+
+    /* Sliding window of malformed JSON for kick threshold — see
+     * PLAN-LINK § 4.6 row "Malformed control-plane JSON". */
+    int64_t      bad_msg_window_start_ms;
+    int          bad_msg_count;
 } conn_t;
 
 /* ── Hex helpers ──────────────────────────────────────────────────── */
@@ -364,6 +384,33 @@ static void send_login_denied(struct mg_connection *c,
     send_json_then_close(c, buf);
 }
 
+static void send_kicked(struct mg_connection *c, const char *code,
+                        const char *msg)
+{
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"%s\",\"code\":\"%s\",\"msg\":\"%s\"}",
+             LINK_MSG_KICKED, code, msg ? msg : "");
+    send_json_then_close(c, buf);
+}
+
+static void send_mute(struct mg_connection *c, const char *reason,
+                      int retry_in_s)
+{
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"%s\",\"reason\":\"%s\",\"retry_in_s\":%d}",
+             LINK_MSG_MUTE, reason, retry_in_s);
+    send_json(c, buf);
+}
+
+static void send_unmute(struct mg_connection *c)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"type\":\"%s\"}", LINK_MSG_UNMUTE);
+    send_json(c, buf);
+}
+
 static void handle_login(struct mg_connection *c, conn_t *cs,
                          struct mg_str body)
 {
@@ -451,18 +498,38 @@ static void handle_login(struct mg_connection *c, conn_t *cs,
     bytes_to_hex(master_key,  KERCHUNK_LINK_SRTP_KEY_BYTES,  key_hex);
     bytes_to_hex(master_salt, KERCHUNK_LINK_SRTP_SALT_BYTES, salt_hex);
 
+    /* Build the TG-members list for the dashboard's "who else is on this
+     * TG" pane. Lists every node configured for this TG by id+connected. */
+    char members[512];
+    int  m_off = 0;
+    int  tg_idx_for_members = rcfg_tg_idx(&g_cfg, tg);
+    members[m_off++] = '[';
+    if (tg_idx_for_members >= 0) {
+        const rcfg_tg_t *t = &g_cfg.tgs[tg_idx_for_members];
+        for (int j = 0; j < t->n_members && m_off < (int)sizeof(members) - 80; j++) {
+            int p = t->member_node_idxs[j];
+            m_off += snprintf(members + m_off, sizeof(members) - m_off,
+                "%s{\"id\":\"%s\",\"connected\":%s}",
+                j == 0 ? "" : ",",
+                g_cfg.nodes[p].id,
+                g_node_rt[p].connected ? "true" : "false");
+        }
+    }
+    members[m_off++] = ']'; members[m_off] = '\0';
+
     char buf[KERCHUNK_LINK_MAX_MSG];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"%s\",\"node_id\":\"%s\",\"talkgroup\":%u,"
              "\"keepalive_s\":%d,\"hangtime_ms\":%d,\"proto\":\"%s\","
              "\"rtp_endpoint\":\"%s:%d\","
              "\"srtp_master_key\":\"%s\",\"srtp_master_salt\":\"%s\","
-             "\"ssrc\":%u,\"reflector_ssrc\":%u}",
+             "\"ssrc\":%u,\"reflector_ssrc\":%u,"
+             "\"tg_members\":%s}",
              LINK_MSG_LOGIN_OK, node_id, tg,
              g_cfg.keepalive_s, g_cfg.hangtime_ms,
              KERCHUNK_LINK_PROTO_VERSION,
              g_cfg.rtp_advertise_host, g_cfg.rtp_port,
-             key_hex, salt_hex, node_ssrc, refl_ssrc);
+             key_hex, salt_hex, node_ssrc, refl_ssrc, members);
     send_json(c, buf);
 
     log_msg("node %s logged in (client %s) on TG %u (ssrc=%u)",
@@ -559,11 +626,22 @@ static void handle_message(struct mg_connection *c, conn_t *cs,
     struct mg_str body = mg_str_n(line, len);
     char *type = mg_json_get_str(body, "$.type");
     if (!type) {
-        char b[96];
+        /* Track per-conn malformed-msg sliding window; >3 in 60s → kick. */
+        int64_t nowm = cs->last_traffic_ms;
+        if (nowm - cs->bad_msg_window_start_ms > 60000) {
+            cs->bad_msg_window_start_ms = nowm;
+            cs->bad_msg_count           = 0;
+        }
+        if (++cs->bad_msg_count > 3) {
+            send_kicked(c, LINK_ERR_PROTOCOL_ERROR,
+                        "too many malformed messages");
+            return;
+        }
+        char b[128];
         snprintf(b, sizeof(b),
                  "{\"type\":\"%s\",\"code\":\"%s\",\"msg\":\"no type\"}",
                  LINK_MSG_ERROR, LINK_ERR_PROTOCOL_ERROR);
-        send_json_then_close(c, b);
+        send_json(c, b);
         return;
     }
 
@@ -583,6 +661,40 @@ static void handle_message(struct mg_connection *c, conn_t *cs,
         handle_ping(c, body);
     } else if (strcmp(type, LINK_MSG_SET_TG) == 0) {
         handle_set_tg(c, cs, body);
+    } else if (strcmp(type, LINK_MSG_PONG) == 0) {
+        /* Already refreshed last_traffic_ms above. */
+    } else if (strcmp(type, LINK_MSG_QUALITY) == 0) {
+        /* Sustained loss → mute (PLAN-LINK § 4.6). Also broadcast a
+         * target_bitrate hint to other senders on the same TG so they
+         * back off before the channel collapses. */
+        double loss_pct = 0.0;
+        mg_json_get_num(body, "$.loss_pct", &loss_pct);
+        if (loss_pct > g_cfg.mute_threshold_pct &&
+            cs->node_idx >= 0 && !g_node_rt[cs->node_idx].muted) {
+            log_msg("node %s loss %.1f%% > threshold %d%% — muting",
+                    g_cfg.nodes[cs->node_idx].id, loss_pct,
+                    g_cfg.mute_threshold_pct);
+            g_node_rt[cs->node_idx].muted = true;
+            send_mute(c, "loss_too_high", 60);
+        }
+        /* If any node on the TG reports >5% loss, suggest 24kbps to
+         * everyone on that TG. Recovers up to 32kbps when loss drops. */
+        if (cs->node_idx >= 0) {
+            uint16_t tg = g_node_rt[cs->node_idx].cur_tg;
+            int tgi = rcfg_tg_idx(&g_cfg, tg);
+            if (tgi >= 0) {
+                int bps = loss_pct > 5.0 ? 24000 : 32000;
+                char tb[96];
+                snprintf(tb, sizeof(tb),
+                         "{\"type\":\"%s\",\"bps\":%d}",
+                         LINK_MSG_TARGET_BITRATE, bps);
+                for (int j = 0; j < g_cfg.tgs[tgi].n_members; j++) {
+                    int peer = g_cfg.tgs[tgi].member_node_idxs[j];
+                    if (g_node_rt[peer].connected && g_node_rt[peer].c)
+                        send_json(g_node_rt[peer].c, tb);
+                }
+            }
+        }
     } else if (strcmp(type, "simulate_talk_start") == 0) {
         handle_simulate_talk_start(c, cs);
     } else if (strcmp(type, "simulate_talk_end") == 0) {
@@ -592,6 +704,209 @@ static void handle_message(struct mg_connection *c, conn_t *cs,
     }
 
     free(type);
+}
+
+/* ── Admin HTTP API ───────────────────────────────────────────────── */
+
+static int admin_auth_ok(struct mg_http_message *hm)
+{
+    if (!g_cfg.admin_token[0]) return 0;   /* token unset → API closed */
+    struct mg_str *h = mg_http_get_header(hm, "Authorization");
+    if (!h) return 0;
+    char want[256];
+    snprintf(want, sizeof(want), "Bearer %s", g_cfg.admin_token);
+    return h->len == strlen(want) && memcmp(h->buf, want, h->len) == 0;
+}
+
+static void send_state_json(struct mg_connection *c)
+{
+    char body[8192];
+    int  off = snprintf(body, sizeof(body),
+        "{\"reflector\":\"reflectd\",\"keepalive_s\":%d,\"hangtime_ms\":%d,"
+        "\"nodes\":[", g_cfg.keepalive_s, g_cfg.hangtime_ms);
+    int first = 1;
+    for (int i = 0; i < g_cfg.n_nodes; i++) {
+        off += snprintf(body + off, sizeof(body) - off,
+            "%s{\"id\":\"%s\",\"connected\":%s,\"muted\":%s,\"tg\":%u,"
+            "\"banned\":%s,\"srtp_fail_30s\":%d}",
+            first ? "" : ",",
+            g_cfg.nodes[i].id,
+            g_node_rt[i].connected ? "true" : "false",
+            g_node_rt[i].muted     ? "true" : "false",
+            g_node_rt[i].cur_tg,
+            g_cfg.nodes[i].banned  ? "true" : "false",
+            g_node_rt[i].srtp_fail_count);
+        first = 0;
+    }
+    off += snprintf(body + off, sizeof(body) - off, "],\"talkgroups\":[");
+    first = 1;
+    for (int i = 0; i < g_cfg.n_tgs; i++) {
+        const char *talker = (g_tg_rt[i].talker_node_idx >= 0)
+            ? g_cfg.nodes[g_tg_rt[i].talker_node_idx].id : NULL;
+        off += snprintf(body + off, sizeof(body) - off,
+            "%s{\"tg\":%u,\"name\":\"%s\",\"members\":%d,"
+            "\"talker\":%s%s%s}",
+            first ? "" : ",",
+            g_cfg.tgs[i].number, g_cfg.tgs[i].name,
+            g_cfg.tgs[i].n_members,
+            talker ? "\"" : "", talker ? talker : "null", talker ? "\"" : "");
+        first = 0;
+    }
+    off += snprintf(body + off, sizeof(body) - off, "]}");
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", body);
+}
+
+/* {"node_id":"X"[,"reason":"..."][,"retry_in_s":N]} */
+static void admin_node_action(struct mg_connection *c,
+                              struct mg_http_message *hm,
+                              const char *action)
+{
+    char *node_id = mg_json_get_str(hm->body, "$.node_id");
+    if (!node_id) {
+        mg_http_reply(c, 400, "", "{\"error\":\"missing node_id\"}");
+        return;
+    }
+    int idx = rcfg_node_idx(&g_cfg, node_id);
+    if (idx < 0) {
+        mg_http_reply(c, 404, "", "{\"error\":\"unknown node\"}");
+        free(node_id);
+        return;
+    }
+
+    if (!strcmp(action, "kick")) {
+        char *reason = mg_json_get_str(hm->body, "$.reason");
+        if (g_node_rt[idx].c)
+            send_kicked(g_node_rt[idx].c, LINK_ERR_ADMIN_ACTION,
+                        reason ? reason : "operator kick");
+        log_msg("admin: kicked %s", node_id);
+        free(reason);
+    } else if (!strcmp(action, "mute")) {
+        long retry = mg_json_get_long(hm->body, "$.retry_in_s", 60);
+        g_node_rt[idx].muted = true;
+        if (g_node_rt[idx].c)
+            send_mute(g_node_rt[idx].c, "admin_action", (int)retry);
+        log_msg("admin: muted %s (retry_in_s=%ld)", node_id, retry);
+    } else if (!strcmp(action, "unmute")) {
+        g_node_rt[idx].muted = false;
+        if (g_node_rt[idx].c)
+            send_unmute(g_node_rt[idx].c);
+        log_msg("admin: unmuted %s", node_id);
+    }
+
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"node_id\":\"%s\",\"action\":\"%s\"}",
+                  node_id, action);
+    free(node_id);
+}
+
+/* {"tg":N} */
+static void admin_release_floor(struct mg_connection *c,
+                                struct mg_http_message *hm)
+{
+    long tg = mg_json_get_long(hm->body, "$.tg", 0);
+    int  tg_idx = rcfg_tg_idx(&g_cfg, (uint16_t)tg);
+    if (tg_idx < 0) {
+        mg_http_reply(c, 404, "", "{\"error\":\"unknown tg\"}");
+        return;
+    }
+    floor_release(tg_idx, LINK_ERR_ADMIN_ACTION);
+    log_msg("admin: released floor on TG %ld", tg);
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"tg\":%ld}", tg);
+}
+
+/* SIGHUP handler — config reload. We diff old vs new TG memberships
+ * and emit tg_membership_changed for any node that moved. */
+static volatile sig_atomic_t g_reload = 0;
+
+static void admin_reload(struct mg_connection *c)
+{
+    g_reload = 1;
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"action\":\"reload_queued\"}");
+}
+
+static void route_admin(struct mg_connection *c, struct mg_http_message *hm)
+{
+    if (!admin_auth_ok(hm)) {
+        mg_http_reply(c, 401, "", "{\"error\":\"unauthorized\"}");
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/state"), NULL) &&
+        mg_match(hm->method, mg_str("GET"), NULL)) {
+        send_state_json(c);
+        return;
+    }
+    if (!mg_match(hm->method, mg_str("POST"), NULL)) {
+        mg_http_reply(c, 405, "", "{\"error\":\"POST required\"}");
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/admin/kick"),    NULL))
+        admin_node_action(c, hm, "kick");
+    else if (mg_match(hm->uri, mg_str("/api/admin/mute"),    NULL))
+        admin_node_action(c, hm, "mute");
+    else if (mg_match(hm->uri, mg_str("/api/admin/unmute"),  NULL))
+        admin_node_action(c, hm, "unmute");
+    else if (mg_match(hm->uri, mg_str("/api/admin/release-floor"), NULL))
+        admin_release_floor(c, hm);
+    else if (mg_match(hm->uri, mg_str("/api/admin/reload"),  NULL))
+        admin_reload(c);
+    else
+        mg_http_reply(c, 404, "", "{\"error\":\"unknown admin route\"}");
+}
+
+/* Apply a config reload. Reads the current file fresh, diffs each
+ * connected node's TG membership, and tells anyone whose default_tg
+ * changed (or who lost access entirely) via tg_membership_changed. */
+static const char *g_cfg_path;
+static void do_reload(void)
+{
+    rcfg_t newcfg;
+    if (rcfg_load(g_cfg_path, &newcfg) < 0) {
+        log_msg("reload failed — keeping current config");
+        return;
+    }
+
+    /* For each currently connected node, see if its allowed_tgs / default
+     * tg moved. We only auto-switch nodes whose CURRENT TG is no longer
+     * allowed; otherwise we leave them where they are. */
+    for (int i = 0; i < g_cfg.n_nodes; i++) {
+        if (!g_node_rt[i].connected) continue;
+        int new_idx = rcfg_node_idx(&newcfg, g_cfg.nodes[i].id);
+        if (new_idx < 0) {
+            /* Node was removed from config — kick. */
+            if (g_node_rt[i].c)
+                send_kicked(g_node_rt[i].c, LINK_ERR_CONFIG_RELOAD,
+                            "node removed from config");
+            continue;
+        }
+        if (!rcfg_node_allowed_on_tg(&newcfg, new_idx,
+                                     g_node_rt[i].cur_tg)) {
+            /* Move to new default_tg if there is one. */
+            uint16_t new_tg = newcfg.nodes[new_idx].default_tg;
+            if (!new_tg && newcfg.nodes[new_idx].n_allowed_tgs > 0)
+                new_tg = newcfg.nodes[new_idx].allowed_tgs[0];
+            char buf[200];
+            snprintf(buf, sizeof(buf),
+                "{\"type\":\"%s\",\"old_tg\":%u,\"new_tg\":%s,"
+                "\"reason\":\"config_reload\"}",
+                LINK_MSG_TG_MEMBERSHIP_CHANGED,
+                g_node_rt[i].cur_tg,
+                new_tg ? (char[16]){0} : "null");
+            if (new_tg)
+                snprintf(buf, sizeof(buf),
+                    "{\"type\":\"%s\",\"old_tg\":%u,\"new_tg\":%u,"
+                    "\"reason\":\"config_reload\"}",
+                    LINK_MSG_TG_MEMBERSHIP_CHANGED,
+                    g_node_rt[i].cur_tg, new_tg);
+            if (g_node_rt[i].c) send_json(g_node_rt[i].c, buf);
+            g_node_rt[i].cur_tg = new_tg;
+        }
+    }
+
+    g_cfg = newcfg;
+    log_msg("config reloaded: %d node(s), %d talkgroup(s)",
+            g_cfg.n_nodes, g_cfg.n_tgs);
 }
 
 /* ── Mongoose event handler ───────────────────────────────────────── */
@@ -608,12 +923,38 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
         return;
     }
 
-    /* HTTP request: upgrade if it's a WS handshake on /, refuse otherwise. */
+    /* HTTP request:
+     *   /link       → WS upgrade for mod_link clients
+     *   /api/...    → admin JSON API (Bearer token required)
+     *   /admin/...  → static dashboard files (no auth — uses Bearer
+     *                 from the form input, JS calls /api/* directly)
+     *   /           → 302 redirect to /admin/
+     *   anything else → 404
+     */
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
-        if (mg_match(hm->uri, mg_str("/link"), NULL) ||
-            mg_match(hm->uri, mg_str("/"), NULL)) {
+        if (mg_match(hm->uri, mg_str("/link"), NULL)) {
             mg_ws_upgrade(c, hm, NULL);
+        } else if (mg_match(hm->uri, mg_str("/api/#"), NULL)) {
+            route_admin(c, hm);
+        } else if (mg_match(hm->uri, mg_str("/"), NULL)) {
+            mg_http_reply(c, 302, "Location: /admin/\r\n", "");
+        } else if (mg_match(hm->uri, mg_str("/admin/#"), NULL) ||
+                   mg_match(hm->uri, mg_str("/admin"),   NULL)) {
+            /* Strip the /admin prefix so mg_http_serve_dir maps /admin/X
+             * → root_dir/X (and /admin/ → root_dir/index.html). */
+            struct mg_http_message rewritten = *hm;
+            if (rewritten.uri.len >= 6 &&
+                memcmp(rewritten.uri.buf, "/admin", 6) == 0) {
+                rewritten.uri.buf += 6;
+                rewritten.uri.len -= 6;
+                if (rewritten.uri.len == 0) {
+                    rewritten.uri.buf = "/";
+                    rewritten.uri.len = 1;
+                }
+            }
+            struct mg_http_serve_opts so = { .root_dir = g_cfg.dashboard_dir };
+            mg_http_serve_dir(c, &rewritten, &so);
         } else {
             mg_http_reply(c, 404, "", "{\"error\":\"not found\"}");
         }
@@ -733,8 +1074,42 @@ static void audio_drain_udp(void)
                 break;
             }
         }
-        if (sender_idx < 0) continue;   /* unauth packet, drop */
+
+        /* Sliding-window auth-fail tally: if no node auth'd this packet,
+         * we don't know who sent it (could be noise), so we can't
+         * attribute. But we CAN track per-node fails by trial-auth
+         * outcome. For now, count an auth-fail against the SSRC's
+         * presumed owner if we can identify one by source-addr match. */
+        if (sender_idx < 0) {
+            for (int i = 0; i < g_cfg.n_nodes; i++) {
+                if (!g_node_rt[i].connected || !g_node_rt[i].audio) continue;
+                if (!audio_node_have_addr(g_node_rt[i].audio)) continue;
+                struct sockaddr_storage addr; socklen_t addr_len;
+                audio_node_get_addr(g_node_rt[i].audio, &addr, &addr_len);
+                if (addr_len == src_len &&
+                    memcmp(&addr, &src, addr_len) == 0) {
+                    int64_t nowm = now_ms();
+                    if (nowm - g_node_rt[i].srtp_window_start_ms > 30000) {
+                        g_node_rt[i].srtp_window_start_ms = nowm;
+                        g_node_rt[i].srtp_fail_count      = 0;
+                    }
+                    if (++g_node_rt[i].srtp_fail_count > g_cfg.auth_fail_kick) {
+                        log_msg("node %s SRTP auth fails > %d/30s — kicking",
+                                g_cfg.nodes[i].id, g_cfg.auth_fail_kick);
+                        if (g_node_rt[i].c)
+                            send_kicked(g_node_rt[i].c, LINK_ERR_AUTH_FAILURES,
+                                        "SRTP authentication failure threshold");
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
         find_sender_by_ssrc(ssrc);      /* keep helper used while we're here */
+
+        /* Server-side mute: drop the audio without engaging the floor.
+         * Sender's WS stays open so they can see the mute state. */
+        if (g_node_rt[sender_idx].muted) continue;
 
         /* Bootstrap packet (PT=99): SRTP-authenticated proof of identity
          * + UDP source. Don't engage the floor or fan it out — purely a
@@ -824,7 +1199,7 @@ static char *slurp(const char *path)
 
 static void on_signal(int sig)
 {
-    (void)sig;
+    if (sig == SIGHUP)  { g_reload = 1; return; }
     g_stop = 1;
 }
 
@@ -863,8 +1238,10 @@ int main(int argc, char **argv)
         }
     }
 
+    g_cfg_path = cfg_path;
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
+    signal(SIGHUP,  on_signal);
     signal(SIGPIPE, SIG_IGN);
 
     struct mg_mgr mgr;
@@ -899,6 +1276,7 @@ int main(int argc, char **argv)
         audio_drain_udp();
         floor_tick();
         keepalive_tick();
+        if (g_reload) { g_reload = 0; do_reload(); }
     }
 
     log_msg("shutting down — sending reflector_shutdown to clients");

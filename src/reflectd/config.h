@@ -41,6 +41,7 @@ typedef struct {
     char     tls_key[256];
     char     admin_token[128];
     char     log_file[256];
+    char     dashboard_dir[256]; /* GET /admin/* served from here */
 
     int      rtp_port;     /* UDP port for SRTP audio plane */
     char     rtp_advertise_host[64]; /* what we tell clients in login_ok */

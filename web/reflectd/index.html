@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>kerchunk-reflectd — admin</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px;
+       max-width: 1400px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+header .sub { color: var(--dim); font-size: 14px; }
+header .auth { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+header .auth input { padding: 5px 8px; background: var(--bg); color: var(--text);
+                     border: 1px solid var(--border); border-radius: 4px;
+                     font-size: 12px; min-width: 280px; font-family: ui-monospace, monospace; }
+.card { background: var(--card); border: 1px solid var(--border);
+        border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase;
+           letter-spacing: 1px; margin-bottom: 10px; }
+.btn { padding: 4px 10px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 4px; cursor: pointer; font-size: 11px;
+       font-family: inherit; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-warn { border-color: var(--yellow); color: var(--yellow); }
+.btn-red  { border-color: var(--red); color: var(--red); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--dim); font-size: 11px; text-transform: uppercase;
+     letter-spacing: 1px; font-weight: 600; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.dot.green  { background: var(--green); }
+.dot.red    { background: var(--red); }
+.dot.yellow { background: var(--yellow); }
+.talker { color: var(--accent); font-weight: 600; }
+.talker.idle { color: var(--dim); font-style: italic; font-weight: 400; }
+.status { font-size: 12px; color: var(--dim); margin-top: 6px; }
+.status.ok  { color: var(--green); }
+.status.err { color: var(--red); }
+.muted { color: var(--yellow); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>kerchunk-reflectd</h1>
+  <span class="sub">Repeater linking reflector — admin</span>
+  <div class="auth">
+    <input id="token" type="password" placeholder="admin_token (Bearer)">
+    <button class="btn" onclick="reload()">Refresh</button>
+  </div>
+</header>
+
+<div class="card">
+  <h2>Reflector</h2>
+  <div id="meta">—</div>
+</div>
+
+<div class="card">
+  <h2>Nodes</h2>
+  <table>
+    <thead><tr><th></th><th>Node ID</th><th>State</th><th>TG</th>
+               <th>SRTP fails (30s)</th><th>Actions</th></tr></thead>
+    <tbody id="nodes"><tr><td colspan="6">Enter token + Refresh</td></tr></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Talkgroups</h2>
+  <table>
+    <thead><tr><th>TG</th><th>Name</th><th>Members</th><th>Talker</th>
+               <th>Actions</th></tr></thead>
+    <tbody id="tgs"><tr><td colspan="5">—</td></tr></tbody>
+  </table>
+</div>
+
+<div id="status" class="status"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function token() { return $('token').value.trim(); }
+function setStatus(msg, kind) { $('status').className = 'status ' + (kind || '');
+                                 $('status').textContent = msg; }
+
+/* Persist the token in localStorage so reloading the page doesn't
+ * require pasting it again. NOT a security feature — anyone with
+ * access to the browser can read it. */
+$('token').value = localStorage.getItem('reflectd_token') || '';
+$('token').addEventListener('change',
+    () => localStorage.setItem('reflectd_token', token()));
+
+async function api(method, path, body) {
+    const t = token();
+    if (!t) { setStatus('admin_token required', 'err'); return null; }
+    const opts = { method, headers: { 'Authorization': 'Bearer ' + t } };
+    if (body) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+    }
+    try {
+        const res = await fetch(path, opts);
+        const j = await res.json();
+        if (!res.ok) { setStatus(j.error || res.statusText, 'err'); return null; }
+        return j;
+    } catch (e) { setStatus(e.message, 'err'); return null; }
+}
+
+async function reload() {
+    const j = await api('GET', '/api/state');
+    if (!j) return;
+    setStatus('refreshed ' + new Date().toLocaleTimeString(), 'ok');
+
+    $('meta').innerHTML =
+        `<b>${j.reflector}</b> &middot; keepalive ${j.keepalive_s}s &middot; ` +
+        `hangtime ${j.hangtime_ms}ms`;
+
+    $('nodes').innerHTML = j.nodes.map(n => `
+        <tr>
+          <td><span class="dot ${n.connected ? (n.muted ? 'yellow' : 'green') : 'red'}"></span></td>
+          <td>${n.id}</td>
+          <td>${n.connected ? (n.muted ? '<span class="muted">muted</span>' : 'connected') : 'offline'}</td>
+          <td>${n.tg || '—'}</td>
+          <td>${n.srtp_fail_30s}</td>
+          <td>
+            ${n.connected ?
+                (n.muted
+                    ? `<button class="btn" onclick="act('unmute','${n.id}')">Unmute</button>`
+                    : `<button class="btn btn-warn" onclick="act('mute','${n.id}')">Mute</button>`)
+              : ''}
+            ${n.connected ? `<button class="btn btn-red" onclick="act('kick','${n.id}')">Kick</button>` : ''}
+          </td>
+        </tr>`).join('') || '<tr><td colspan="6">no nodes configured</td></tr>';
+
+    $('tgs').innerHTML = j.talkgroups.map(t => `
+        <tr>
+          <td>${t.tg}</td>
+          <td>${t.name}</td>
+          <td>${t.members}</td>
+          <td>${t.talker
+              ? `<span class="talker">${t.talker}</span>`
+              : `<span class="talker idle">(idle)</span>`}</td>
+          <td>
+            ${t.talker ? `<button class="btn btn-warn" onclick="release(${t.tg})">Release floor</button>` : ''}
+          </td>
+        </tr>`).join('') || '<tr><td colspan="5">no talkgroups</td></tr>';
+}
+
+async function act(action, node_id) {
+    const body = { node_id };
+    if (action === 'mute') body.retry_in_s = 60;
+    if (action === 'kick') body.reason = 'admin from dashboard';
+    const j = await api('POST', '/api/admin/' + action, body);
+    if (j) setStatus(`${action} ${node_id}: OK`, 'ok');
+    setTimeout(reload, 200);
+}
+
+async function release(tg) {
+    const j = await api('POST', '/api/admin/release-floor', { tg });
+    if (j) setStatus(`release-floor TG ${tg}: OK`, 'ok');
+    setTimeout(reload, 200);
+}
+
+reload();
+setInterval(reload, 3000);
+</script>
+</body>
+</html>

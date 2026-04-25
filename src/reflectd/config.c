@@ -199,6 +199,10 @@ static int load_globals(rcfg_t *out, const kerchunk_config_t *cfg)
     const char *log = kerchunk_config_get(cfg, "reflector", "log_file");
     if (log) snprintf(out->log_file, sizeof(out->log_file), "%s", log);
 
+    const char *dd = kerchunk_config_get(cfg, "reflector", "dashboard_dir");
+    snprintf(out->dashboard_dir, sizeof(out->dashboard_dir), "%s",
+             dd ? dd : "/usr/share/kerchunk-reflectd/web");
+
     out->rtp_port           = kerchunk_config_get_int(
         cfg, "reflector", "rtp_port", KERCHUNK_LINK_DEFAULT_RTP_PORT);
     const char *adv = kerchunk_config_get(cfg, "reflector", "rtp_advertise_host");

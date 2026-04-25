@@ -142,6 +142,14 @@ header .sub { color: var(--dim); font-size: 14px; }
       <span class="v" id="pkts_recv">0</span>
     </div>
     <div class="row">
+      <span class="k">Loss % (rolling 10s)</span>
+      <span class="v" id="loss_pct">0.0</span>
+    </div>
+    <div class="row">
+      <span class="k">Opus bitrate (bps)</span>
+      <span class="v" id="bitrate">—</span>
+    </div>
+    <div class="row">
       <span class="k">SRTP auth failures</span>
       <span class="v" id="srtp_auth_fail">0</span>
     </div>
@@ -149,6 +157,15 @@ header .sub { color: var(--dim); font-size: 14px; }
       <span class="k">Opus decode errors</span>
       <span class="v" id="decode_err">0</span>
     </div>
+    <div class="row">
+      <span class="k">Mute state</span>
+      <span class="v" id="muted_state">live</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Other nodes on this talkgroup</h2>
+    <div id="members" style="font-size:13px; line-height:1.8">—</div>
   </div>
 
   <div class="card">
@@ -226,6 +243,21 @@ function applySnapshot(d) {
         $('pkts_recv').textContent      = d.counters.recv ?? 0;
         $('srtp_auth_fail').textContent = d.counters.srtp_auth_fail ?? 0;
         $('decode_err').textContent     = d.counters.decode_err ?? 0;
+        const lp = d.counters.loss_pct_x10 ?? 0;
+        $('loss_pct').textContent       = (lp / 10).toFixed(1);
+        $('bitrate').textContent        = d.counters.bitrate || '—';
+    }
+    if ('muted' in d) {
+        $('muted_state').textContent = d.muted ? 'MUTED by reflector' : 'live';
+        $('muted_state').style.color = d.muted ? 'var(--yellow)' : 'var(--text)';
+    }
+    if (d.tg_members && d.tg_members.length > 0) {
+        $('members').innerHTML = d.tg_members.map(m =>
+            `<div><span style="color:${m.connected ? 'var(--green)' : 'var(--dim)'}">●</span>
+            ${m.id} ${m.connected ? '' : '<span style="color:var(--dim)">(offline)</span>'}</div>`
+        ).join('');
+    } else {
+        $('members').innerHTML = '<span style="color:var(--dim)">no members reported</span>';
     }
 }
 

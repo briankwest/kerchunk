@@ -454,6 +454,9 @@ kerchunkconf_DATA = kerchunk.conf.example users.conf.example system_prompt.md.ex
 reflectdconfdir = $(sysconfdir)/kerchunk-reflectd
 reflectdconf_DATA = reflectd.conf.example
 
+reflectdwebdir = $(datadir)/kerchunk-reflectd/web
+reflectdweb_DATA = web/reflectd/index.html
+
 # Systemd service
 systemddir = $(prefix)/lib/systemd/system
 systemd_DATA = kerchunkd.service

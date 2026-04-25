@@ -1,3 +1,4 @@
 usr/bin/kerchunk-reflectd
 usr/bin/kerchunk-link-probe
+usr/share/kerchunk-reflectd/web/*
 etc/kerchunk-reflectd/*

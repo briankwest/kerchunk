@@ -17088,6 +17088,29 @@ void mg_tls_init(struct mg_connection *c, const struct mg_tls_opts *opts) {
       mg_error(c, "CERT err %d", mg_tls_err(c, tls, rc));
       goto fail;
     }
+#if MG_TLS == MG_TLS_OPENSSL
+    /* Walk any additional PEM blocks in the bundle (e.g. Let's Encrypt's
+     * fullchain.pem leaf+intermediate) and attach them as extra-chain
+     * certs so clients can build a valid verification path without
+     * AIA-fetching the intermediate. Stops at the first non-PEM block
+     * or EOF. */
+    if (!MG_IS_DER(opts->cert.buf)) {
+      BIO *cbio = BIO_new_mem_buf(opts->cert.buf, (int) (long) opts->cert.len);
+      if (cbio != NULL) {
+        X509 *first = PEM_read_bio_X509(cbio, NULL, NULL, NULL);
+        if (first) X509_free(first);
+        X509 *extra;
+        while ((extra = PEM_read_bio_X509(cbio, NULL, NULL, NULL)) != NULL) {
+          if (SSL_add1_chain_cert(tls->ssl, extra) != 1) {
+            X509_free(extra);
+            break;
+          }
+          X509_free(extra);  /* SSL_add1 took its own reference */
+        }
+        BIO_free(cbio);
+      }
+    }
+#endif
   }
   if (opts->key.buf != NULL && opts->key.buf[0] != '\0') {
     EVP_PKEY *key = load_key(opts->key);

@@ -99,6 +99,7 @@ static int64_t      g_state_changed_ms;
 static char         g_last_error[160];
 static char         g_current_talker[64];
 static int          g_current_tg;
+static char         g_tg_members_json[512];   /* raw JSON array from login_ok */
 
 /* SRTP / RTP / Opus session (set after login_ok, freed on disconnect). */
 static int           g_session_active;
@@ -129,6 +130,25 @@ static int64_t g_srtp_window_start_ms;
  * 10s when not transmitting so the upstream NAT mapping stays open. */
 #define NAT_KEEPALIVE_MS 10000
 static int64_t g_last_nat_keepalive_ms;
+
+/* Server-driven mute (PLAN-LINK § 4.6). When set, mod_link stops
+ * encoding+sending entirely; control plane stays alive. */
+static volatile int g_muted;
+
+static void send_ws_json(const char *json);   /* fwd decl — defined below */
+
+/* Per-stream RTP-seq tracking for accurate loss-rate calculation
+ * (PLAN-LINK § 4.1.4 quality report). Walks the seq, counts gaps. */
+static uint16_t g_recv_last_seq;
+static int      g_recv_have_seq;
+static int      g_recv_lost;       /* in current 10s window */
+static int      g_recv_received;   /* in current 10s window */
+static int64_t  g_quality_window_start_ms;
+#define QUALITY_REPORT_MS 10000
+
+/* Adaptive bitrate (PLAN-LINK § 11). Reflector can suggest a target
+ * bitrate via the target_bitrate message; we update the encoder. */
+static int g_current_bitrate;
 
 /* PTT state (bg thread owns these). */
 static int     g_link_ptt_held;
@@ -231,20 +251,28 @@ static const char *state_name(link_state_t s)
 static void publish_snapshot(void)
 {
     if (!g_core || !g_core->sse_publish) return;
-    char json[512];
+    char json[1024];
     snprintf(json, sizeof(json),
         "{\"type\":\"link\",\"state\":\"%s\",\"tg\":%d,"
         "\"current_talker\":%s%s%s,"
         "\"reconnect_attempt\":%d,\"last_error\":%s%s%s,"
+        "\"muted\":%s,"
+        "\"tg_members\":%s,"
         "\"counters\":{\"sent\":%d,\"recv\":%d,"
-        "\"srtp_auth_fail\":%d,\"decode_err\":%d}}",
+        "\"srtp_auth_fail\":%d,\"decode_err\":%d,"
+        "\"loss_pct_x10\":%d,\"bitrate\":%d}}",
         state_name(g_state), g_current_tg,
         g_current_talker[0] ? "\"" : "", g_current_talker[0] ? g_current_talker : "null",
         g_current_talker[0] ? "\"" : "",
         g_reconnect_attempt,
         g_last_error[0] ? "\"" : "", g_last_error[0] ? g_last_error : "null",
         g_last_error[0] ? "\"" : "",
-        g_pkts_sent, g_pkts_recv, g_srtp_auth_fail, g_decode_err);
+        g_muted ? "true" : "false",
+        g_tg_members_json[0] ? g_tg_members_json : "[]",
+        g_pkts_sent, g_pkts_recv, g_srtp_auth_fail, g_decode_err,
+        g_recv_received + g_recv_lost > 0
+            ? (g_recv_lost * 1000 / (g_recv_received + g_recv_lost)) : 0,
+        g_current_bitrate);
     g_core->sse_publish("link", json, 0);
 }
 
@@ -300,6 +328,17 @@ static int session_setup(struct mg_str body)
     long  rs   = mg_json_get_long(body, "$.reflector_ssrc",  0);
     long  tg   = mg_json_get_long(body, "$.talkgroup",       0);
     int   rc   = -1;
+
+    /* Stash tg_members verbatim for the SSE snapshot (page renders the
+     * list directly). Falls back to "[]" if the reflector didn't send. */
+    struct mg_str members = mg_json_get_tok(body, "$.tg_members");
+    if (members.buf && members.len > 0 &&
+        members.len < sizeof(g_tg_members_json)) {
+        memcpy(g_tg_members_json, members.buf, members.len);
+        g_tg_members_json[members.len] = '\0';
+    } else {
+        g_tg_members_json[0] = '\0';
+    }
 
     if (!ep || !kh || !sh ||
         strlen(kh) != 2 * KERCHUNK_LINK_SRTP_KEY_BYTES ||
@@ -450,8 +489,9 @@ static void encode_one_frame(const int16_t *pcm48k_2880)
 
 static void drain_and_encode(void)
 {
-    if (!g_session_active) {
-        /* Discard everything we accumulated while disconnected. */
+    if (!g_session_active || g_muted) {
+        /* Disconnected OR muted: discard everything we accumulated so we
+         * don't replay stale audio when service resumes. */
         __atomic_store_n(&g_ring_r, __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE),
                          __ATOMIC_RELEASE);
         return;
@@ -461,6 +501,44 @@ static void drain_and_encode(void)
         size_t got = ring_read(buf, LINK_FRAME_48K);
         if (got == LINK_FRAME_48K) encode_one_frame(buf);
     }
+}
+
+/* Track loss for the quality report. Called every received audio packet
+ * with the parsed RTP seq. */
+static void quality_track_seq(uint16_t seq)
+{
+    int64_t now = now_ms();
+    if (now - g_quality_window_start_ms > QUALITY_REPORT_MS) {
+        g_quality_window_start_ms = now;
+        g_recv_lost     = 0;
+        g_recv_received = 0;
+    }
+    if (g_recv_have_seq) {
+        int16_t gap = (int16_t)(seq - g_recv_last_seq) - 1;
+        if (gap > 0 && gap < 200) g_recv_lost += gap;
+    } else {
+        g_recv_have_seq = 1;
+    }
+    g_recv_last_seq = seq;
+    g_recv_received++;
+}
+
+static void send_quality_report(void)
+{
+    if (!g_ws || !g_session_active) return;
+    int total = g_recv_received + g_recv_lost;
+    int loss_pct_x10 = total > 0 ? (g_recv_lost * 1000 / total) : 0;
+    /* Estimate jitter buffer depth: count filled JB slots. */
+    int jb_depth_ms = 0;
+    /* g_jb_slots is defined later; just declare extern-like via the
+     * simple "look at the cursor delta to most recent received". */
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "{\"type\":\"%s\",\"loss_pct\":%d.%d,\"jitter_ms\":0,"
+        "\"jb_depth_ms\":%d,\"decode_errs\":%d,\"window_s\":10}",
+        LINK_MSG_QUALITY, loss_pct_x10 / 10, loss_pct_x10 % 10,
+        jb_depth_ms, g_decode_err);
+    send_ws_json(buf);
 }
 
 /* ── Receive pipeline (UDP → SRTP unprotect → Opus decode → queue) ── */
@@ -533,6 +611,10 @@ static void drain_udp_recv(void)
             continue;
         }
         if (len <= 12) continue;
+        uint16_t seq;
+        memcpy(&seq, pkt + 2, 2);
+        seq = ntohs(seq);
+        quality_track_seq(seq);
         int dlen = opus_decode(g_dec, pkt + 12, len - 12,
                                pcm, KERCHUNK_LINK_OPUS_FRAME_SAMPLES, 0);
         if (dlen <= 0) { g_decode_err++; continue; }
@@ -688,16 +770,36 @@ static void on_mute(struct mg_str body)
 {
     char *reason = mg_json_get_str(body, "$.reason");
     set_error("muted by reflector (%s)", reason ? reason : "?");
-    /* For now: reflector-side mute means stop sending. Client-side we
-     * simply gate encoding on g_local_rx_active AND a new flag. */
-    /* (Full mute/unmute toggle ships with admin API in a later phase.) */
+    g_muted = 1;
     free(reason);
 }
 
 static void on_unmute(void)
 {
-    /* No-op for now — once we add a g_muted gate this clears it. */
     set_error("");
+    g_muted = 0;
+}
+
+static void on_target_bitrate(struct mg_str body)
+{
+    long bps = mg_json_get_long(body, "$.bps", 0);
+    if (bps < 8000 || bps > 64000) return;   /* sane bounds */
+    if (bps == g_current_bitrate) return;
+    if (g_enc) opus_encoder_ctl(g_enc, OPUS_SET_BITRATE((int)bps));
+    g_current_bitrate = (int)bps;
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "target_bitrate from reflector: %ld bps", bps);
+}
+
+static void on_tg_membership_changed(struct mg_str body)
+{
+    long old_tg = mg_json_get_long(body, "$.old_tg", 0);
+    long new_tg = mg_json_get_long(body, "$.new_tg", 0);
+    char *reason = mg_json_get_str(body, "$.reason");
+    set_error("TG changed by reflector: %ld → %ld (%s)",
+              old_tg, new_tg, reason ? reason : "?");
+    g_current_tg = (int)new_tg;
+    free(reason);
 }
 
 static void on_kicked(struct mg_str body)
@@ -725,6 +827,8 @@ static void on_ws_msg(struct mg_str body)
     else if (!strcmp(type, LINK_MSG_REFLECTOR_SHUTDOWN))on_reflector_shutdown(body);
     else if (!strcmp(type, LINK_MSG_MUTE))              on_mute(body);
     else if (!strcmp(type, LINK_MSG_UNMUTE))            on_unmute();
+    else if (!strcmp(type, LINK_MSG_TARGET_BITRATE))    on_target_bitrate(body);
+    else if (!strcmp(type, LINK_MSG_TG_MEMBERSHIP_CHANGED)) on_tg_membership_changed(body);
     else if (!strcmp(type, LINK_MSG_KICKED))            on_kicked(body);
     else if (!strcmp(type, LINK_MSG_PONG)) {
         /* Just receiving the pong is enough — refreshes our peer-alive
@@ -796,6 +900,7 @@ static void *bg_main(void *ud)
     (void)ud;
     int64_t next_send_ms     = 0;
     int64_t next_snapshot_ms = 0;
+    int64_t next_quality_ms  = 0;
 
     while (g_run) {
         mg_mgr_poll(&g_mgr, 10);
@@ -833,6 +938,11 @@ static void *bg_main(void *ud)
         if (now >= next_snapshot_ms) {
             publish_snapshot();
             next_snapshot_ms = now + 5000;
+        }
+        /* PLAN-LINK § 4.1.4: send a quality report every 10s. */
+        if (now >= next_quality_ms && g_state == LST_CONNECTED) {
+            send_quality_report();
+            next_quality_ms = now + QUALITY_REPORT_MS;
         }
 
         /* Connect / reconnect logic. Gated on g_enabled so the thread
@@ -1027,9 +1137,14 @@ static int configure_(const kerchunk_config_t *cfg)
     g_reconnect_min_ms = kerchunk_config_get_int(cfg, "link", "reconnect_min_ms", 1000);
     g_reconnect_max_ms = kerchunk_config_get_int(cfg, "link", "reconnect_max_ms", 60000);
     {
+        /* Default ON now that mongoose serves the full chain (vendor
+         * patch in mg_tls_init that walks the PEM after the leaf and
+         * adds intermediates via SSL_add1_chain_cert). Operators can
+         * still set verify_peer = off for self-signed lab certs. */
         const char *vp = kerchunk_config_get(cfg, "link", "verify_peer");
-        g_verify_peer = (vp && (!strcmp(vp, "on") || !strcmp(vp, "true") ||
-                                !strcmp(vp, "yes") || !strcmp(vp, "1"))) ? 1 : 0;
+        g_verify_peer = (vp == NULL) ? 1
+            : (!strcmp(vp, "on") || !strcmp(vp, "true") ||
+               !strcmp(vp, "yes") || !strcmp(vp, "1")) ? 1 : 0;
     }
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
