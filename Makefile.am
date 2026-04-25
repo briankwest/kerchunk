@@ -443,6 +443,8 @@ kerchunkwebadmin_DATA = \
 	web/admin/config.html \
 	web/admin/coverage.html \
 	web/admin/bulletin.html \
+	web/admin/cdr.html \
+	web/admin/link.html \
 	web/admin/ptt.html
 
 # Config examples
