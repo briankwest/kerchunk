@@ -104,8 +104,15 @@ static struct {
     int           pkts_recv_total;
     int           pkts_recv_authed;
     int           frames_decoded;
+    int           frames_plc;
+    int           frames_late;
     uint16_t      out_seq;
     uint32_t      out_ts;
+
+    /* Receive-side jitter buffer (PLAN-LINK.md § 4.4) */
+    int           jb_initialized;
+    uint16_t      jb_next_seq;
+    int64_t       jb_next_play_ms;
 
     char          fail_reason[256];
 } g;
@@ -268,6 +275,38 @@ static int audio_init(void)
     return 0;
 }
 
+/* Send an empty (header-only) RTP packet with PT=99 to register our UDP
+ * source addr at the reflector without engaging the floor — see
+ * KERCHUNK_LINK_RTP_BOOTSTRAP_PT. */
+static int audio_send_bootstrap(void)
+{
+    uint8_t rtp[KERCHUNK_LINK_RTP_MAX_PACKET];
+    rtp[0] = 0x80;
+    rtp[1] = KERCHUNK_LINK_RTP_BOOTSTRAP_PT & 0x7f;
+    uint16_t seq_n = htons(g.out_seq++);
+    memcpy(rtp + 2, &seq_n, 2);
+    uint32_t ts_n = htonl(g.out_ts);
+    memcpy(rtp + 4, &ts_n, 4);
+    uint32_t ssrc_n = htonl(g.node_ssrc);
+    memcpy(rtp + 8, &ssrc_n, 4);
+    int rtp_len = 12;
+
+    if (srtp_protect(g.srtp_out, rtp, &rtp_len) != srtp_err_status_ok)
+        return -1;
+
+    char host[64]; int port = 0;
+    if (parse_endpoint(g.rtp_endpoint, host, sizeof(host), &port) != 0)
+        return -1;
+    struct sockaddr_in dst;
+    memset(&dst, 0, sizeof(dst));
+    dst.sin_family = AF_INET;
+    dst.sin_port   = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &dst.sin_addr) != 1) return -1;
+
+    return sendto(g.udp_fd, rtp, (size_t)rtp_len, 0,
+                  (struct sockaddr *)&dst, sizeof(dst)) == rtp_len ? 0 : -1;
+}
+
 static int audio_send_one_frame(void)
 {
     /* Generate one 60ms frame of 440Hz sine (24 kHz mono int16). */
@@ -317,10 +356,27 @@ static int audio_send_one_frame(void)
     return 0;
 }
 
+/* Jitter buffer. Fixed depth covers half a second of jitter, far more
+ * than the ~100 ms target the plan asks for; in-tree mod_link will use
+ * a real adaptive buffer later. */
+#define JB_DEPTH 8
+typedef struct {
+    uint8_t  payload[400];
+    int      len;
+    uint16_t seq;
+    int      have;
+} jb_slot_t;
+static jb_slot_t g_jb_slots[JB_DEPTH];
+
+/* Newer-than? Treats the 16-bit RTP seq as cyclic. */
+static int seq_gt(uint16_t a, uint16_t b)
+{
+    return (int16_t)(a - b) > 0;
+}
+
 static void audio_drain_recv(void)
 {
     uint8_t pkt[KERCHUNK_LINK_RTP_MAX_PACKET];
-    int16_t pcm[KERCHUNK_LINK_OPUS_FRAME_SAMPLES];
     while (1) {
         ssize_t n = recv(g.udp_fd, pkt, sizeof(pkt), 0);
         if (n <= 0) {
@@ -334,9 +390,54 @@ static void audio_drain_recv(void)
             continue;
         g.pkts_recv_authed++;
         if (len <= 12) continue;
-        int dlen = opus_decode(g.opus_dec, pkt + 12, len - 12,
-                               pcm, KERCHUNK_LINK_OPUS_FRAME_SAMPLES, 0);
-        if (dlen > 0) g.frames_decoded++;
+
+        uint16_t seq;
+        memcpy(&seq, pkt + 2, 2);
+        seq = ntohs(seq);
+
+        if (!g.jb_initialized) {
+            g.jb_initialized   = 1;
+            g.jb_next_seq      = seq;       /* play this packet first */
+            /* Add 100 ms target depth before first playout — the plan's
+             * trade-off between latency and jitter tolerance. */
+            g.jb_next_play_ms  = now_ms() + 100;
+        } else if (!seq_gt(seq, (uint16_t)(g.jb_next_seq - 1))) {
+            /* Older than playout cursor → too late, drop. */
+            g.frames_late++;
+            continue;
+        }
+
+        int slot = seq % JB_DEPTH;
+        g_jb_slots[slot].seq  = seq;
+        g_jb_slots[slot].len  = len - 12;
+        g_jb_slots[slot].have = 1;
+        memcpy(g_jb_slots[slot].payload, pkt + 12, (size_t)(len - 12));
+    }
+}
+
+static void audio_playout_tick(void)
+{
+    if (!g.jb_initialized) return;
+    int64_t now = now_ms();
+    /* Pull (potentially many) frames at once if we're behind. */
+    while (now >= g.jb_next_play_ms) {
+        int slot = g.jb_next_seq % JB_DEPTH;
+        int16_t pcm[KERCHUNK_LINK_OPUS_FRAME_SAMPLES];
+        if (g_jb_slots[slot].have && g_jb_slots[slot].seq == g.jb_next_seq) {
+            int dlen = opus_decode(g.opus_dec,
+                                   g_jb_slots[slot].payload,
+                                   g_jb_slots[slot].len,
+                                   pcm, KERCHUNK_LINK_OPUS_FRAME_SAMPLES, 0);
+            if (dlen > 0) g.frames_decoded++;
+            g_jb_slots[slot].have = 0;
+        } else {
+            /* Empty / wrong seq → Opus PLC concealment frame. */
+            (void)opus_decode(g.opus_dec, NULL, 0, pcm,
+                              KERCHUNK_LINK_OPUS_FRAME_SAMPLES, 0);
+            g.frames_plc++;
+        }
+        g.jb_next_seq++;
+        g.jb_next_play_ms += KERCHUNK_LINK_OPUS_FRAME_MS;
     }
 }
 
@@ -371,12 +472,13 @@ static void on_login_ok(struct mg_connection *c)
         send_json(c, buf);
         g.state = PST_TALKING;
     } else if (g.audio_send_ms || g.audio_recv_ms) {
-        /* Stay in PINGING-but-quiet — main loop drives audio. Send one
-         * bootstrap frame so the reflector learns our UDP source addr;
-         * without it, recv-only nodes never get forwarded packets. */
+        /* Stay in PINGING-but-quiet — main loop drives audio. Send a
+         * PT=99 bootstrap so the reflector learns our UDP source addr
+         * without engaging floor logic (otherwise a recv-only node
+         * would grab the floor on its bootstrap, blocking real talkers). */
         g.state = PST_PINGING;
         g.audio_started_ms = now_ms();
-        audio_send_one_frame();
+        audio_send_bootstrap();
     } else {
         send_first_ping(c);
     }
@@ -389,6 +491,10 @@ static void on_tg_ok(struct mg_connection *c)
         snprintf(buf, sizeof(buf), "{\"type\":\"simulate_talk_start\"}");
         send_json(c, buf);
         g.state = PST_TALKING;
+    } else if (g.audio_send_ms || g.audio_recv_ms) {
+        g.state = PST_PINGING;
+        g.audio_started_ms = now_ms();
+        audio_send_bootstrap();   /* PT=99 — addr-learn, no floor grab */
     } else {
         send_first_ping(c);
     }
@@ -463,8 +569,13 @@ static void handle_message(struct mg_connection *c, const char *line, size_t len
         printf("floor_denied: current_talker=%s\n", cur ? cur : "?");
         g.floor_denied_seen = 1;
         free(cur);
-        g.state = PST_DONE;
-        c->is_draining = 1;
+        /* In control-plane talk modes the test wants us to exit on
+         * floor_denied. In audio modes it's normal feedback (we just
+         * try the next frame) — keep going. */
+        if (!g.audio_send_ms && !g.audio_recv_ms) {
+            g.state = PST_DONE;
+            c->is_draining = 1;
+        }
     } else if (strcmp(type, LINK_MSG_FLOOR_REVOKED) == 0) {
         char *code = mg_json_get_str(body, "$.code");
         printf("floor_revoked: code=%s\n", code ? code : "?");
@@ -589,9 +700,11 @@ int main(int argc, char **argv)
            time(NULL) < deadline) {
         mg_mgr_poll(&mgr, 10);
 
-        /* Audio: drain receives every loop; pace sends at 60ms. */
+        /* Audio: drain receives + run the JB playout tick every loop;
+         * pace sends at 60 ms cadence. */
         if (g.udp_fd >= 0 && g.audio_started_ms > 0) {
             audio_drain_recv();
+            audio_playout_tick();
             int64_t now = now_ms();
             if (g.audio_send_ms > 0 &&
                 now - g.audio_started_ms < g.audio_send_ms &&
@@ -641,9 +754,11 @@ int main(int argc, char **argv)
 
     if (g.state == PST_DONE) {
         if (g.audio_send_ms || g.audio_recv_ms) {
-            printf("AUDIO sent=%d recv=%d authed=%d decoded=%d OK\n",
+            printf("AUDIO sent=%d recv=%d authed=%d decoded=%d "
+                   "plc=%d late=%d OK\n",
                    g.pkts_sent, g.pkts_recv_total,
-                   g.pkts_recv_authed, g.frames_decoded);
+                   g.pkts_recv_authed, g.frames_decoded,
+                   g.frames_plc, g.frames_late);
         } else {
             printf("OK\n");
         }

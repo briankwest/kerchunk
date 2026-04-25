@@ -45,6 +45,7 @@ typedef struct {
     struct mg_connection *c;       /* current connection, NULL when offline */
     uint16_t              cur_tg;  /* talkgroup the node has joined */
     audio_node_t         *audio;   /* SRTP fan-out state, NULL until login */
+    int64_t               last_floor_denied_ms;  /* throttle ws spam */
 } node_rt_t;
 static node_rt_t g_node_rt[RCFG_MAX_NODES];
 
@@ -659,10 +660,35 @@ static void audio_drain_udp(void)
         if (sender_idx < 0) continue;   /* unauth packet, drop */
         find_sender_by_ssrc(ssrc);      /* keep helper used while we're here */
 
-        /* Fan out to every other member of sender's TG. */
+        /* Bootstrap packet (PT=99): SRTP-authenticated proof of identity
+         * + UDP source. Don't engage the floor or fan it out — purely a
+         * NAT-punch / addr-learn for receive-only nodes. */
+        if (decrypted_len >= 12 &&
+            (decrypted[1] & 0x7f) == KERCHUNK_LINK_RTP_BOOTSTRAP_PT) {
+            log_msg("node %s registered RTP source addr",
+                    g_cfg.nodes[sender_idx].id);
+            continue;
+        }
+
         uint16_t tg = g_node_rt[sender_idx].cur_tg;
         int      tg_idx = rcfg_tg_idx(&g_cfg, tg);
         if (tg_idx < 0) continue;
+
+        /* Floor enforcement: every authenticated RTP packet attempts
+         * to grant/refresh the floor for this sender. If denied (someone
+         * else is talking) the packet is dropped and floor_denied is
+         * sent at most once per 500 ms per sender so a stuck PTT can't
+         * flood the WS link. */
+        if (!floor_try_grant(tg_idx, sender_idx)) {
+            int64_t nowms = now_ms();
+            if (nowms - g_node_rt[sender_idx].last_floor_denied_ms >= 500) {
+                send_floor_denied(g_node_rt[sender_idx].c, tg_idx);
+                g_node_rt[sender_idx].last_floor_denied_ms = nowms;
+            }
+            continue;
+        }
+
+        /* Fan out to every other member of sender's TG. */
         const rcfg_tg_t *t = &g_cfg.tgs[tg_idx];
         for (int j = 0; j < t->n_members; j++) {
             int peer = t->member_node_idxs[j];

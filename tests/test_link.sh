@@ -214,5 +214,41 @@ if [ -z "$authed"  ] || [ "$authed"  -lt 20 ]; then fail "beta authed only ${aut
 if [ -z "$decoded" ] || [ "$decoded" -lt 20 ]; then fail "beta decoded only ${decoded:-?} frames"; fi
 pass "alpha→reflector→beta: sent=$sent recv=$recv authed=$authed decoded=$decoded"
 
+# ── Phase 4: floor on the audio path + dual-sender contention ─────
+echo "Phase 4 audio-plane floor enforcement:"
+
+# gamma listens on TG 101; alpha and beta both blast 1.5s of audio at
+# TG 101 simultaneously. The reflector should grant the floor to whoever
+# arrives first, deny the other (one floor_denied per 500ms is fine),
+# and gamma should receive ONE stream's worth of frames — not two.
+# Reasonable bounds: between 15 (one stream, lossy) and 35 (one stream
+# plus a couple of frames that snuck through during contention edges).
+"$PROBE" -n gamma -k "$GAMMA_PSK" -u "$URL" --audio-recv-ms 2500 -T 5 \
+    >"$WORK/c_gamma.out" 2>"$WORK/c_gamma.err" &
+RECV_PID=$!
+sleep 0.4
+"$PROBE" -n alpha -k "$ALPHA_PSK" -u "$URL" \
+    --tg 101 --audio-send-ms 1500 -T 5 \
+    >"$WORK/c_alpha.out" 2>"$WORK/c_alpha.err" &
+ALPHA_PID=$!
+"$PROBE" -n beta -k "$BETA_PSK" -u "$URL" \
+    --tg 101 --audio-send-ms 1500 -T 5 \
+    >"$WORK/c_beta.out" 2>"$WORK/c_beta.err"
+wait $ALPHA_PID || true
+wait $RECV_PID  || true
+
+g_decoded=$(awk '/^AUDIO/ {for(i=1;i<=NF;i++) if($i~/^decoded=/){split($i,a,"=");print a[2]}}' \
+    "$WORK/c_gamma.out")
+# At least one of the senders must see floor_denied during contention.
+if grep -q floor_denied "$WORK/c_alpha.out" || grep -q floor_denied "$WORK/c_beta.out"; then
+    pass "loser saw floor_denied during contention"
+else
+    fail "neither sender saw floor_denied during contention  alpha=$(tr '\n' '|' <"$WORK/c_alpha.out") beta=$(tr '\n' '|' <"$WORK/c_beta.out")"
+fi
+if [ -z "$g_decoded" ] || [ "$g_decoded" -lt 15 ] || [ "$g_decoded" -gt 35 ]; then
+    fail "gamma decoded $g_decoded frames — expected 15..35 (one stream)"
+fi
+pass "gamma got ~one stream during contention: decoded=$g_decoded"
+
 echo "test_link: all cases passed"
 exit 0

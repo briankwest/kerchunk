@@ -37,6 +37,12 @@
 /* RTP payload type for Opus (dynamic, only one codec on the wire). */
 #define KERCHUNK_LINK_RTP_PAYLOAD_TYPE 100
 
+/* Bootstrap RTP packet — empty payload, SRTP-authenticated, PT=99.
+ * Receivers send one immediately after login so the reflector learns
+ * their UDP source addr without engaging floor logic (see § 4.3).
+ * The reflector recognizes PT 99 and just stores the addr. */
+#define KERCHUNK_LINK_RTP_BOOTSTRAP_PT 99
+
 /* Opus parameters per PLAN-LINK.md § 4.2 + the 24 kHz decision. */
 #define KERCHUNK_LINK_OPUS_SAMPLE_RATE 24000
 #define KERCHUNK_LINK_OPUS_FRAME_MS    60
