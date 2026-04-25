@@ -1,9 +1,9 @@
-# FREESWITCH.md — AutoPatch Integration Plan for kerchunkd
+# FreeSWITCH AutoPatch — integration guide
 
-```
-   Status: DRAFT
-   Last updated: 2026-03-28
-```
+`mod_freeswitch` bridges a half-duplex radio to a SIP-attached
+PSTN/SIP gateway via FreeSWITCH. Operators key up, dial `*0<digits>#`,
+and FreeSWITCH places the call; phone audio comes back out the
+repeater while the user holds PTT, and `*0#` hangs up.
 
 ## Table of Contents
 
@@ -37,14 +37,6 @@
   - [11.1. Amateur Radio (Part 97)](#111-amateur-radio-part-97)
   - [11.2. GMRS (Part 95 Subpart E)](#112-gmrs-part-95-subpart-e)
   - [11.3. Safety Features](#113-safety-features)
-- [12. Implementation Phases](#12-implementation-phases)
-  - [Phase 1: ESL Client + Call Control (no audio)](#phase-1-esl-client--call-control-no-audio)
-  - [Phase 2: Audio Bridge](#phase-2-audio-bridge)
-  - [Phase 3: VAD + Polish](#phase-3-vad--polish)
-  - [Phase 4: Edge Cases](#phase-4-edge-cases)
-- [13. Difficulty Assessment](#13-difficulty-assessment)
-- [14. Estimated Size](#14-estimated-size)
-- [15. The Payoff](#15-the-payoff)
 
 ## 1. What Is This?
 
@@ -655,101 +647,3 @@ Regardless of service type:
 5. **911 blocking** — SIP trunks lack E911 location data. Play warning.
 6. **Kill switch** — Admin can terminate any call via `*0#` or CLI
 
-## 12. Implementation Phases
-
-### Phase 1: ESL Client + Call Control (no audio)
-
-- Minimal ESL TCP client in mod_freeswitch.c
-- Non-blocking connect, auth, command/response, event subscription
-- autopatch_dial() / autopatch_hangup() via ESL
-- DTMF command registration (`*0<digits>#` / `*0#`)
-- Config parsing for `[freeswitch]` section
-- Sound file prompts
-- Call state machine (IDLE -> DIALING -> RINGING -> CONNECTED -> IDLE)
-- Safety timers
-- CLI command: `freeswitch` (show status)
-
-**Testable without audio.** Mock infrastructure covers call control.
-
-### Phase 2: Audio Bridge
-
-- UDP socket pair for UnicastStream
-- `uuid_unicast` setup after CHANNEL_ANSWER
-- Radio-to-phone via audio tap + UDP sendto
-- Phone-to-radio via UDP recvfrom + jitter buffer + queue_audio_buffer
-- COR gating (mute phone audio while radio user is keyed)
-
-**First end-to-end test.** Make a call and talk bidirectionally.
-
-### Phase 3: VAD + Polish
-
-- Energy-based VAD with hold timer and attack counter
-- Inactivity timeout
-- Dial whitelist enforcement
-- Access control (admin_only)
-- Activity logging
-- 911 blocking with warning
-- Integration tests
-
-### Phase 4: Edge Cases
-
-- Audio tap thread safety (tap in audio thread, UDP send is safe)
-- ESL reconnection on FreeSWITCH restart
-- Concurrent events (COR during phone audio, DTMF during call)
-- Queue interaction (CW ID fires during active call)
-- Emergency mode interaction (kill autopatch during emergency?)
-- Stress test long calls, rapid dial/hangup
-
-## 13. Difficulty Assessment
-
-### Straightforward
-
-- **DTMF command registration.** One line in mod_dtmfcmd, one subscription.
-- **Audio tap.** mod_recorder proves the mechanism. Just add sendto().
-- **Call state machine.** Finite states, well-defined transitions, easy to mock-test.
-- **Config and CLI.** Copy existing module pattern.
-
-### Moderate
-
-- **ESL client.** Simple protocol but robust non-blocking TCP with reconnection,
-  partial reads, and multi-line response parsing. ~400 lines of careful C.
-- **VAD tuning.** Empirical. Too sensitive = noise triggers TX. Too insensitive =
-  speech gets clipped. Hold timer helps but real calls needed for tuning.
-- **Jitter buffer.** Simple ring buffer but initial fill level matters. Start
-  with 80ms.
-
-### Tricky
-
-- **Thread safety.** Audio tap runs in audio thread (5ms), ESL/UDP in main thread
-  (20ms). The sendto() in the tap doesn't share state. `g_call_active` and
-  `g_cor_active` are read by the tap and written by main — simple int flags,
-  worst case is one extra frame sent/not-sent. Use volatile to be proper.
-- **Queue PTT interaction.** mod_freeswitch and the audio thread both manage
-  independent PTT refs (refcounted). They coexist correctly but ordering
-  matters during CW ID playback. Verify in testing.
-- **UnicastStream quirks.** If unreliable, fallback is direct RTP with minimal
-  framing (~200 extra lines). PCMU codec for compatibility.
-
-## 14. Estimated Size
-
-| Component | Lines | Difficulty |
-|-----------|-------|------------|
-| ESL client (non-blocking TCP) | ~400 | Moderate |
-| Call state machine | ~200 | Easy |
-| DTMF integration | ~30 | Easy |
-| UDP audio send/receive | ~150 | Easy |
-| Jitter buffer | ~100 | Easy |
-| VAD engine | ~80 | Moderate (tuning) |
-| COR gating + PTT management | ~100 | Easy |
-| Config + CLI | ~120 | Easy |
-| Sound file prompts | ~80 | Easy |
-| Safety features + logging | ~150 | Easy |
-| **Total mod_freeswitch.c** | **~1400** | **Moderate** |
-
-Plus ~300 lines of integration tests and a few lines in mod_dtmfcmd.c.
-
-## 15. The Payoff
-
-Dial `*05551234567#` on your radio, hear it ring, talk to someone on the
-phone through your repeater, and hang up with `*0#`. Autopatch, alive and
-well in 2026.
