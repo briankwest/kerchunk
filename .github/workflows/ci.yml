@@ -21,6 +21,7 @@ jobs:
             portaudio19-dev libcurl4-openssl-dev \
             libssl-dev librtlsdr-dev libasound2-dev \
             libcjson-dev libspeex-dev \
+            libopus-dev libsrtp2-dev \
             libfst-dev g++
 
       # All sibling libs track main here so kerchunk CI catches any
