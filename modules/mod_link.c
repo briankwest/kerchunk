@@ -1027,10 +1027,13 @@ static void *bg_main(void *ud)
         }
 
         /* Periodic snapshot — keeps live counters fresh on the SSE bus
-         * even when the state machine is quiet. */
+         * even when the state machine is quiet. 1 s matches reflectd's
+         * dashboard cadence; the publish is just a snprintf + sse_publish
+         * (single string copy into per-client ringbuffers), well under
+         * a millisecond on the Pi. */
         if (now >= next_snapshot_ms) {
             publish_snapshot();
-            next_snapshot_ms = now + 5000;
+            next_snapshot_ms = now + 1000;
         }
         /* LINK-PROTOCOL.md § 4.1.4: send a quality report every 10s. */
         if (now >= next_quality_ms && g_state == LST_CONNECTED) {
