@@ -44,6 +44,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <netdb.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
@@ -61,8 +62,11 @@
 
 static kerchunk_core_t *g_core;
 
-/* Config (read in configure(); never written from bg thread). */
-static int  g_enabled;
+/* Config (read in configure(); never written from bg thread).
+ * g_enabled is volatile because the bg thread polls it every loop and
+ * configure() writes it from the main thread — without volatile a
+ * release build can hoist the read out of the loop. */
+static volatile int  g_enabled;
 static char g_node_id[64];
 static char g_reflector_ws[256];
 static uint8_t g_psk[KERCHUNK_LINK_PSK_BYTES];
@@ -74,6 +78,7 @@ static int  g_opus_bitrate;
 static int  g_opus_loss_perc;
 static int  g_reconnect_min_ms;
 static int  g_reconnect_max_ms;
+static int  g_verify_peer;
 
 /* Background thread + lifecycle. */
 static pthread_t        g_thread;
@@ -287,7 +292,7 @@ static int session_setup(struct mg_str body)
     g_refl_ssrc  = (uint32_t)rs;
     g_current_tg = (int)tg;
 
-    /* Parse rtp_endpoint = "host:port". */
+    /* Parse rtp_endpoint = "host:port". host can be IPv4 literal or DNS. */
     char *colon = strrchr(ep, ':');
     if (!colon) { set_error("rtp_endpoint not host:port"); goto out; }
     *colon = '\0';
@@ -295,9 +300,18 @@ static int session_setup(struct mg_str body)
     memset(&g_rtp_dst, 0, sizeof(g_rtp_dst));
     g_rtp_dst.sin_family = AF_INET;
     g_rtp_dst.sin_port   = htons((uint16_t)port);
+
     if (inet_pton(AF_INET, ep, &g_rtp_dst.sin_addr) != 1) {
-        set_error("rtp_endpoint host '%s' not IPv4 literal", ep);
-        goto out;
+        struct addrinfo hints = {0}, *res = NULL;
+        hints.ai_family   = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        if (getaddrinfo(ep, NULL, &hints, &res) != 0 || !res) {
+            set_error("rtp_endpoint host '%s' did not resolve", ep);
+            if (res) freeaddrinfo(res);
+            goto out;
+        }
+        g_rtp_dst.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
+        freeaddrinfo(res);
     }
 
     /* Combined master = key||salt for libsrtp. */
@@ -616,6 +630,15 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
 {
     if (ev == MG_EV_OPEN) {
         c->is_hexdumping = 0;
+    } else if (ev == MG_EV_CONNECT && c->is_tls) {
+        /* Mongoose marks the conn as TLS from the wss:// URL but does not
+         * init TLS itself — we have to do it here. */
+        struct mg_str host = mg_url_host(g_reflector_ws);
+        struct mg_tls_opts opts = {
+            .name              = host,
+            .skip_verification = g_verify_peer ? 0 : 1,
+        };
+        mg_tls_init(c, &opts);
     } else if (ev == MG_EV_WS_OPEN) {
         set_state(LST_AWAIT_HELLO);
     } else if (ev == MG_EV_WS_MSG) {
@@ -654,8 +677,10 @@ static void *bg_main(void *ud)
 
         int64_t now = now_ms();
 
-        /* Connect / reconnect logic. */
-        if (!g_ws && g_state != LST_STOPPED) {
+        /* Connect / reconnect logic. Gated on g_enabled so the thread
+         * sits idle until configure() supplies a usable [link] section
+         * (and stays idle when [link] enabled = off). */
+        if (g_enabled && !g_ws && g_state != LST_STOPPED) {
             if (now >= g_next_reconnect_ms) {
                 set_state(LST_CONNECTING);
                 g_ws = mg_ws_connect(&g_mgr, g_reflector_ws, evh, NULL, NULL);
@@ -715,7 +740,11 @@ static void apply_defaults(void)
 static int configure_(const kerchunk_config_t *cfg)
 {
     apply_defaults();
-    g_enabled = kerchunk_config_get_int(cfg, "link", "enabled", 0);
+    /* Match the project convention: enabled = on / off (other strings
+     * accepted as on for tolerance, but the documented form is `on`). */
+    const char *en = kerchunk_config_get(cfg, "link", "enabled");
+    g_enabled = en && (!strcmp(en, "on")  || !strcmp(en, "true") ||
+                       !strcmp(en, "yes") || !strcmp(en, "1"));
     if (!g_enabled) {
         set_state(LST_DISABLED);
         return 0;
@@ -747,7 +776,15 @@ static int configure_(const kerchunk_config_t *cfg)
     g_opus_loss_perc = kerchunk_config_get_int(cfg, "link", "opus_loss_perc", 10);
     g_reconnect_min_ms = kerchunk_config_get_int(cfg, "link", "reconnect_min_ms", 1000);
     g_reconnect_max_ms = kerchunk_config_get_int(cfg, "link", "reconnect_max_ms", 60000);
+    {
+        const char *vp = kerchunk_config_get(cfg, "link", "verify_peer");
+        g_verify_peer = (vp && (!strcmp(vp, "on") || !strcmp(vp, "true") ||
+                                !strcmp(vp, "yes") || !strcmp(vp, "1"))) ? 1 : 0;
+    }
 
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "configured: node=%s reflector=%s tg=%d bitrate=%d verify_peer=%d",
+                g_node_id, g_reflector_ws, g_default_tg, g_opus_bitrate, g_verify_peer);
     return 0;
 }
 
