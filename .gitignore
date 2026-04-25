@@ -88,3 +88,5 @@ sounds/cache/
 *.buildinfo
 *.changes
 .dirstamp
+debian/*.debhelper
+debian/kerchunk-reflectd/
