@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>kerchunk-reflectd — recordings</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px;
+       max-width: 1400px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+header .sub { color: var(--dim); font-size: 14px; }
+header nav { margin-left: auto; display: flex; gap: 6px; }
+header nav .btn { text-decoration: none; padding: 4px 10px;
+                  border: 1px solid var(--border); border-radius: 4px;
+                  color: var(--text); font-size: 12px; }
+header nav .btn:hover  { border-color: var(--accent); color: var(--accent); }
+header nav .btn.active { border-color: var(--accent); color: var(--accent); }
+.card { background: var(--card); border: 1px solid var(--border);
+        border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase;
+           letter-spacing: 1px; margin-bottom: 10px; }
+.btn { padding: 4px 10px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 4px; cursor: pointer; font-size: 11px;
+       font-family: inherit; text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+.toolbar input[type=date] { padding: 5px 8px; background: var(--bg); color: var(--text);
+                            border: 1px solid var(--border); border-radius: 4px; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--dim); font-size: 11px; text-transform: uppercase;
+     letter-spacing: 1px; font-weight: 600; }
+td.dur, td.tg, td.bytes { font-variant-numeric: tabular-nums; }
+audio { vertical-align: middle; height: 28px; }
+.empty { color: var(--dim); font-style: italic; padding: 12px; }
+.status { font-size: 12px; color: var(--dim); margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>kerchunk-reflectd</h1>
+  <span class="sub">Recordings</span>
+  <nav>
+    <a href="/admin/" class="btn">Roster</a>
+    <a href="/admin/recordings.html" class="btn active">Recordings</a>
+  </nav>
+</header>
+
+<div class="card">
+  <div class="toolbar">
+    <label for="date" style="font-size:12px;color:var(--dim)">Date:</label>
+    <select id="date" style="padding:5px 8px;background:var(--bg);color:var(--text);
+                              border:1px solid var(--border);border-radius:4px;font-size:13px"></select>
+    <button class="btn" onclick="reload()">Refresh</button>
+    <span id="count" style="margin-left:auto;color:var(--dim);font-size:12px"></span>
+  </div>
+  <table>
+    <thead><tr>
+      <th>Time</th><th>TG</th><th>Name</th><th>Talker</th>
+      <th class="dur">Dur</th><th>Play</th><th></th>
+    </tr></thead>
+    <tbody id="rows"><tr><td colspan="7" class="empty">—</td></tr></tbody>
+  </table>
+</div>
+
+<div class="status" id="status"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+function setStatus(m, k) { $('status').className = 'status ' + (k||''); $('status').textContent = m; }
+
+async function api(path) {
+    const res = await fetch(path, { credentials: 'same-origin' });
+    if (!res.ok) { setStatus(res.statusText, 'err'); return null; }
+    return res.json();
+}
+
+function fmtDur(s) {
+    const m = Math.floor(s / 60), sec = (s % 60).toFixed(1);
+    return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+async function reload() {
+    const date = $('date').value;
+    if (!date) { $('rows').innerHTML = '<tr><td colspan="7" class="empty">no date</td></tr>'; return; }
+    const j = await api('/api/recordings?date=' + encodeURIComponent(date));
+    if (!j) return;
+    if (!j.records || j.records.length === 0) {
+        $('rows').innerHTML = '<tr><td colspan="7" class="empty">no recordings on this date</td></tr>';
+        $('count').textContent = '0 recordings';
+        return;
+    }
+    $('count').textContent = j.records.length + ' recordings';
+    $('rows').innerHTML = j.records
+        .slice().reverse()         // newest first
+        .map(r => `
+        <tr>
+          <td>${r.time}</td>
+          <td class="tg">${r.tg}</td>
+          <td>${r.tg_name || ''}</td>
+          <td>${r.node_id || ''}</td>
+          <td class="dur">${fmtDur(r.duration_s)}</td>
+          <td><audio controls preload="none"
+                     src="/api/recording?path=${encodeURIComponent(r.recording)}"></audio></td>
+          <td><a class="btn" download
+                 href="/api/recording?path=${encodeURIComponent(r.recording)}">↓</a></td>
+        </tr>`).join('');
+    setStatus('refreshed ' + new Date().toLocaleTimeString(), 'ok');
+}
+
+async function init() {
+    const j = await api('/api/recordings');
+    if (!j) return;
+    const days = j.days || [];
+    days.sort().reverse();         // newest first
+    if (days.length === 0) {
+        $('date').innerHTML = '<option>(none)</option>';
+        return;
+    }
+    $('date').innerHTML = days.map(d => `<option value="${d}">${d}</option>`).join('');
+    $('date').addEventListener('change', reload);
+    reload();
+}
+
+init();
+</script>
+</body>
+</html>

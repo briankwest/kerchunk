@@ -25,6 +25,10 @@ case "$1" in
         # Runtime directories
         install -d -o kerchunk-reflectd -g kerchunk-reflectd -m 0755 \
                 /var/log/kerchunk-reflectd
+        install -d -o kerchunk-reflectd -g kerchunk-reflectd -m 0755 \
+                /var/lib/kerchunk-reflectd
+        install -d -o kerchunk-reflectd -g kerchunk-reflectd -m 0755 \
+                /var/lib/kerchunk-reflectd/recordings
         install -d -o root -g kerchunk-reflectd -m 0750 \
                 /etc/kerchunk-reflectd
 

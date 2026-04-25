@@ -228,6 +228,17 @@ static int load_globals(rcfg_t *out, const kerchunk_config_t *cfg)
     out->max_reconnects_per_node_per_min = kerchunk_config_get_int(
         cfg, "reflector", "max_reconnects_per_node_per_min", 6);
 
+    {
+        const char *re = kerchunk_config_get(cfg, "reflector", "recording_enabled");
+        out->recording_enabled = (re && (!strcmp(re, "on") || !strcmp(re, "true") ||
+                                         !strcmp(re, "yes") || !strcmp(re, "1")));
+    }
+    const char *rd = kerchunk_config_get(cfg, "reflector", "recording_dir");
+    snprintf(out->recording_dir, sizeof(out->recording_dir), "%s",
+             rd ? rd : "/var/lib/kerchunk-reflectd/recordings");
+    out->recording_max_age_days = kerchunk_config_get_int(
+        cfg, "reflector", "recording_max_age_days", 30);
+
     if ((out->tls_cert[0] && !out->tls_key[0]) ||
         (!out->tls_cert[0] && out->tls_key[0])) {
         fprintf(stderr,

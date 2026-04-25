@@ -3,20 +3,24 @@
 ;
 ; Copy to /etc/kerchunk-reflectd/reflectd.conf and edit. Then enable:
 ;   systemctl enable --now kerchunk-reflectd
+;
+; All keys with their defaults are shown; uncomment + change to override.
 ; ============================================================================
 
 [reflector]
+
+; ── Listener ────────────────────────────────────────────────────────────────
 ; ws://  for plain WebSocket (lab / behind reverse proxy)
 ; wss:// for TLS WebSocket — requires tls_cert + tls_key below
 listen_url = wss://0.0.0.0:8443/link
 
-; PEM bundle. Mongoose's TLS only loads the leaf cert from a multi-cert
-; PEM, so for Let's Encrypt you may want to use the leaf cert.pem with
-; clients that have the LE intermediate cached, or accept verify_peer=off
-; on the client side.
+; PEM bundle. mongoose now serves the full chain from a multi-cert PEM
+; (leaf + intermediates). Let's Encrypt's fullchain.pem works directly,
+; and clients can run with verify_peer=on.
 tls_cert = /etc/letsencrypt/live/example.com/fullchain.pem
 tls_key  = /etc/letsencrypt/live/example.com/privkey.pem
 
+; ── Audio plane (UDP/SRTP) ──────────────────────────────────────────────────
 ; UDP port for SRTP audio — must be reachable from every node, including
 ; through any NAT in front of nodes. Forward this port at your router.
 rtp_port           = 7878
@@ -24,26 +28,41 @@ rtp_port           = 7878
 ; public hostname. Nodes will resolve and sendto this address.
 rtp_advertise_host = reflector.example.com
 
+; ── Admin dashboard + API ───────────────────────────────────────────────────
 ; HTTP Basic credentials for the admin dashboard (/admin/) and JSON API
-; (/api/state, /api/admin/*). Both must be set or the API/dashboard
-; return 401 unconditionally. Generate a strong password — the browser
-; caches it per-origin after the first 401 prompt.
+; (/api/state, /api/admin/*, /api/recordings, /api/recording). Both must
+; be set or the API/dashboard return 401 unconditionally. Generate a
+; strong password — the browser caches it per-origin after the first 401.
 admin_user     = admin
 admin_password =
 
-; Reject clients older than this. Lex-compared with a leading
-; "kerchunk " prefix optionally stripped.  Empty = no minimum.
-min_client_version =
+; Where the static dashboard files live. Default ships with the package.
+;dashboard_dir = /usr/share/kerchunk-reflectd/web
 
-; Control-plane health
+; ── Client compatibility ────────────────────────────────────────────────────
+; Reject clients older than this. Lex-compared with a leading
+; "kerchunk " prefix optionally stripped. Empty = no minimum.
+;min_client_version =
+
+; ── Control-plane health ────────────────────────────────────────────────────
 keepalive_s = 15        ; ping every N s if no other traffic
 hangtime_ms = 1500      ; floor lease — if no RTP for this long, lease ends
 
-; Server-driven mute / kick
+; ── Server-driven mute / kick ───────────────────────────────────────────────
 mute_threshold_pct = 8                  ; if a node reports >this loss, mute
-mute_window_s      = 30
-auth_fail_kick     = 200                ; SRTP auth fails before kick
+mute_window_s      = 30                 ; rolling window for the report
+auth_fail_kick     = 200                ; SRTP auth fails before kick (per 30s)
 max_reconnects_per_node_per_min = 6     ; storm protection
+
+; ── Recordings + CDR ────────────────────────────────────────────────────────
+; recording_enabled = on  → reflector decodes each cleartext Opus packet
+;                           and writes a 24kHz mono WAV per floor session.
+;                           Also appends a CSV row per session.
+; Files: <recording_dir>/YYYY-MM-DD/TG<n>_HHMMSS_<node>.wav
+;        <recording_dir>/YYYY-MM-DD.csv
+recording_enabled       = off
+recording_dir           = /var/lib/kerchunk-reflectd/recordings
+recording_max_age_days  = 30        ; auto-prune is a TODO; this is informational
 
 ; ----------------------------------------------------------------------------
 ; Nodes — one [node.<id>] section per repeater allowed to connect.
@@ -69,7 +88,7 @@ default_tg        = 4123
 ; ----------------------------------------------------------------------------
 ; Talkgroups — one [talkgroup.<num>] section per TG.
 ;
-;   name:  display label (also returned in tg_ok)
+;   name:  display label (also returned in tg_ok / login_ok)
 ;   nodes: comma-separated node ids that may participate. Both this list
 ;          AND each node's allowed_tgs must agree.
 ; ----------------------------------------------------------------------------

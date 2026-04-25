@@ -55,6 +55,10 @@ typedef struct {
     int      auth_fail_kick;
     int      max_reconnects_per_node_per_min;
 
+    int      recording_enabled;
+    char     recording_dir[256];
+    int      recording_max_age_days;
+
     rcfg_node_t nodes[RCFG_MAX_NODES];
     int         n_nodes;
     rcfg_tg_t   tgs[RCFG_MAX_TGS];

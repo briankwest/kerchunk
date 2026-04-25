@@ -604,6 +604,12 @@ static void handle_message(struct mg_connection *c, const char *line, size_t len
 
 static void evh(struct mg_connection *c, int ev, void *ev_data)
 {
+    if (ev == MG_EV_CONNECT && c->is_tls) {
+        /* Lab probe — never verify, just establish TLS. */
+        struct mg_tls_opts opts = { .skip_verification = 1 };
+        mg_tls_init(c, &opts);
+        return;
+    }
     if (ev == MG_EV_CONNECT) {
         /* For wss://, mongoose handles TLS; we still need to wait for
          * MG_EV_WS_OPEN before sending. */

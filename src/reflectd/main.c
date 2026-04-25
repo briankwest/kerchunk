@@ -12,9 +12,11 @@
 
 #include <arpa/inet.h>
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -33,6 +35,7 @@
 #include "../../include/kerchunk_link_proto.h"
 #include "audio.h"
 #include "config.h"
+#include "recordings.h"
 
 /* ── Globals ───────────────────────────────────────────────────────── */
 
@@ -82,8 +85,9 @@ static int g_udp_fd = -1;
 
 /* Per-talkgroup runtime state (parallel to g_cfg.tgs[]). */
 typedef struct {
-    int     talker_node_idx;     /* -1 if idle */
-    int64_t lease_expires_ms;    /* monotonic ms; 0 if idle */
+    int            talker_node_idx;  /* -1 if idle */
+    int64_t        lease_expires_ms; /* monotonic ms; 0 if idle */
+    rec_session_t *rec;              /* in-flight recording, NULL if none */
 } tg_rt_t;
 static tg_rt_t g_tg_rt[RCFG_MAX_TGS];
 
@@ -258,8 +262,16 @@ static int floor_try_grant(int tg_idx, int node_idx)
     int holder_changed = (t->talker_node_idx != node_idx);
     t->talker_node_idx  = node_idx;
     t->lease_expires_ms = now + g_cfg.hangtime_ms;
-    if (was_idle || holder_changed)
+    if (was_idle || holder_changed) {
         broadcast_talker(tg_idx, node_idx, -1);
+        /* New talker → new recording. If a previous holder was still
+         * recording (holder_changed without going IDLE first), close
+         * its session before opening the next one. */
+        if (t->rec) { recordings_end(t->rec); t->rec = NULL; }
+        t->rec = recordings_start(g_cfg.tgs[tg_idx].number,
+                                   g_cfg.tgs[tg_idx].name,
+                                   g_cfg.nodes[node_idx].id);
+    }
     return 1;
 }
 
@@ -270,6 +282,9 @@ static void floor_release(int tg_idx, const char *reason_for_revoked)
     int holder = t->talker_node_idx;
     t->talker_node_idx  = -1;
     t->lease_expires_ms = 0;
+    /* Close the recording for this floor session — writes the WAV header
+     * fixups and appends the CDR row. */
+    if (t->rec) { recordings_end(t->rec); t->rec = NULL; }
     /* Tell everyone the floor is idle. */
     broadcast_talker(tg_idx, -1, -1);
     /* Tell the previous holder why, if requested. */
@@ -864,6 +879,157 @@ static void admin_release_floor(struct mg_connection *c,
                   "{\"ok\":true,\"tg\":%ld}", tg);
 }
 
+/* GET /api/recordings — list per-day CSVs that exist on disk, OR with
+ * ?date=YYYY-MM-DD return that day's CDR rows as a JSON array. */
+static int valid_date_str(const char *s)
+{
+    if (!s || strlen(s) != 10) return 0;
+    for (int i = 0; i < 10; i++) {
+        if (i == 4 || i == 7) { if (s[i] != '-') return 0; }
+        else                  { if (s[i] < '0' || s[i] > '9') return 0; }
+    }
+    return 1;
+}
+
+static void api_recordings(struct mg_connection *c, struct mg_http_message *hm)
+{
+    char date[16] = "";
+    int  has_date = mg_http_get_var(&hm->query, "date", date, sizeof(date)) > 0;
+
+    if (!has_date) {
+        /* List days that have a CSV. */
+        DIR *d = opendir(recordings_dir());
+        if (!d) {
+            mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                          "{\"days\":[]}");
+            return;
+        }
+        char body[8192];
+        int  off = snprintf(body, sizeof(body), "{\"days\":[");
+        struct dirent *e;
+        int first = 1;
+        while ((e = readdir(d)) != NULL) {
+            size_t n = strlen(e->d_name);
+            if (n != 14 || strcmp(e->d_name + 10, ".csv") != 0) continue;
+            char ymd[11]; memcpy(ymd, e->d_name, 10); ymd[10] = '\0';
+            if (!valid_date_str(ymd)) continue;
+            off += snprintf(body + off, sizeof(body) - off,
+                            "%s\"%s\"", first ? "" : ",", ymd);
+            first = 0;
+        }
+        closedir(d);
+        snprintf(body + off, sizeof(body) - off, "]}");
+        mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", body);
+        return;
+    }
+
+    if (!valid_date_str(date)) {
+        mg_http_reply(c, 400, "", "{\"error\":\"bad date\"}");
+        return;
+    }
+
+    char path[300];
+    snprintf(path, sizeof(path), "%s/%s.csv", recordings_dir(), date);
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                      "{\"date\":\"%s\",\"records\":[]}", date);
+        return;
+    }
+    char *body = malloc(8192);
+    size_t cap = 8192;
+    if (!body) { fclose(fp); mg_http_reply(c, 500, "", "{\"error\":\"OOM\"}"); return; }
+    size_t blen = (size_t)snprintf(body, cap,
+        "{\"date\":\"%s\",\"records\":[", date);
+
+    char line[1024];
+    int  first = 1, header_skipped = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        if (!header_skipped) { header_skipped = 1; continue; }
+        /* Each row: ts,date,time,tg,tg_name,node_id,duration,pcm_bytes,recording */
+        char *p = line, *cols[10] = {0};
+        int n = 0;
+        while (*p && n < 9) {
+            cols[n++] = p;
+            char *comma = strchr(p, ',');
+            if (!comma) break;
+            *comma = '\0';
+            p = comma + 1;
+        }
+        if (n >= 9) {
+            cols[8][strcspn(cols[8], "\r\n")] = '\0';
+            if (blen + 512 >= cap) {
+                cap *= 2;
+                char *nb = realloc(body, cap);
+                if (!nb) break;
+                body = nb;
+            }
+            /* tg_name / node_id may be CSV-quoted (commas/quotes inside)
+             * or bare. Strip quotes if present and emit as JSON strings.
+             * For tg_name="Local" the CSV row has bare Local; for a name
+             * with a comma it'd be "PNW, OR" and we'd need to undo the
+             * RFC 4180 quoting. Lab-grade — replace with a real CSV
+             * parser if names get exotic. */
+            char *tg_name  = cols[4], *node_id = cols[5];
+            size_t tnl = strlen(tg_name);
+            if (tnl >= 2 && tg_name[0] == '"' && tg_name[tnl-1] == '"') {
+                tg_name[tnl-1] = '\0'; tg_name++;
+            }
+            size_t nil = strlen(node_id);
+            if (nil >= 2 && node_id[0] == '"' && node_id[nil-1] == '"') {
+                node_id[nil-1] = '\0'; node_id++;
+            }
+            blen += (size_t)snprintf(body + blen, cap - blen,
+                "%s{\"ts\":%s,\"date\":\"%s\",\"time\":\"%s\",\"tg\":%s,"
+                "\"tg_name\":\"%s\",\"node_id\":\"%s\",\"duration_s\":%s,"
+                "\"pcm_bytes\":%s,\"recording\":\"%s\"}",
+                first ? "" : ",", cols[0], cols[1], cols[2], cols[3],
+                tg_name, node_id, cols[6], cols[7], cols[8]);
+            first = 0;
+        }
+    }
+    fclose(fp);
+    blen += (size_t)snprintf(body + blen, cap - blen, "]}");
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", body);
+    free(body);
+}
+
+/* GET /api/recording?path=YYYY-MM-DD/TGn_HHMMSS_node.wav — stream WAV. */
+static void api_recording(struct mg_connection *c, struct mg_http_message *hm)
+{
+    char rel[256];
+    if (mg_http_get_var(&hm->query, "path", rel, sizeof(rel)) <= 0) {
+        mg_http_reply(c, 400, "", "{\"error\":\"missing path\"}");
+        return;
+    }
+    /* Realpath sandbox under recording_dir. */
+    char dir_real[PATH_MAX];
+    if (!realpath(recordings_dir(), dir_real)) {
+        mg_http_reply(c, 500, "", "{\"error\":\"recordings_dir unresolved\"}");
+        return;
+    }
+    char cand[PATH_MAX];
+    snprintf(cand, sizeof(cand), "%s/%s", dir_real, rel);
+    char real[PATH_MAX];
+    if (!realpath(cand, real)) {
+        mg_http_reply(c, 404, "", "{\"error\":\"not found\"}");
+        return;
+    }
+    size_t dl = strlen(dir_real);
+    if (strncmp(real, dir_real, dl) != 0 || real[dl] != '/') {
+        mg_http_reply(c, 403, "", "{\"error\":\"path outside recordings_dir\"}");
+        return;
+    }
+    /* .wav extension only. */
+    size_t rl = strlen(real);
+    if (rl < 4 || strcmp(real + rl - 4, ".wav") != 0) {
+        mg_http_reply(c, 400, "", "{\"error\":\".wav only\"}");
+        return;
+    }
+    struct mg_http_serve_opts so = { .root_dir = "/" };
+    mg_http_serve_file(c, hm, real, &so);
+}
+
 /* SIGHUP handler — config reload. We diff old vs new TG memberships
  * and emit tg_membership_changed for any node that moved. */
 static volatile sig_atomic_t g_reload = 0;
@@ -884,6 +1050,16 @@ static void route_admin(struct mg_connection *c, struct mg_http_message *hm)
     if (mg_match(hm->uri, mg_str("/api/state"), NULL) &&
         mg_match(hm->method, mg_str("GET"), NULL)) {
         send_state_json(c);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/recordings"), NULL) &&
+        mg_match(hm->method, mg_str("GET"), NULL)) {
+        api_recordings(c, hm);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/recording"), NULL) &&
+        mg_match(hm->method, mg_str("GET"), NULL)) {
+        api_recording(c, hm);
         return;
     }
     if (!mg_match(hm->method, mg_str("POST"), NULL)) {
@@ -1175,6 +1351,21 @@ static void audio_drain_udp(void)
          * Sender's WS stays open so they can see the mute state. */
         if (g_node_rt[sender_idx].muted) continue;
 
+        /* Feed the cleartext Opus payload into the in-flight recording
+         * for this TG (if any). decrypted is RTP+payload — payload starts
+         * at offset 12 (RTP header). */
+        {
+            int tgi_for_rec = rcfg_tg_idx(&g_cfg, g_node_rt[sender_idx].cur_tg);
+            if (tgi_for_rec >= 0 && g_tg_rt[tgi_for_rec].rec &&
+                decrypted_len > 12) {
+                /* Engage the floor first (below) so a recording exists
+                 * to append to — but we need the audio for THIS packet
+                 * recorded too. The floor_try_grant call below will
+                 * (re-)create the rec session if this is the first
+                 * packet of a new talker. We re-check after that. */
+            }
+        }
+
         /* Bootstrap packet (PT=99): SRTP-authenticated proof of identity
          * + UDP source. Don't engage the floor or fan it out — purely a
          * NAT-punch / addr-learn for receive-only nodes. */
@@ -1202,6 +1393,13 @@ static void audio_drain_udp(void)
             }
             continue;
         }
+
+        /* Now that the floor is granted, the rec session for this TG
+         * (if recording is enabled) exists. Append this packet's Opus
+         * payload to it before fan-out. */
+        if (g_tg_rt[tg_idx].rec && decrypted_len > 12)
+            recordings_append(g_tg_rt[tg_idx].rec,
+                              decrypted + 12, decrypted_len - 12);
 
         /* Fan out to every other member of sender's TG. */
         const rcfg_tg_t *t = &g_cfg.tgs[tg_idx];
@@ -1322,6 +1520,12 @@ int main(int argc, char **argv)
         mg_mgr_free(&mgr);
         return 1;
     }
+    if (recordings_global_init(g_cfg.recording_dir,
+                               g_cfg.recording_enabled,
+                               g_cfg.recording_max_age_days) < 0) {
+        mg_mgr_free(&mgr);
+        return 1;
+    }
     g_udp_fd = udp_listen(g_cfg.rtp_port);
     if (g_udp_fd < 0) {
         fprintf(stderr, "reflectd: UDP bind on port %d failed: %s\n",
@@ -1342,6 +1546,14 @@ int main(int argc, char **argv)
         keepalive_tick();
         if (g_reload) { g_reload = 0; do_reload(); }
     }
+
+    /* Close any in-flight recordings before tearing down. */
+    for (int i = 0; i < g_cfg.n_tgs; i++)
+        if (g_tg_rt[i].rec) {
+            recordings_end(g_tg_rt[i].rec);
+            g_tg_rt[i].rec = NULL;
+        }
+    recordings_global_shutdown();
 
     log_msg("shutting down — sending reflector_shutdown to clients");
     broadcast_shutdown(15);

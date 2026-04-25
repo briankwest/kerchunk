@@ -86,6 +86,7 @@ kerchunk_diag_LDADD   = $(PORTAUDIO_LIBS) -lm
 kerchunk_reflectd_SOURCES = src/reflectd/main.c \
 			    src/reflectd/config.c \
 			    src/reflectd/audio.c \
+			    src/reflectd/recordings.c \
 			    src/kerchunk_config.c \
 			    vendor/mongoose.c
 kerchunk_reflectd_CFLAGS  = -std=c11 -Wall -O2 \
@@ -94,8 +95,9 @@ kerchunk_reflectd_CFLAGS  = -std=c11 -Wall -O2 \
 			    -DMG_TLS=MG_TLS_OPENSSL \
 			    -DMG_ENABLE_LINES=0 \
 			    -Wno-pedantic \
-			    $(OPENSSL_CFLAGS) $(SRTP2_CFLAGS)
-kerchunk_reflectd_LDADD   = $(OPENSSL_LIBS) $(SRTP2_LIBS) $(PTHREAD_LIBS)
+			    $(OPENSSL_CFLAGS) $(SRTP2_CFLAGS) $(OPUS_CFLAGS)
+kerchunk_reflectd_LDADD   = $(OPENSSL_LIBS) $(SRTP2_LIBS) $(OPUS_LIBS) \
+			    $(PTHREAD_LIBS)
 
 kerchunk_link_probe_SOURCES = src/reflectd/link_probe.c vendor/mongoose.c
 kerchunk_link_probe_CFLAGS  = -std=c11 -Wall -O2 \
@@ -455,7 +457,7 @@ reflectdconfdir = $(sysconfdir)/kerchunk-reflectd
 reflectdconf_DATA = reflectd.conf.example
 
 reflectdwebdir = $(datadir)/kerchunk-reflectd/web
-reflectdweb_DATA = web/reflectd/index.html
+reflectdweb_DATA = web/reflectd/index.html web/reflectd/recordings.html
 
 # Systemd service
 systemddir = $(prefix)/lib/systemd/system

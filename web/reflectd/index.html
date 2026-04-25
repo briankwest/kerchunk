@@ -47,7 +47,11 @@ th { color: var(--dim); font-size: 11px; text-transform: uppercase;
 <header>
   <h1>kerchunk-reflectd</h1>
   <span class="sub">Repeater linking reflector — admin</span>
-  <div class="auth">
+  <nav style="margin-left:auto; display:flex; gap:6px;">
+    <a href="/admin/" class="btn" style="border-color:var(--accent);color:var(--accent)">Roster</a>
+    <a href="/admin/recordings.html" class="btn">Recordings</a>
+  </nav>
+  <div class="auth" style="width:100%;display:flex;gap:6px;align-items:center;margin-top:6px">
     <button class="btn" onclick="reload()">Refresh</button>
   </div>
 </header>
