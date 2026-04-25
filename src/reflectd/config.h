@@ -39,7 +39,8 @@ typedef struct {
     char     listen_url[128];
     char     tls_cert[256];
     char     tls_key[256];
-    char     admin_token[128];
+    char     admin_user[64];
+    char     admin_password[128];
     char     log_file[256];
     char     dashboard_dir[256]; /* GET /admin/* served from here */
 

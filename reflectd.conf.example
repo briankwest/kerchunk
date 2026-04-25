@@ -24,9 +24,12 @@ rtp_port           = 7878
 ; public hostname. Nodes will resolve and sendto this address.
 rtp_advertise_host = reflector.example.com
 
-; Bearer token for the (future) /api/admin/* HTTP endpoints. Generate via
-; `openssl rand -hex 32`. Leave empty to leave the API closed.
-admin_token =
+; HTTP Basic credentials for the admin dashboard (/admin/) and JSON API
+; (/api/state, /api/admin/*). Both must be set or the API/dashboard
+; return 401 unconditionally. Generate a strong password — the browser
+; caches it per-origin after the first 401 prompt.
+admin_user     = admin
+admin_password =
 
 ; Reject clients older than this. Lex-compared with a leading
 ; "kerchunk " prefix optionally stripped.  Empty = no minimum.

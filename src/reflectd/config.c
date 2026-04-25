@@ -193,8 +193,10 @@ static int load_globals(rcfg_t *out, const kerchunk_config_t *cfg)
     if (cert) snprintf(out->tls_cert, sizeof(out->tls_cert), "%s", cert);
     if (key)  snprintf(out->tls_key,  sizeof(out->tls_key),  "%s", key);
 
-    const char *tok = kerchunk_config_get(cfg, "reflector", "admin_token");
-    if (tok) snprintf(out->admin_token, sizeof(out->admin_token), "%s", tok);
+    const char *au = kerchunk_config_get(cfg, "reflector", "admin_user");
+    const char *ap = kerchunk_config_get(cfg, "reflector", "admin_password");
+    if (au) snprintf(out->admin_user,     sizeof(out->admin_user),     "%s", au);
+    if (ap) snprintf(out->admin_password, sizeof(out->admin_password), "%s", ap);
 
     const char *log = kerchunk_config_get(cfg, "reflector", "log_file");
     if (log) snprintf(out->log_file, sizeof(out->log_file), "%s", log);

@@ -708,14 +708,21 @@ static void handle_message(struct mg_connection *c, conn_t *cs,
 
 /* ── Admin HTTP API ───────────────────────────────────────────────── */
 
+static void send_basic_auth_required(struct mg_connection *c)
+{
+    mg_http_reply(c, 401,
+        "WWW-Authenticate: Basic realm=\"reflectd\"\r\n"
+        "Content-Type: application/json\r\n",
+        "{\"error\":\"unauthorized\"}");
+}
+
 static int admin_auth_ok(struct mg_http_message *hm)
 {
-    if (!g_cfg.admin_token[0]) return 0;   /* token unset → API closed */
-    struct mg_str *h = mg_http_get_header(hm, "Authorization");
-    if (!h) return 0;
-    char want[256];
-    snprintf(want, sizeof(want), "Bearer %s", g_cfg.admin_token);
-    return h->len == strlen(want) && memcmp(h->buf, want, h->len) == 0;
+    if (!g_cfg.admin_user[0] || !g_cfg.admin_password[0]) return 0;
+    char user[64] = "", pass[128] = "";
+    mg_http_creds(hm, user, sizeof(user), pass, sizeof(pass));
+    return strcmp(user, g_cfg.admin_user)     == 0 &&
+           strcmp(pass, g_cfg.admin_password) == 0;
 }
 
 static void send_state_json(struct mg_connection *c)
@@ -829,7 +836,7 @@ static void admin_reload(struct mg_connection *c)
 static void route_admin(struct mg_connection *c, struct mg_http_message *hm)
 {
     if (!admin_auth_ok(hm)) {
-        mg_http_reply(c, 401, "", "{\"error\":\"unauthorized\"}");
+        send_basic_auth_required(c);
         return;
     }
     if (mg_match(hm->uri, mg_str("/api/state"), NULL) &&
@@ -941,6 +948,13 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
             mg_http_reply(c, 302, "Location: /admin/\r\n", "");
         } else if (mg_match(hm->uri, mg_str("/admin/#"), NULL) ||
                    mg_match(hm->uri, mg_str("/admin"),   NULL)) {
+            /* Same Basic Auth gate as /api/* — browsers prompt natively
+             * on 401 and cache credentials per origin so the JS doesn't
+             * need to manage tokens. */
+            if (!admin_auth_ok(hm)) {
+                send_basic_auth_required(c);
+                return;
+            }
             /* Strip the /admin prefix so mg_http_serve_dir maps /admin/X
              * → root_dir/X (and /admin/ → root_dir/index.html). */
             struct mg_http_message rewritten = *hm;
