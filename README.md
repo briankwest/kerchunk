@@ -1158,7 +1158,7 @@ end-to-end setup walkthrough.
 | `node_id` | string | — | Must match a `[node.<id>]` on the reflector |
 | `preshared_key_hex` | 64 hex | — | 32-byte key from `openssl rand -hex 32` |
 | `default_tg` | int | reflector default | Talkgroup to land on after login |
-| `verify_peer` | on/off | `off` | TLS peer cert verification |
+| `verify_peer` | on/off | `on` | TLS peer cert verification (mongoose now serves the full chain from a multi-cert PEM, so Let's Encrypt fullchain.pem validates cleanly) |
 | `link_tail_ms` | ms | `500` | PTT hold after last received frame |
 | `opus_bitrate` | bps | `32000` | Opus encoder bitrate |
 | `opus_loss_perc` | int | `10` | Expected loss %, drives FEC strength |

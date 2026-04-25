@@ -507,62 +507,74 @@ project. Single-threaded mongoose for the WebSocket + UDP socket
 (mongoose handles both); audio bridging is in-process state with
 no per-packet allocations.
 
-**Config** (`/etc/kerchunk-reflectd.conf`, INI):
+**Config** (`/etc/kerchunk-reflectd/reflectd.conf`, INI — see
+`reflectd.conf.example` shipped with the deb for the canonical form):
 ```ini
 [reflector]
-listen_ws = 0.0.0.0:8443
-listen_rtp = 0.0.0.0:7878
-tls_cert = /etc/kerchunk-reflectd/cert.pem
-tls_key  = /etc/kerchunk-reflectd/key.pem
-log_file = /var/log/kerchunk-reflectd/events.log
-admin_token = <random opaque string>     ; for /api/state and /api/admin/*
-min_client_version = 1.0.0
-keepalive_s = 15                          ; sent in login_ok
-hangtime_ms = 1500                        ; floor lease
+listen_url = wss://0.0.0.0:8443/link
+tls_cert = /etc/letsencrypt/live/example.com/fullchain.pem
+tls_key  = /etc/letsencrypt/live/example.com/privkey.pem
+rtp_port = 7878
+rtp_advertise_host = reflector.example.com
+
+; HTTP Basic for the admin dashboard + JSON API. Both fields required.
+admin_user     = admin
+admin_password = <strong>
+
+dashboard_dir = /usr/share/kerchunk-reflectd/web   ; static assets
+
+min_client_version =                       ; lex compare; empty = no minimum
+keepalive_s = 15                           ; ping every N s
+hangtime_ms = 1500                         ; floor lease
 
 ; Auto-mute thresholds (server-driven)
-mute_threshold_pct = 8                    ; sustained loss% from a node
-mute_window_s = 30                        ; rolling window
-mute_retry_s = 60                         ; advised wait before unmute
-auth_fail_kick = 200                      ; SRTP auth fails before kick
-auth_fail_window_s = 30
-
-; Reconnect-storm protection
+mute_threshold_pct = 8                     ; sustained loss% from a node
+mute_window_s = 30
+auth_fail_kick = 200                       ; SRTP auth fails before kick (per 30s)
 max_reconnects_per_node_per_min = 6
+
+; Per-call recording + CDR (opt-in)
+recording_enabled       = off
+recording_dir           = /var/lib/kerchunk-reflectd/recordings
+recording_max_age_days  = 30               ; auto-pruned hourly
 
 [talkgroup.4123]
 name = "Pacific Northwest"
 nodes = WK7ABC-1, WK7DEF-1, WK7GHI-1
 
-[talkgroup.4124]
-name = "Test"
-nodes = WK7ABC-1, WK7DEF-1
-
 [node.WK7ABC-1]
 preshared_key_hex = <64 hex chars>  ; 32 bytes
 allowed_tgs = 4123, 4124
 default_tg = 4123
-
-[node.WK7DEF-1]
-preshared_key_hex = <64 hex chars>
-allowed_tgs = 4123, 4124
-default_tg = 4123
 ```
 
-**HTTP API** (Bearer-token auth via `admin_token`, scoped to
-`localhost` by default — proxy if you want it remote):
+**HTTP API** (HTTP Basic via `admin_user` / `admin_password`. Pair the
+dashboard with TLS in production; both `/api/...` and `/admin/...` are
+gated by the same realm so browsers cache credentials per origin):
 
 | Endpoint                              | Purpose                                            |
 |---------------------------------------|----------------------------------------------------|
-| `GET /api/state`                      | Roster + per-TG state + floor + counters           |
+| `GET  /api/state`                     | Roster + per-TG state + floor + per-node counters  |
+| `GET  /api/events`                    | SSE stream of state snapshots — push, no polling   |
+| `GET  /api/recordings[?date=YYYY-MM-DD]` | List CDR days, or that day's per-call rows      |
+| `GET  /api/recording?path=<rel>`      | Stream a per-call WAV (sandboxed)                  |
 | `POST /api/admin/kick`                | `{node_id, reason}` → `kicked(admin_action)`       |
 | `POST /api/admin/mute`                | `{node_id, retry_s}` → `mute(admin_action)`        |
 | `POST /api/admin/unmute`              | `{node_id}` → `unmute`                             |
 | `POST /api/admin/release-floor`       | `{tg}` → `floor_revoked(admin)` to current talker  |
 | `POST /api/admin/reload`              | Re-read config; emits `tg_membership_changed` etc. |
 
-Each admin POST is logged with the bearer-token holder, target
-node, and timestamp.
+`/api/events` is the dashboard's data source — it emits a snapshot on
+every state change AND a 1 s heartbeat for live counter updates, so the
+UI is reactive without polling.
+
+Per-node metrics in `/api/state` (and SSE snapshots): `connected_at`,
+`uptime_s`, `quiet_ms`, `rtp_in`, `rtp_out`, `bytes_in`, `bytes_out`,
+`floor_holds`, `floor_seconds` (total airtime), `last_loss_pct`,
+`srtp_fail_30s`, `client_version`, `mute_reason`. Per-TG includes
+`talker_for_ms` for live "talking for" display.
+
+Each admin POST is logged with target node + timestamp.
 
 **Logging:** every connect / disconnect / TG-change / floor-grant
 to the events log. Same `events.log` style as kerchunk so a single

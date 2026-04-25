@@ -820,10 +820,49 @@ capped at `reconnect_max_ms`, ±20 % jitter. **Permanent codes**
 mod_link to `state:"stopped"` until an operator runs `link reconnect`
 or `link clear-alarm`. `reflector_shutdown(restart_in_s)` overrides the
 schedule for one cycle so 100 nodes don't reconnect in lockstep.
+Transient kicks (`admin_action`, `idle_timeout`, `loss_too_high`,
+`auth_failures`) get a 30 s ±20 % back-off — long enough to be a real
+operator signal, short enough that the network self-heals.
 
-**Operator surfaces:** `/admin/link.html` (state badge, current talker,
-counters via SSE), DTMF `*73<n>#` (TG switch), CLI
-`link status / tg / reconnect / clear-alarm`.
+**TLS chain serving:** `vendor/mongoose.c` patched so
+`mg_tls_init()` walks any additional PEM blocks after the leaf cert
+and attaches them via `SSL_add1_chain_cert`. Let's Encrypt's
+`fullchain.pem` is served whole and clients run with
+`verify_peer=on` by default.
+
+**Reflectd HTTP admin API + dashboard** (`/admin/`, HTTP Basic
+auth via `[reflector] admin_user / admin_password`):
+- `GET  /api/state` — full roster + per-TG state + per-node counters
+  (uptime, RX/TX packets + bytes, floor holds, total talk time,
+  last loss%, mute state) as JSON.
+- `GET  /api/events` — Server-Sent Events stream of state snapshots.
+  Pushed on every state change AND on a 1 s heartbeat for live
+  counter updates. Drives the **Roster** tab — no polling.
+- `GET  /api/recordings[?date=...]` — per-day CDR list / rows.
+- `GET  /api/recording?path=...` — stream a per-call WAV
+  (realpath sandboxed under `recording_dir`, `.wav` extension required).
+- `POST /api/admin/{kick,mute,unmute,release-floor,reload}` — operator
+  actions; reload re-reads `reflectd.conf` and pushes
+  `tg_membership_changed` to anyone whose current TG was revoked.
+
+**Per-call recording + CDR** (opt-in via `recording_enabled = on`):
+- A floor session opens a 24 kHz mono PCM WAV at `recording_dir/
+  YYYY-MM-DD/TG<n>_HHMMSS_<node>.wav`. Each authenticated Opus
+  packet's cleartext payload is decoded and appended; one
+  OpusDecoder per session.
+- Floor release closes the WAV (header fixup) and appends an RFC-4180
+  CSV row to `recording_dir/YYYY-MM-DD.csv`:
+  `timestamp,date,time,tg,tg_name,node_id,duration_s,pcm_bytes,recording`.
+- Hourly auto-prune walks YYYY-MM-DD subdirs + matching CSVs and
+  removes anything older than `recording_max_age_days`.
+
+**Operator surfaces:**
+- Per-repeater: `/admin/link.html` (state badge, mute, current talker,
+  loss%, "who else on TG"), DTMF `*73<n>#`, CLI
+  `link status / tg / reconnect / clear-alarm`.
+- Reflector-side: `/admin/` (Roster + Recordings tabs, both
+  SSE-driven, with inline mute/unmute/kick/release-floor + per-call
+  scrub-bar player matching the kerchunk CDR style).
 
 ---
 

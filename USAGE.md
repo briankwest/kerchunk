@@ -1344,9 +1344,17 @@ shipped example. Edit it:
 
 - `listen_url` — `wss://your.host:8443/link` (TLS) or `ws://...`
 - `tls_cert` + `tls_key` — usually a Let's Encrypt fullchain/privkey
+  (mongoose serves the full chain, so client-side `verify_peer=on`
+  works without extra setup)
 - `rtp_port` — UDP port for the audio plane (default 7878)
 - `rtp_advertise_host` — what gets sent to clients in `login_ok`;
   must be reachable from each repeater (your public hostname)
+- `admin_user` + `admin_password` — HTTP Basic credentials for the
+  reflectd admin dashboard at `/admin/` and the JSON API at `/api/*`.
+  Both must be set or the API/dashboard return 401.
+- `recording_enabled` (default `off`), `recording_dir`, and
+  `recording_max_age_days` — opt-in per-call WAV recording + CDR
+  (auto-pruned hourly, recordings older than max_age removed)
 - A `[node.<id>]` block per repeater with a `preshared_key_hex`
   (generate with `openssl rand -hex 32`)
 - A `[talkgroup.<n>]` block listing which nodes participate
@@ -1372,7 +1380,7 @@ reflector_ws       = wss://reflector.example.com:8443/link
 node_id            = WK7ABC-1     ; must match a [node.<id>] on the reflector
 preshared_key_hex  = <64 hex chars matching the reflectd config>
 default_tg         = 4123
-verify_peer        = on            ; set off if your cert chain is incomplete
+verify_peer        = on            ; default; set off only for self-signed lab certs
 link_tail_ms       = 500
 opus_bitrate       = 32000
 opus_loss_perc     = 10
@@ -1391,12 +1399,28 @@ You should see `connected to wss://… as <node_id> on TG <n>`.
 
 #### Step 3: verify on the dashboard
 
-The dashboard's **Link** tab (`/admin/link.html`) shows the live state
-badge, current talker, and counters. Counters refresh every 5 seconds
-via SSE. You can switch talkgroups and force a reconnect from the same
-page. Operators on the radio side can switch TGs with `*73<n>#`.
+Two complementary dashboards.
 
-#### CLI commands
+**On each repeater**: the kerchunk **Link** tab
+(`https://<repeater>:8080/admin/link.html`) shows the local node's link
+state, current talker on the TG, mute state, loss%, sent/recv counters,
+and "who else is on this TG". Counters refresh every 5 s via SSE. You
+can switch talkgroups, force a reconnect, and clear permanent-error
+alarms from the page. Operators on the radio side can switch TGs with
+DTMF `*73<n>#`.
+
+**On the reflector**: `https://<reflector>:8443/admin/`
+- **Roster** tab — live SSE-driven view (1 s heartbeat) of every node's
+  state, uptime, RX/TX packets + bytes, floor holds, total talk time,
+  last loss%, mute state. Inline mute/unmute/kick/release-floor buttons.
+- **Recordings** tab — per-call WAV browser with date picker and an
+  inline scrub-bar player matching the kerchunk CDR style. Per-day
+  CSV CDR exposed via `GET /api/recordings?date=YYYY-MM-DD`.
+
+Kicking a node from the reflectd dashboard puts mod_link into a 30 s
+back-off (so the operator has a window to investigate before reconnect).
+
+#### CLI commands (on each repeater)
 
 | Command | What it does |
 |---------|--------------|
@@ -1404,3 +1428,18 @@ page. Operators on the radio side can switch TGs with `*73<n>#`.
 | `link tg <n>` | Request a talkgroup switch |
 | `link reconnect` | Drop and reconnect |
 | `link clear-alarm` | Clear a permanent-error stop (`bad_key`, `banned`, etc.) |
+
+#### Reflectd admin endpoints (HTTP Basic-Auth gated)
+
+| Method/path | Purpose |
+|---|---|
+| `GET  /api/state` | Full roster + per-TG state + per-node counters as JSON |
+| `GET  /api/events` | SSE stream of state snapshots (drives the dashboard) |
+| `GET  /api/recordings` | List of days that have a CDR CSV |
+| `GET  /api/recordings?date=YYYY-MM-DD` | That day's per-call CDR rows |
+| `GET  /api/recording?path=YYYY-MM-DD/...wav` | Stream a recording (sandboxed) |
+| `POST /api/admin/kick` | `{node_id, reason}` — closes the node's WS, 30 s back-off |
+| `POST /api/admin/mute` | `{node_id, retry_in_s}` — keep WS, drop audio |
+| `POST /api/admin/unmute` | `{node_id}` |
+| `POST /api/admin/release-floor` | `{tg}` — force-release current talker |
+| `POST /api/admin/reload` | Re-read reflectd.conf, push tg_membership_changed if needed |
