@@ -514,28 +514,22 @@ int kerchunk_audio_capture(int16_t *buf, size_t n)
     size_t got = kerchunk_audio_ring_read(&g_cap_ring, buf, n);
     if (got == 0) return 0;  /* Nothing available — caller should skip */
     if (got < n) {
-        /* Partial read: instead of zero-padding the tail (which
-         * injects a hard silence frame and breaks the DTMF decoder's
-         * 2-block hysteresis lock-on, plus produces an audible click
-         * in the relay/web paths), repeat samples from the tail of
-         * the last good frame. The decoder sees "tone continues" and
-         * the audio path stays continuous.
-         *
-         * Historical note: the pre-refactor code had a slightly
-         * different fallback here — when g_cap_last_n was smaller
-         * than the missing count (i.e. `miss`), it zero-filled
-         * rather than tiling. In practice g_cap_last_n is always
-         * equal to frame_samples (from the save path below) or 0,
-         * and `miss` is always ≤ frame_samples, so the old path
-         * only hit its silence-fallback when g_cap_last_n == 0 —
-         * which kerchunk_audio_repeat_fill() also zero-fills via
-         * its last_n==0 branch. No practical behavior change. */
-        kerchunk_audio_repeat_fill(buf + got, n - got,
-                                   g_cap_last, g_cap_last_n);
+        /* Partial read: zero-fill the tail. We previously tile-repeated
+         * the last good frame here so the relay/DTMF path got continuous
+         * audio across a brief capture-ring underrun, but the same buffer
+         * is dispatched as KERCHEVT_AUDIO_FRAME to taps (mod_recorder,
+         * mod_parrot, mod_asr), so an underrun would write 20ms of
+         * duplicated voice into the recording — clearly audible as
+         * stuttering. Silence is honest: a single skipped frame is at
+         * worst a brief click in relay output and a one-frame hiccup
+         * for the DTMF decoder, both rare and benign. The recording
+         * is the truth-of-record and benefits the most. */
+        memset(buf + got, 0, (n - got) * sizeof(int16_t));
     } else if (n <= KERCHUNK_MAX_FRAME_SAMPLES) {
-        /* Only save as last-good on a COMPLETE ring read. Saving a
-         * partially-repeated buffer would make subsequent under-runs
-         * repeat-already-repeated samples, compounding distortion. */
+        /* Save as last-good on COMPLETE ring read so the
+         * kerchunk_audio_capture_repeat_last() helper (still used by
+         * unit tests + reserved for future relay-side use) has a fresh
+         * source. */
         memcpy(g_cap_last, buf, n * sizeof(int16_t));
         g_cap_last_n = n;
     }
