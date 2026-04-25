@@ -292,7 +292,18 @@ function subscribeSSE() {
             if (m.type === 'link' && m.data) applySnapshot(m.data);
         } catch (_) {}
     };
-    es.onerror = () => setTimeout(subscribeSSE, 2000);
+    es.onerror = () => {
+        /* Close the dead source and detach the handler before
+         * scheduling a reconnect. Without this, the browser's own
+         * internal retry stays active on `es` AND our setTimeout
+         * spawns another EventSource — and onerror can fire several
+         * times during a single failure, so reconnects pile up
+         * exponentially. That's the "spin out of control" you see
+         * when kerchunkd restarts. */
+        es.onerror = null;
+        es.close();
+        setTimeout(subscribeSSE, 2000);
+    };
 }
 
 loadInitial();
