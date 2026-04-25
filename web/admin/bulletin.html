@@ -12,7 +12,7 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
        background: var(--bg); color: var(--text); padding: 16px;
-       max-width: 1200px; margin: 0 auto; }
+       max-width: 1400px; margin: 0 auto; }
 header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 header h1 { font-size: 20px; }
 header nav { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; width: 100%; }
@@ -34,6 +34,16 @@ header .sub { color: var(--dim); font-size: 14px; }
 
 .editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 900px) { .editor-grid { grid-template-columns: 1fr; } }
+@media (max-width: 600px) {
+  body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  header { gap: 8px; margin-bottom: 10px; }
+  header h1 { font-size: 16px; }
+  header nav .btn { min-height: 36px; display: flex;
+                    align-items: center; justify-content: center; }
+  .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+  #bulletin-text, #preview { min-height: 220px; max-height: 50vh; font-size: 16px; }
+  .toolbar { flex-wrap: wrap; }
+}
 
 #bulletin-text {
   width: 100%;

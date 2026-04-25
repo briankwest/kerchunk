@@ -66,9 +66,11 @@ audio { width: 100%; }
 .col-method   { width: 80px; }
 .col-dur      { width: 70px;  text-align: right; font-variant-numeric: tabular-nums; }
 .col-rms      { width: 60px;  text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
-.col-actions  { width: 90px;  text-align: right; }
+.col-actions  { width: 110px; text-align: right; white-space: nowrap; }
 .col-user     { white-space: nowrap; }
 .col-desc     { color: var(--dim); font-size: 12px; }
+.col-rec      { word-break: break-all; }
+.col-rec code { word-break: break-all; }
 
 /* Inline player row — expands below the active record. */
 tr.player-row td {
@@ -149,6 +151,87 @@ tr.player-row td {
            border: 2px solid var(--border); border-top-color: var(--accent);
            border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Responsive ───────────────────────────────────────────────────
+ * 900px: drop the Pk column — least informative on a narrow screen.
+ * 700px: rows reflow as cards (CSS-only data-label trick) so each
+ *        record is a self-contained block instead of a 7-col row
+ *        scrolling off-screen.
+ * 600px: filter row stacks vertically; player row stacks vol below.
+ */
+@media (max-width: 900px) {
+    .col-rms, th[data-sort="peak_rms"] { display: none; }
+}
+
+@media (max-width: 700px) {
+    /* Card layout: each <tr> becomes a stack, <td> labels its field. */
+    table, table thead, table tbody, table tr, table th, table td {
+        display: block;
+        width: auto !important;
+    }
+    table thead { display: none; }
+    table tr {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        margin-bottom: 8px;
+        padding: 6px 4px;
+    }
+    table tr.emergency { border-color: var(--red); }
+    table tr.tx        { border-color: var(--accent); }
+    table tr.player-row {
+        border-color: var(--accent);
+        background: rgba(88,166,255,0.05);
+    }
+    table td {
+        padding: 4px 8px;
+        border: none;
+        text-align: left !important;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: baseline;
+    }
+    table td::before {
+        content: attr(data-label);
+        color: var(--dim);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        flex-shrink: 0;
+    }
+    table td.col-actions { justify-content: flex-end; }
+    table td.col-actions::before { display: none; }
+    /* Hide empty cells (e.g. system rows have no recording) so they
+     * don't show a label-with-no-value line. */
+    table td:empty { display: none; }
+    /* The player row spans the full card; let it lay out normally. */
+    table tr.player-row td {
+        display: block;
+        padding: 10px;
+    }
+    table tr.player-row td::before { display: none; }
+}
+
+@media (max-width: 600px) {
+    body { padding: 10px;
+           padding-bottom: calc(10px + env(safe-area-inset-bottom));
+           overflow-x: hidden; }
+    header { gap: 8px; margin-bottom: 10px; }
+    header h1 { font-size: 16px; }
+    header nav .btn { min-height: 36px; display: flex;
+                      align-items: center; justify-content: center; }
+    .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+    .btn-sm { min-height: 36px; padding: 6px 10px; font-size: 11px; }
+    .controls > .group { flex-wrap: wrap; }
+    .controls .count { margin-left: 0; width: 100%; text-align: right; }
+    .controls input[type="text"] { min-width: 100px; flex: 1; }
+    .controls input[type="date"] { min-height: 36px; }
+    .player { flex-wrap: wrap; }
+    .player .pp { width: 40px; height: 40px; }   /* easier tap target */
+    .player .vol  { order: 99; }                  /* volume to the end */
+    .player .label { order: 98; flex-basis: 100%;
+                     text-align: center; padding-top: 4px; }
+}
 </style>
 </head>
 <body>
@@ -349,13 +432,15 @@ function render() {
     /* Stable identity per row so the player can find/expand it
      * across re-renders (sort/filter changes). */
     const rowId = 'r' + r.ts + '-' + (r.recording || '').length;
+    /* data-label drives the card-view labels at narrow widths; the
+     * desktop table just shows the column headers. */
     html += '<tr class="' + cls + '" id="' + rowId + '">'
-      + '<td class="col-time">' + r.time + '</td>'
-      + '<td class="col-user">' + escapeHtml(r.user_name || '?') + '</td>'
-      + '<td class="col-method">' + escapeHtml(r.method || '') + '</td>'
-      + '<td class="col-dur">' + fmtDur(r.duration_s) + '</td>'
-      + '<td class="col-rms">' + (r.peak_rms || '—') + '</td>'
-      + '<td>' + recCol + '</td>'
+      + '<td class="col-time"   data-label="Time">'   + r.time + '</td>'
+      + '<td class="col-user"   data-label="User">'   + escapeHtml(r.user_name || '?') + '</td>'
+      + '<td class="col-method" data-label="Method">' + escapeHtml(r.method || '') + '</td>'
+      + '<td class="col-dur"    data-label="Dur">'    + fmtDur(r.duration_s) + '</td>'
+      + '<td class="col-rms"    data-label="Pk">'     + (r.peak_rms || '—') + '</td>'
+      + '<td class="col-rec"    data-label="Recording">' + recCol + '</td>'
       + '<td class="col-actions">'
       + (isWav
           ? '<button class="btn btn-sm play-btn" onclick="togglePlay(this)"'
