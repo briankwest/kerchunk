@@ -29,16 +29,30 @@ case "$1" in
                 /var/lib/kerchunk-reflectd
         install -d -o kerchunk-reflectd -g kerchunk-reflectd -m 0755 \
                 /var/lib/kerchunk-reflectd/recordings
-        install -d -o root -g kerchunk-reflectd -m 0750 \
+        # Group-writable + setgid so the dashboard editor (running as
+        # kerchunk-reflectd) can do tempfile + rename in this dir, and
+        # any file it drops inherits the kerchunk-reflectd group.
+        install -d -o root -g kerchunk-reflectd -m 2770 \
                 /etc/kerchunk-reflectd
+        # Re-apply on upgrades from older 0750 layouts.
+        chmod 2770 /etc/kerchunk-reflectd
+        chgrp kerchunk-reflectd /etc/kerchunk-reflectd
 
         # Drop the example config if no real config is present yet.
+        FRESH=0
         if [ ! -f /etc/kerchunk-reflectd/reflectd.conf ] \
                 && [ -f /etc/kerchunk-reflectd/reflectd.conf.example ]; then
             cp /etc/kerchunk-reflectd/reflectd.conf.example \
                /etc/kerchunk-reflectd/reflectd.conf
+            FRESH=1
+        fi
+        # Always normalise reflectd.conf perms so the dashboard editor
+        # can replace it. (Idempotent on re-install / upgrades.)
+        if [ -f /etc/kerchunk-reflectd/reflectd.conf ]; then
             chown root:kerchunk-reflectd /etc/kerchunk-reflectd/reflectd.conf
-            chmod 0640 /etc/kerchunk-reflectd/reflectd.conf
+            chmod 0660 /etc/kerchunk-reflectd/reflectd.conf
+        fi
+        if [ "$FRESH" = "1" ]; then
             cat <<MSG
 
 ────────────────────────────────────────────────────────────────────
