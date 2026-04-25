@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        # Remove user only on full purge — preserve config across upgrades
+        # and even regular removes.
+        if getent passwd kerchunk-reflectd >/dev/null 2>&1; then
+            deluser --system kerchunk-reflectd >/dev/null 2>&1 || true
+        fi
+        if getent group kerchunk-reflectd >/dev/null 2>&1; then
+            delgroup --system kerchunk-reflectd >/dev/null 2>&1 || true
+        fi
+        rm -rf /var/log/kerchunk-reflectd
+        rm -rf /etc/kerchunk-reflectd
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

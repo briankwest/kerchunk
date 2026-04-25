@@ -1,0 +1,48 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # System user dedicated to reflectd. No shell, no home content.
+        if ! getent group kerchunk-reflectd >/dev/null 2>&1; then
+            addgroup --system kerchunk-reflectd
+        fi
+        if ! getent passwd kerchunk-reflectd >/dev/null 2>&1; then
+            adduser --system --ingroup kerchunk-reflectd \
+                    --home /nonexistent --no-create-home \
+                    --gecos "kerchunk-reflectd" kerchunk-reflectd
+        fi
+
+        # Runtime directories
+        install -d -o kerchunk-reflectd -g kerchunk-reflectd -m 0755 \
+                /var/log/kerchunk-reflectd
+        install -d -o root -g kerchunk-reflectd -m 0750 \
+                /etc/kerchunk-reflectd
+
+        # Drop the example config if no real config is present yet.
+        if [ ! -f /etc/kerchunk-reflectd/reflectd.conf ] \
+                && [ -f /etc/kerchunk-reflectd/reflectd.conf.example ]; then
+            cp /etc/kerchunk-reflectd/reflectd.conf.example \
+               /etc/kerchunk-reflectd/reflectd.conf
+            chown root:kerchunk-reflectd /etc/kerchunk-reflectd/reflectd.conf
+            chmod 0640 /etc/kerchunk-reflectd/reflectd.conf
+            cat <<MSG
+
+────────────────────────────────────────────────────────────────────
+kerchunk-reflectd installed but NOT enabled.
+
+Edit /etc/kerchunk-reflectd/reflectd.conf:
+  - set listen_url + tls_cert + tls_key (or use ws:// behind a proxy)
+  - generate a preshared key:  openssl rand -hex 32
+  - add a [node.<id>] block per repeater + a [talkgroup.<n>] block
+
+Then:  systemctl enable --now kerchunk-reflectd
+────────────────────────────────────────────────────────────────────
+MSG
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

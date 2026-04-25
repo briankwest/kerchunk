@@ -449,6 +449,9 @@ kerchunkwebadmin_DATA = \
 kerchunkconfdir = $(sysconfdir)/kerchunk
 kerchunkconf_DATA = kerchunk.conf.example users.conf.example system_prompt.md.example
 
+reflectdconfdir = $(sysconfdir)/kerchunk-reflectd
+reflectdconf_DATA = reflectd.conf.example
+
 # Systemd service
 systemddir = $(prefix)/lib/systemd/system
 systemd_DATA = kerchunkd.service
@@ -482,6 +485,7 @@ EXTRA_DIST = \
 	m4/ax_pthread.m4 \
 	m4/ax_check_compile_flag.m4 \
 	tests/test_link.sh \
+	reflectd.conf.example \
 	kerchunk.conf.example \
 	users.conf.example \
 	system_prompt.md.example \

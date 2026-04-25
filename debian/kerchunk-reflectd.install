@@ -1,0 +1,3 @@
+usr/bin/kerchunk-reflectd
+usr/bin/kerchunk-link-probe
+etc/kerchunk-reflectd/*

@@ -1,0 +1,8 @@
+usr/bin/kerchunk
+usr/bin/kerchunkd
+usr/bin/kerchunk-diag
+usr/lib/kerchunk/*
+usr/lib/systemd/system/kerchunkd.service
+usr/share/kerchunk/*
+usr/share/doc/kerchunk/*
+etc/kerchunk/*

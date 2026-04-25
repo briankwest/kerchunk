@@ -21,7 +21,9 @@ Build-Depends: debhelper-compat (= 13),
                libwyoming-dev,
                libcjson-dev,
                libplcode-dev (>= 1.0.1),
-               libnemo-normalize-dev (>= 1.0.1)
+               libnemo-normalize-dev (>= 1.0.1),
+               libopus-dev,
+               libsrtp2-dev
 Standards-Version: 4.6.2
 Homepage: https://github.com/briankwest/kerchunk
 Rules-Requires-Root: no
@@ -56,3 +58,21 @@ Description: GMRS/Amateur/Part 90 repeater controller daemon
  This package provides the kerchunkd daemon, the kerchunk CLI, the
  kerchunk-diag diagnostic tool, all modules, sound files, web dashboard,
  and systemd service.
+
+Package: kerchunk-reflectd
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         adduser
+Description: Central reflector for kerchunk repeater linking
+ kerchunk-reflectd is a small standalone daemon that bridges audio
+ between authenticated kerchunk repeaters over the internet. Each
+ repeater logs in via TLS-WebSocket (HMAC-SHA256 over a server-issued
+ challenge), then exchanges Opus-encoded audio via SRTP/RTP/UDP. The
+ reflector enforces per-talkgroup floor control, decrypts incoming
+ audio with the sender's session key, and re-encrypts for each
+ recipient with their own session key.
+ .
+ This package provides only the reflector daemon and the
+ kerchunk-link-probe protocol smoke-tester. The local repeater
+ module (mod_link) ships with the main kerchunk package.

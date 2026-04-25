@@ -1,0 +1,81 @@
+; ============================================================================
+; kerchunk-reflectd configuration — example
+;
+; Copy to /etc/kerchunk-reflectd/reflectd.conf and edit. Then enable:
+;   systemctl enable --now kerchunk-reflectd
+; ============================================================================
+
+[reflector]
+; ws://  for plain WebSocket (lab / behind reverse proxy)
+; wss:// for TLS WebSocket — requires tls_cert + tls_key below
+listen_url = wss://0.0.0.0:8443/link
+
+; PEM bundle. Mongoose's TLS only loads the leaf cert from a multi-cert
+; PEM, so for Let's Encrypt you may want to use the leaf cert.pem with
+; clients that have the LE intermediate cached, or accept verify_peer=off
+; on the client side.
+tls_cert = /etc/letsencrypt/live/example.com/fullchain.pem
+tls_key  = /etc/letsencrypt/live/example.com/privkey.pem
+
+; UDP port for SRTP audio — must be reachable from every node, including
+; through any NAT in front of nodes. Forward this port at your router.
+rtp_port           = 7878
+; What we tell each node in login_ok.rtp_endpoint — usually your
+; public hostname. Nodes will resolve and sendto this address.
+rtp_advertise_host = reflector.example.com
+
+; Bearer token for the (future) /api/admin/* HTTP endpoints. Generate via
+; `openssl rand -hex 32`. Leave empty to leave the API closed.
+admin_token =
+
+; Reject clients older than this. Lex-compared with a leading
+; "kerchunk " prefix optionally stripped.  Empty = no minimum.
+min_client_version =
+
+; Control-plane health
+keepalive_s = 15        ; ping every N s if no other traffic
+hangtime_ms = 1500      ; floor lease — if no RTP for this long, lease ends
+
+; Server-driven mute / kick
+mute_threshold_pct = 8                  ; if a node reports >this loss, mute
+mute_window_s      = 30
+auth_fail_kick     = 200                ; SRTP auth fails before kick
+max_reconnects_per_node_per_min = 6     ; storm protection
+
+; ----------------------------------------------------------------------------
+; Nodes — one [node.<id>] section per repeater allowed to connect.
+;
+;   preshared_key_hex must be 64 hex chars (32 bytes). Generate via:
+;       openssl rand -hex 32
+;
+;   allowed_tgs: comma-separated list of TG numbers this node may join.
+;   default_tg:  the TG the node lands on at login (must be in allowed_tgs).
+;   banned:      set to 1 to deny logins without removing the section.
+; ----------------------------------------------------------------------------
+
+[node.WK7ABC-1]
+preshared_key_hex = REPLACE_WITH_64_HEX_CHARS_FROM_OPENSSL_RAND
+allowed_tgs       = 4123, 4124
+default_tg        = 4123
+
+;[node.WK7DEF-1]
+;preshared_key_hex = ...
+;allowed_tgs       = 4123, 4124
+;default_tg        = 4123
+
+; ----------------------------------------------------------------------------
+; Talkgroups — one [talkgroup.<num>] section per TG.
+;
+;   name:  display label (also returned in tg_ok)
+;   nodes: comma-separated node ids that may participate. Both this list
+;          AND each node's allowed_tgs must agree.
+; ----------------------------------------------------------------------------
+
+[talkgroup.4123]
+name  = "Pacific Northwest"
+nodes = WK7ABC-1
+;nodes = WK7ABC-1, WK7DEF-1
+
+[talkgroup.4124]
+name  = "Test"
+nodes = WK7ABC-1

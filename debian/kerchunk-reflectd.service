@@ -1,0 +1,40 @@
+[Unit]
+Description=kerchunk-reflectd — central reflector for repeater linking
+Documentation=https://github.com/briankwest/kerchunk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/kerchunk-reflectd -c /etc/kerchunk-reflectd/reflectd.conf
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3
+
+User=kerchunk-reflectd
+Group=kerchunk-reflectd
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kerchunk-reflectd
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadOnlyPaths=/etc/kerchunk-reflectd
+ReadWritePaths=/var/log/kerchunk-reflectd
+
+# Bind privileged ports if needed (e.g. wss://0.0.0.0:443).
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
