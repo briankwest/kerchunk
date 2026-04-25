@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
+<title>Kerchunk CDR Browser</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px;
+       max-width: 1400px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+header nav { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; width: 100%; }
+header nav .btn { text-decoration: none; white-space: nowrap; flex: 1; text-align: center;
+                  padding: 5px 10px; }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+        padding: 14px; margin-bottom: 12px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border);
+           font-size: 11px; color: var(--dim); text-transform: uppercase;
+           letter-spacing: 0.5px; cursor: pointer; user-select: none; }
+table th:hover { color: var(--accent); }
+table th .sort-ind { color: var(--accent); margin-left: 4px; }
+table td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table tr:last-child td { border-bottom: none; }
+table tr:hover td { background: rgba(88,166,255,0.04); }
+table tr.emergency td { background: rgba(248,81,73,0.10); }
+table tr.system { color: var(--dim); }
+
+.btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
+       text-decoration: none; display: inline-block;
+       -webkit-tap-highlight-color: transparent; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--border); color: var(--text); }
+.btn-sm { font-size: 11px; padding: 2px 8px; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.controls > .group { display: flex; gap: 6px; align-items: center; }
+.controls label { color: var(--dim); font-size: 12px; }
+.controls input[type="date"], .controls input[type="text"] {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: 5px 8px; font-size: 12px;
+    font-family: inherit;
+}
+.controls input[type="text"] { min-width: 140px; }
+.controls input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+.controls .count { margin-left: auto; color: var(--dim); font-size: 12px; }
+
+.audio-row { padding: 12px 14px; }
+audio { width: 100%; }
+
+.empty { text-align: center; color: var(--dim); padding: 30px; font-size: 13px; }
+
+.col-time     { width: 90px;  font-variant-numeric: tabular-nums; }
+.col-method   { width: 80px; }
+.col-dur      { width: 70px;  text-align: right; font-variant-numeric: tabular-nums; }
+.col-rms      { width: 60px;  text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+.col-actions  { width: 90px;  text-align: right; }
+.col-user     { white-space: nowrap; }
+.col-desc     { color: var(--dim); font-size: 12px; }
+
+/* Inline player row — expands below the active record. */
+tr.player-row td {
+    padding: 10px 14px;
+    background: rgba(88,166,255,0.05);
+    border-top: 1px solid rgba(88,166,255,0.2);
+    border-bottom: 1px solid rgba(88,166,255,0.2);
+}
+.player {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+}
+.player .pp {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+    background: var(--card);
+    color: var(--accent);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+}
+.player .pp:hover { background: rgba(88,166,255,0.15); }
+.player .pp:active { background: rgba(88,166,255,0.25); }
+.player .time { color: var(--dim); white-space: nowrap; }
+.player .scrub {
+    flex: 1;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+}
+.player .scrub .fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: var(--accent);
+    border-radius: 3px;
+    width: 0%;
+    pointer-events: none;
+}
+.player .scrub .buf {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: rgba(88,166,255,0.25);
+    border-radius: 3px;
+    width: 0%;
+    pointer-events: none;
+}
+.player .label { color: var(--dim); font-size: 11px; }
+.player .vol {
+    appearance: none; -webkit-appearance: none;
+    width: 80px; height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    cursor: pointer;
+}
+.player .vol::-webkit-slider-thumb {
+    appearance: none; -webkit-appearance: none;
+    width: 12px; height: 12px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+}
+.player .vol::-moz-range-thumb {
+    width: 12px; height: 12px;
+    background: var(--accent);
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+}
+
+.spinner { display: inline-block; width: 12px; height: 12px;
+           border: 2px solid var(--border); border-top-color: var(--accent);
+           border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>CDR Browser</h1>
+  <nav>
+    <a href="/admin/" class="btn">Admin</a>
+    <a href="/admin/users.html" class="btn">Users</a>
+    <a href="/admin/cdr.html" class="btn"
+       style="border-color:var(--accent);color:var(--accent)">CDR</a>
+    <a href="/admin/config.html" class="btn">Config</a>
+    <a href="/admin/coverage.html" class="btn">Coverage</a>
+    <a href="/admin/ptt.html" class="btn">PTT</a>
+  </nav>
+</header>
+
+<!-- Filter card -->
+<div class="card">
+  <div class="controls">
+    <div class="group">
+      <button class="btn btn-sm" id="prev-day" title="Previous day">◀</button>
+      <input type="date" id="date-picker">
+      <button class="btn btn-sm" id="next-day" title="Next day">▶</button>
+    </div>
+    <div class="group">
+      <label>User</label>
+      <input type="text" id="filter-user" placeholder="any">
+    </div>
+    <div class="group">
+      <label>Method</label>
+      <input type="text" id="filter-method" placeholder="any">
+    </div>
+    <div class="group">
+      <label><input type="checkbox" id="show-voice" checked> voice</label>
+      <label><input type="checkbox" id="show-system"> announcements</label>
+      <label><input type="checkbox" id="show-emergency" checked> emergency</label>
+    </div>
+    <div class="count" id="count">—</div>
+  </div>
+</div>
+
+<!-- Hidden audio element — driven by the in-row mini player. -->
+<audio id="audio-player" preload="auto" style="display:none"></audio>
+
+<!-- Records -->
+<div class="card">
+  <div id="table-host">
+    <div class="empty"><span class="spinner"></span> loading…</div>
+  </div>
+</div>
+
+<script>
+const API = '/admin';
+async function fetchJSON(p) { return (await fetch(API + p, {credentials:'same-origin'})).json(); }
+function fmtDur(s){
+  if (s == null || s === 0) return '—';
+  s = Math.round(s * 10) / 10;
+  if (s < 60) return s.toFixed(1) + 's';
+  const m = Math.floor(s / 60), r = Math.round(s - m*60);
+  return m + 'm ' + r + 's';
+}
+
+// State
+let g_records = [];
+let g_days    = [];
+let g_sortKey = 'ts';
+let g_sortDir = -1;  // -1 desc, +1 asc
+
+// Date navigation
+async function loadDays() {
+  const d = await fetchJSON('/api/cdr/days');
+  g_days = d.days || [];
+  const picker = document.getElementById('date-picker');
+  if (g_days.length) {
+    picker.min = g_days[0];
+    picker.max = g_days[g_days.length - 1];
+  }
+  // URL ?date= takes precedence, else today, else most-recent.
+  const url = new URLSearchParams(location.search);
+  let target = url.get('date') || d.today;
+  if (!g_days.includes(target) && g_days.length)
+    target = g_days[g_days.length - 1];
+  picker.value = target;
+  await loadDate(target);
+}
+
+async function loadDate(date) {
+  document.getElementById('table-host').innerHTML =
+    '<div class="empty"><span class="spinner"></span> loading…</div>';
+  closePlayer();
+  try {
+    const d = await fetchJSON('/api/cdr?date=' + encodeURIComponent(date));
+    g_records = d.records || [];
+  } catch(e) {
+    g_records = [];
+  }
+  render();
+}
+
+function stepDay(delta) {
+  const cur = document.getElementById('date-picker').value;
+  const idx = g_days.indexOf(cur);
+  if (idx < 0) return;
+  const next = g_days[idx + delta];
+  if (!next) return;
+  document.getElementById('date-picker').value = next;
+  loadDate(next);
+}
+
+// Filtering + sorting + render
+function filtered() {
+  const u = document.getElementById('filter-user').value.toLowerCase();
+  const m = document.getElementById('filter-method').value.toLowerCase();
+  const showVoice  = document.getElementById('show-voice').checked;
+  const showSys    = document.getElementById('show-system').checked;
+  const showEmerg  = document.getElementById('show-emergency').checked;
+
+  return g_records.filter(r => {
+    const isSys   = r.user_name === 'system';
+    const isEmerg = !!r.emergency;
+    // Type-class gates (emergency rows always shown if showEmerg, even if voice/sys off)
+    if (isEmerg && !showEmerg) return false;
+    if (!isEmerg) {
+      if (isSys && !showSys) return false;
+      if (!isSys && !showVoice) return false;
+    }
+    if (u && !(r.user_name || '').toLowerCase().includes(u)) return false;
+    if (m && !(r.method || '').toLowerCase().includes(m)) return false;
+    return true;
+  });
+}
+
+function sortBy(key) {
+  if (g_sortKey === key) g_sortDir = -g_sortDir;
+  else { g_sortKey = key; g_sortDir = key === 'ts' ? -1 : 1; }
+  render();
+}
+
+function render() {
+  const rows = filtered().slice().sort((a, b) => {
+    const va = a[g_sortKey], vb = b[g_sortKey];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'string') return va.localeCompare(vb) * g_sortDir;
+    return (va - vb) * g_sortDir;
+  });
+
+  document.getElementById('count').textContent =
+    rows.length + ' / ' + g_records.length + ' records';
+
+  const host = document.getElementById('table-host');
+  if (!g_records.length) {
+    host.innerHTML = '<div class="empty">No records for this day.</div>';
+    return;
+  }
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">No records match the current filters.</div>';
+    return;
+  }
+
+  const ind = (k) => g_sortKey === k
+    ? '<span class="sort-ind">' + (g_sortDir > 0 ? '▲' : '▼') + '</span>' : '';
+
+  let html = '<table><thead><tr>'
+    + '<th class="col-time" data-sort="ts">Time'    + ind('ts')        + '</th>'
+    + '<th class="col-user" data-sort="user_name">User' + ind('user_name') + '</th>'
+    + '<th class="col-method" data-sort="method">Method' + ind('method')  + '</th>'
+    + '<th class="col-dur" data-sort="duration_s">Dur' + ind('duration_s') + '</th>'
+    + '<th class="col-rms" data-sort="peak_rms">Pk'  + ind('peak_rms')  + '</th>'
+    + '<th>Recording / Description</th>'
+    + '<th class="col-actions"></th>'
+    + '</tr></thead><tbody>';
+
+  for (const r of rows) {
+    const isSys   = r.user_name === 'system';
+    const isEmerg = !!r.emergency;
+    const cls = (isEmerg ? 'emergency ' : '') + (isSys ? 'system' : '');
+    const isWav = !isSys && r.recording && r.recording.toLowerCase().endsWith('.wav');
+    const recCol = isSys
+      ? '<span class="col-desc">' + escapeHtml(r.recording || '') + '</span>'
+      : (isWav
+          ? '<code style="font-size:11px;color:var(--dim)">' +
+              escapeHtml(basename(r.recording)) + '</code>'
+          : '<span class="col-desc">—</span>');
+
+    /* Stable identity per row so the player can find/expand it
+     * across re-renders (sort/filter changes). */
+    const rowId = 'r' + r.ts + '-' + (r.recording || '').length;
+    html += '<tr class="' + cls + '" id="' + rowId + '">'
+      + '<td class="col-time">' + r.time + '</td>'
+      + '<td class="col-user">' + escapeHtml(r.user_name || '?') + '</td>'
+      + '<td class="col-method">' + escapeHtml(r.method || '') + '</td>'
+      + '<td class="col-dur">' + fmtDur(r.duration_s) + '</td>'
+      + '<td class="col-rms">' + (r.peak_rms || '—') + '</td>'
+      + '<td>' + recCol + '</td>'
+      + '<td class="col-actions">'
+      + (isWav
+          ? '<button class="btn btn-sm play-btn" onclick="togglePlay(this)"'
+            + ' data-path="' + escapeAttr(r.recording) + '"'
+            + ' data-row="' + rowId + '"'
+            + ' data-label="' + escapeAttr(r.user_name + ' @ ' + r.time) + '">▶</button> '
+            + '<a class="btn btn-sm" href="' + recordingURL(r.recording, true) + '"'
+            + ' title="Download">⬇</a>'
+          : '')
+      + '</td></tr>';
+  }
+  html += '</tbody></table>';
+  host.innerHTML = html;
+
+  // Wire column-header sort
+  host.querySelectorAll('th[data-sort]').forEach(th =>
+    th.addEventListener('click', () => sortBy(th.dataset.sort)));
+}
+
+function basename(p) {
+  if (!p) return '';
+  const i = p.lastIndexOf('/');
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+function recordingURL(path, download) {
+  return API + '/api/recording?path=' + encodeURIComponent(path)
+    + (download ? '&download=1' : '');
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+function escapeAttr(s) { return escapeHtml(s).replace(/"/g, '&quot;'); }
+
+/* ── Inline player ──
+ * Click ▶ → expand a player row directly below the clicked record
+ * with a custom-styled UI (transport, scrubber, time, volume).
+ * Click ▶ on a different row → tear down current player, expand
+ * new one. Click ⏸ on the same row → pause. Click ▶ again → resume. */
+let g_playerRowId = null;     // DOM id of the currently-active row
+let g_playerVol   = 1.0;      // remembered across teardowns
+
+function togglePlay(btn) {
+  const path  = btn.dataset.path;
+  const rowId = btn.dataset.row;
+  const label = btn.dataset.label;
+  const a = document.getElementById('audio-player');
+
+  // Same row's button — toggle pause/play
+  if (g_playerRowId === rowId && a.src) {
+    if (a.paused) { a.play().catch(()=>{}); }
+    else          { a.pause(); }
+    return;
+  }
+
+  // Different row — tear down current, build new
+  closePlayer();
+  g_playerRowId = rowId;
+  a.src = recordingURL(path, false);
+  a.volume = g_playerVol;
+  insertPlayerRow(rowId, label, path);
+  a.play().catch(() => { /* autoplay blocked — let user click pp */ });
+}
+
+function insertPlayerRow(rowId, label, path) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const a   = document.getElementById('audio-player');
+  const cols = row.children.length;
+
+  const tr = document.createElement('tr');
+  tr.className = 'player-row';
+  tr.id = 'pr-' + rowId;
+  tr.innerHTML =
+    '<td colspan="' + cols + '">'
+    + '<div class="player">'
+    +   '<button class="pp" id="pp-btn" title="Play / pause">⏸</button>'
+    +   '<div class="time" id="pp-cur">0:00</div>'
+    +   '<div class="scrub" id="pp-scrub">'
+    +     '<div class="buf" id="pp-buf"></div>'
+    +     '<div class="fill" id="pp-fill"></div>'
+    +   '</div>'
+    +   '<div class="time" id="pp-dur">0:00</div>'
+    +   '<input type="range" min="0" max="100" value="' + Math.round(g_playerVol * 100) +
+    '" class="vol" id="pp-vol" title="Volume">'
+    +   '<span class="label">' + escapeHtml(label) + '</span>'
+    + '</div>'
+    + '</td>';
+  row.parentNode.insertBefore(tr, row.nextSibling);
+
+  // Wire mini-player controls
+  document.getElementById('pp-btn').addEventListener('click', () => {
+    if (a.paused) a.play().catch(()=>{}); else a.pause();
+  });
+  document.getElementById('pp-scrub').addEventListener('click', (e) => {
+    if (!a.duration) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    a.currentTime = frac * a.duration;
+  });
+  document.getElementById('pp-vol').addEventListener('input', (e) => {
+    g_playerVol = parseInt(e.target.value, 10) / 100;
+    a.volume = g_playerVol;
+  });
+}
+
+function closePlayer() {
+  const a = document.getElementById('audio-player');
+  a.pause();
+  a.removeAttribute('src');
+  a.load();
+  if (g_playerRowId) {
+    const tr = document.getElementById('pr-' + g_playerRowId);
+    if (tr) tr.remove();
+  }
+  g_playerRowId = null;
+  // Reset all play buttons in case any are stuck on ⏸
+  document.querySelectorAll('.play-btn').forEach(b => b.textContent = '▶');
+}
+
+/* Drive the mini-player UI from the audio element's events. */
+function fmtMmSs(s) {
+  if (!isFinite(s) || s < 0) return '0:00';
+  const m = Math.floor(s / 60), r = Math.floor(s - m*60);
+  return m + ':' + (r < 10 ? '0' : '') + r;
+}
+(function wireAudioEvents() {
+  const a = document.getElementById('audio-player');
+  function updateUI() {
+    if (!g_playerRowId) return;
+    const cur  = document.getElementById('pp-cur');
+    const dur  = document.getElementById('pp-dur');
+    const fill = document.getElementById('pp-fill');
+    const buf  = document.getElementById('pp-buf');
+    const btn  = document.getElementById('pp-btn');
+    const playBtn = document.querySelector('.play-btn[data-row="' + g_playerRowId + '"]');
+    if (cur) cur.textContent = fmtMmSs(a.currentTime);
+    if (dur) dur.textContent = fmtMmSs(a.duration || 0);
+    if (fill && a.duration)
+      fill.style.width = (a.currentTime / a.duration * 100) + '%';
+    if (buf && a.duration && a.buffered.length) {
+      const end = a.buffered.end(a.buffered.length - 1);
+      buf.style.width = (end / a.duration * 100) + '%';
+    }
+    if (btn)     btn.textContent     = a.paused ? '▶' : '⏸';
+    if (playBtn) playBtn.textContent = a.paused ? '▶' : '⏸';
+  }
+  a.addEventListener('timeupdate',  updateUI);
+  a.addEventListener('loadedmetadata', updateUI);
+  a.addEventListener('progress',    updateUI);
+  a.addEventListener('play',        updateUI);
+  a.addEventListener('pause',       updateUI);
+  a.addEventListener('ended', () => {
+    const playBtn = document.querySelector('.play-btn[data-row="' + g_playerRowId + '"]');
+    if (playBtn) playBtn.textContent = '▶';
+    const btn = document.getElementById('pp-btn');
+    if (btn) btn.textContent = '▶';
+  });
+})();
+
+// Wire controls
+document.getElementById('date-picker').addEventListener('change', e => {
+  loadDate(e.target.value);
+  // Update URL so a refresh / shared link lands on the same day.
+  const url = new URL(location);
+  url.searchParams.set('date', e.target.value);
+  history.replaceState({}, '', url);
+});
+document.getElementById('prev-day').addEventListener('click', () => stepDay(-1));
+document.getElementById('next-day').addEventListener('click', () => stepDay(+1));
+['filter-user','filter-method','show-voice','show-system','show-emergency']
+  .forEach(id => document.getElementById(id)
+    .addEventListener('input', render));
+
+loadDays();
+</script>
+</body>
+</html>
