@@ -6,7 +6,7 @@
 
 A custom repeater controller for the Retevis RT97L repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 or AIOC (All-In-One-Cable) USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode). Supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) operation.
 
-**31 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs / Wyoming), ASR (Wyoming speech recognition), **AI voice assistant (OpenAI-compatible LLM with tool calling)**, parrot/echo, CDR, statistics, system stats, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry, PoC radio bridge.
+**32 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs / Wyoming), ASR (Wyoming speech recognition), **AI voice assistant (OpenAI-compatible LLM with tool calling)**, parrot/echo, CDR, statistics, system stats, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry, PoC radio bridge, **repeater linking (mod_link bridges to a `kerchunk-reflectd` reflector via SRTP/Opus with per-talkgroup floor control)**.
 
 **318 tests** — unit + integration test coverage, including 35 tests for the pure audio-thread functions (`kerchunk_audio_tick_rx`, `kerchunk_audio_tick_tx`, ring-commit + `paInputUnderflow`, repeat-last fill) and 11 tests for the fused TX-activity detector (`kerchunk_txactivity`).
 
@@ -77,6 +77,7 @@ A custom repeater controller for the Retevis RT97L repeater, built in C11 for Ra
   - [mod_logger — Event Logger](#mod_logger--event-logger)
   - [mod_pocsag — POCSAG Paging](#mod_pocsag--pocsag-paging)
   - [mod_flex — FLEX Paging](#mod_flex--flex-paging)
+  - [mod_link — Repeater Linking](#mod_link--repeater-linking)
   - [mod_aprs — APRS Position/Telemetry](#mod_aprs--aprs-positiontelemetry)
 - [General Config](#general-config)
 - [Audio Config](#audio-config)
@@ -242,6 +243,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_pocsag     POCSAG paging encoder                    │ │
 │  │  mod_flex       FLEX paging encoder                      │ │
 │  │  mod_aprs       APRS position reporting/telemetry        │ │
+│  │  mod_link       Bridge to kerchunk-reflectd network      │ │
 │  └──────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────┘
 ```
@@ -622,6 +624,7 @@ kerchunk> sim tx sounds/test.wav   # Queue a WAV file
 | `*0#` | AutoPatch hangup | mod_freeswitch |
 | `*99#` | Arm AI voice assistant for next TX | mod_ai |
 | `*990#` | Stop AI: cancel arm and clear this caller's conversation | mod_ai |
+| `*73<n>#` | Switch link talkgroup (e.g. `*731#` → TG 1) | mod_link |
 
 > **Note:** APRS beacon and status (`aprs beacon` / `aprs status`) are CLI-only commands; there is no dialable DTMF pattern for them.
 >
@@ -1125,6 +1128,42 @@ Encodes and transmits FLEX paging messages via the repeater's TX audio path. Sup
 > **Experimental:** FLEX encoding and transmission work but have not been extensively tested over the air. Use with caution.
 
 Config section: `[flex]`. CLI: `flex send <capcode> <message>`, `flex numeric <capcode> <digits>`, `flex tone <capcode>`, `flex status`.
+
+### mod_link — Repeater Linking
+
+Bridges this repeater to a central reflector (`kerchunk-reflectd`,
+shipped as a separate deb) so transmissions on one site are heard on
+every other site sharing a talkgroup. Per-session HMAC-SHA256 auth over
+TLS-WebSocket, audio carried as Opus 24 kHz / 32 kbps with FEC over
+SRTP/UDP. Reflector enforces per-talkgroup floor with a 1.5 s lease;
+the loser of a contest gets `floor_denied` (rate-limited 1/500 ms).
+Reconnect uses exponential backoff with ±20 % jitter and `permanent`
+codes (`bad_key`, `unknown_node`, `banned`, `version_mismatch`) move
+the module to `state:"stopped"` until an operator runs `link reconnect`
+or `link clear-alarm`.
+
+DTMF `*73<n>#` switches talkgroup at runtime. Dashboard tab at
+`/admin/link.html` shows live state, current talker, and counters via
+SSE. CLI: `link status / tg <n> / reconnect / clear-alarm`.
+
+Config section: `[link]`. Requires the reflector to be configured with
+a matching `[node.<id>]` block + a 32-byte preshared key. See
+`PLAN-LINK.md` for the full architecture and `USAGE.md` for an
+end-to-end setup walkthrough.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | on/off | `off` | Enable mod_link |
+| `reflector_ws` | URL | — | `wss://host:port/link` (or `ws://`) |
+| `node_id` | string | — | Must match a `[node.<id>]` on the reflector |
+| `preshared_key_hex` | 64 hex | — | 32-byte key from `openssl rand -hex 32` |
+| `default_tg` | int | reflector default | Talkgroup to land on after login |
+| `verify_peer` | on/off | `off` | TLS peer cert verification |
+| `link_tail_ms` | ms | `500` | PTT hold after last received frame |
+| `opus_bitrate` | bps | `32000` | Opus encoder bitrate |
+| `opus_loss_perc` | int | `10` | Expected loss %, drives FEC strength |
+| `reconnect_min_ms` | ms | `1000` | Initial reconnect backoff |
+| `reconnect_max_ms` | ms | `60000` | Cap on reconnect backoff |
 
 ### mod_aprs — APRS Position/Telemetry
 

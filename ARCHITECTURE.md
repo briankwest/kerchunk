@@ -755,13 +755,89 @@ operational signal.
 
 ---
 
+## Repeater Linking (mod_link + kerchunk-reflectd)
+
+Optional feature that bridges multiple kerchunk repeaters into a shared
+audio network. A **central reflector** (separate `kerchunk-reflectd`
+daemon, separate deb package) authenticates each repeater and bridges
+SRTP-encrypted Opus audio between members of the same talkgroup. See
+`PLAN-LINK.md` for the full plan, wire protocol, and § 4.6 failure-mode
+acceptance table.
+
+```
+                 ┌─────────────────────┐
+                 │  kerchunk-reflectd  │
+                 │  (separate VM)      │
+                 │  TLS-WS  :8443      │  control plane (login, set_tg,
+                 │  UDP     :7878      │   talker, floor_*, mute, kicked)
+                 │                     │  audio plane (SRTP / Opus)
+                 │  per-TG floor +     │
+                 │  per-node SRTP keys │
+                 └──────────┬──────────┘
+                            │
+            ┌───────────────┴────────────────┐
+       ┌────┴─────┐                    ┌─────┴─────┐
+       │ kerchunkd│                    │ kerchunkd │
+       │ mod_link │                    │ mod_link  │
+       └────┬─────┘                    └─────┬─────┘
+            │                                │
+        FM radio                         FM radio
+```
+
+**Control plane (TLS-WebSocket):** `hello` → HMAC-SHA256 challenge auth
+→ `login_ok` carrying a fresh per-session SRTP master key + salt + SSRCs
++ RTP endpoint. Subsequent messages: `ping`/`pong` keepalive (15 s
+default), `set_tg` / `tg_ok` / `tg_denied`, `talker`,
+`floor_denied` / `floor_revoked`, `mute` / `unmute`, `kicked`,
+`reflector_shutdown`.
+
+**Audio plane (SRTP/RTP/UDP):** Opus 24 kHz mono / 60 ms frames /
+32 kbps with inband FEC, RTP timestamps at 48 kHz per RFC 7587, SRTP
+profile `AES_CM_128_HMAC_SHA1_80`. The reflector decrypts each incoming
+packet with the sender's session key, rewrites SSRC to the recipient's
+`reflector_ssrc`, re-encrypts with the recipient's session key, and
+forwards. Never echoes back to the sender. Floor enforcement on the
+audio path: every authenticated RTP packet calls `floor_try_grant` for
+the sender; losers' packets are dropped and `floor_denied` is returned
+at most once per 500 ms per sender.
+
+A separate **PT=99 marker packet** is sent on connect (and every 10 s
+as NAT keepalive). The reflector authenticates it via SRTP, learns the
+sender's UDP source addr, and skips both floor logic and fan-out. This
+gives recv-only nodes a return path without grabbing the floor.
+
+**mod_link threading:** one background pthread owns the WS, UDP socket,
+Opus codecs, SRTP contexts, jitter buffer, and the reconnect/backoff
+state machine. The audio_tap callback (which fires on the audio thread)
+only writes raw 48 kHz int16 frames into a single-producer-single-
+consumer ring; the bg thread drains it. Decoded reflector audio is fed
+to the local playback path via the pthread-safe
+`kerchunk_queue_add_buffer_src`.
+
+**Reconnect / backoff:** exponential 2× starting at `reconnect_min_ms`,
+capped at `reconnect_max_ms`, ±20 % jitter. **Permanent codes**
+(`bad_key`, `unknown_node`, `banned`, `version_mismatch`) move
+mod_link to `state:"stopped"` until an operator runs `link reconnect`
+or `link clear-alarm`. `reflector_shutdown(restart_in_s)` overrides the
+schedule for one cycle so 100 nodes don't reconnect in lockstep.
+
+**Operator surfaces:** `/admin/link.html` (state badge, current talker,
+counters via SSE), DTMF `*73<n>#` (TG switch), CLI
+`link status / tg / reconnect / clear-alarm`.
+
+---
+
 ## Build Artifacts
 
 ```
   kerchunkd           Daemon binary (links libplcode.a + PortAudio + ALSA)
   kerchunk            CLI binary (connects via Unix socket)
-  modules/*.so        31 dynamically loaded modules
+  kerchunk-diag       Audio diagnostic tool
+  kerchunk-reflectd   Repeater linking reflector daemon (separate package)
+  kerchunk-link-probe Link protocol smoke-tester (separate package)
+  modules/*.so        32 dynamically loaded modules (incl. mod_link)
   test_kerchunk       Test binary (318 tests)
+  test_link.sh        Reflectd / probe integration suite (17 sub-cases)
   libplcode           External dependency (CTCSS/DCS/DTMF/CW ID codec library)
   sounds/             WAV files: any sample rate (auto-resampled at load time)
   └── cache/tts/      TTS response cache (hash-keyed WAV files)

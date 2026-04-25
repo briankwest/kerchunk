@@ -144,6 +144,7 @@ Here is the complete list of DTMF commands:
 | `*0#` | AutoPatch -- hang up current call |
 | `*99#` | Arm AI voice assistant for your next transmission (no wake phrase needed on that one TX) |
 | `*990#` | Stop AI -- cancel a pending `*99#` arm and clear your active conversation so the next question needs the wake phrase again |
+| `*73`_n_`#` | Switch link talkgroup (e.g., `*731#` joins TG 1). Only works if `mod_link` is enabled and the operator has authorized your repeater for that TG on the reflector. |
 
 ### Weather and Time
 
@@ -1317,3 +1318,89 @@ sudo systemctl daemon-reload
 sudo systemctl enable kerchunkd
 sudo systemctl start kerchunkd
 ```
+
+### Repeater Linking (mod_link + kerchunk-reflectd)
+
+mod_link bridges your repeater to a central reflector
+(`kerchunk-reflectd`) so transmissions on one site are heard on every
+other site sharing a talkgroup. Audio is encoded as Opus
+(24 kHz mono, 32 kbps with FEC) and carried over SRTP/UDP. Auth is per-
+session HMAC-SHA256 with a preshared key.
+
+See `PLAN-LINK.md` for the full architecture, wire protocol, and § 4.6
+failure-mode acceptance table.
+
+#### Step 1: install the reflector
+
+The reflector is a separate package — install it on a small VM that
+both repeaters can reach:
+
+```bash
+sudo dpkg -i kerchunk-reflectd_<version>_arm64.deb
+```
+
+The first install drops `/etc/kerchunk-reflectd/reflectd.conf` from the
+shipped example. Edit it:
+
+- `listen_url` — `wss://your.host:8443/link` (TLS) or `ws://...`
+- `tls_cert` + `tls_key` — usually a Let's Encrypt fullchain/privkey
+- `rtp_port` — UDP port for the audio plane (default 7878)
+- `rtp_advertise_host` — what gets sent to clients in `login_ok`;
+  must be reachable from each repeater (your public hostname)
+- A `[node.<id>]` block per repeater with a `preshared_key_hex`
+  (generate with `openssl rand -hex 32`)
+- A `[talkgroup.<n>]` block listing which nodes participate
+
+Forward the WS port and the RTP UDP port at your router, then:
+
+```bash
+sudo systemctl enable --now kerchunk-reflectd
+journalctl -u kerchunk-reflectd -f
+```
+
+#### Step 2: enable mod_link on each repeater
+
+Add to `/etc/kerchunk/kerchunk.conf`:
+
+```ini
+[modules]
+load = …existing modules…,mod_link
+
+[link]
+enabled            = on
+reflector_ws       = wss://reflector.example.com:8443/link
+node_id            = WK7ABC-1     ; must match a [node.<id>] on the reflector
+preshared_key_hex  = <64 hex chars matching the reflectd config>
+default_tg         = 4123
+verify_peer        = on            ; set off if your cert chain is incomplete
+link_tail_ms       = 500
+opus_bitrate       = 32000
+opus_loss_perc     = 10
+reconnect_min_ms   = 1000
+reconnect_max_ms   = 60000
+```
+
+Restart and watch:
+
+```bash
+sudo systemctl restart kerchunkd
+journalctl -u kerchunkd -f | grep '\[link'
+```
+
+You should see `connected to wss://… as <node_id> on TG <n>`.
+
+#### Step 3: verify on the dashboard
+
+The dashboard's **Link** tab (`/admin/link.html`) shows the live state
+badge, current talker, and counters. Counters refresh every 5 seconds
+via SSE. You can switch talkgroups and force a reconnect from the same
+page. Operators on the radio side can switch TGs with `*73<n>#`.
+
+#### CLI commands
+
+| Command | What it does |
+|---------|--------------|
+| `link status` | Print the current snapshot (state, TG, counters) |
+| `link tg <n>` | Request a talkgroup switch |
+| `link reconnect` | Drop and reconnect |
+| `link clear-alarm` | Clear a permanent-error stop (`bad_key`, `banned`, etc.) |
