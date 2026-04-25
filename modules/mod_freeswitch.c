@@ -15,6 +15,7 @@
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
 #include "kerchunk_queue.h"
+#include "kerchunk_wav.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -132,6 +133,15 @@ static int  g_esl_backoff_ticks     = 0;  /* countdown ticks until next attempt 
 /* UDP audio sockets */
 static int  g_udp_rx_fd           = -1;   /* receive phone audio */
 static int  g_udp_tx_fd           = -1;   /* send radio audio to phone */
+
+/* Streaming resamplers, created at call_setup_audio, destroyed at
+ * call_teardown. State persists across 20ms frames so the anti-alias
+ * / anti-image LPF doesn't restart at every boundary. Forward-declared
+ * here so both audio taps (radio_audio_tap, playback_audio_tap) can
+ * reference them; full type comes from kerchunk_wav.h. */
+static kerchunk_resampler_t *g_rs_phone_to_radio;  /* 8k → pipeline rate */
+static kerchunk_resampler_t *g_rs_radio_to_phone;  /* pipeline → 8k (RX tap) */
+static kerchunk_resampler_t *g_rs_play_to_phone;   /* pipeline → 8k (TX tap) */
 static struct sockaddr_in g_fs_udp_addr;
 static socklen_t g_fs_udp_addrlen = sizeof(struct sockaddr_in);
 
@@ -722,15 +732,15 @@ static void playback_audio_tap(const kerchevt_t *evt, void *ud)
         return;
 
     int src_rate = g_core->sample_rate;
-    if (src_rate > 8000) {
-        int ratio = src_rate / 8000;
-        size_t out_n = evt->audio.n / (size_t)ratio;
-        int16_t ds[960];
-        if (out_n > sizeof(ds)/sizeof(ds[0])) out_n = sizeof(ds)/sizeof(ds[0]);
-        for (size_t i = 0; i < out_n; i++)
-            ds[i] = evt->audio.samples[i * ratio];
-        sendto(g_udp_tx_fd, ds, out_n * sizeof(int16_t), MSG_DONTWAIT,
-               (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
+    if (src_rate > 8000 && g_rs_play_to_phone) {
+        int16_t ds[256];  /* 960 / 6 = 160 typical */
+        size_t out_n = kerchunk_resampler_process(g_rs_play_to_phone,
+                                                   evt->audio.samples,
+                                                   evt->audio.n,
+                                                   ds, sizeof(ds)/sizeof(ds[0]));
+        if (out_n > 0)
+            sendto(g_udp_tx_fd, ds, out_n * sizeof(int16_t), MSG_DONTWAIT,
+                   (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
     } else {
         sendto(g_udp_tx_fd, evt->audio.samples,
                evt->audio.n * sizeof(int16_t), MSG_DONTWAIT,
@@ -748,15 +758,19 @@ static void radio_audio_tap(const kerchevt_t *evt, void *ud)
     if (!g_call_active || !g_cor_active || g_udp_tx_fd < 0)
         return;
 
-    /* Downsample from pipeline rate (48kHz) to FS rate (8kHz SLIN) */
+    /* Downsample from pipeline rate (48kHz) to FS rate (8kHz SLIN)
+     * via the streaming resampler so the anti-alias LPF state
+     * persists across frames. Replaces the previous naive
+     * decimation (every-Nth-sample) which folded everything above
+     * 4kHz back into the audible band — heard as muddy/aliased
+     * audio at the phone caller. */
     int src_rate = g_core->sample_rate;
-    if (src_rate > 8000) {
-        int ratio = src_rate / 8000;
-        size_t out_n = evt->audio.n / (size_t)ratio;
-        int16_t ds[960]; /* max 48000/50 / 6 = 160 */
-        if (out_n > sizeof(ds)/sizeof(ds[0])) out_n = sizeof(ds)/sizeof(ds[0]);
-        for (size_t i = 0; i < out_n; i++)
-            ds[i] = evt->audio.samples[i * ratio];
+    if (src_rate > 8000 && g_rs_radio_to_phone) {
+        int16_t ds[256];
+        size_t out_n = kerchunk_resampler_process(g_rs_radio_to_phone,
+                                                   evt->audio.samples,
+                                                   evt->audio.n,
+                                                   ds, sizeof(ds)/sizeof(ds[0]));
         ssize_t sent = sendto(g_udp_tx_fd, ds, out_n * sizeof(int16_t), MSG_DONTWAIT,
                (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
         g_tx_pkt_count++;
@@ -1021,6 +1035,19 @@ static void call_setup_audio(void)
         return;
     }
 
+    /* Spin up the resamplers used by both audio paths. State carries
+     * across 20ms frames so the anti-alias / anti-image LPF doesn't
+     * restart at every frame. */
+    int sr = g_core->sample_rate;
+    if (sr > 8000) {
+        if (g_rs_phone_to_radio) kerchunk_resampler_destroy(g_rs_phone_to_radio);
+        if (g_rs_radio_to_phone) kerchunk_resampler_destroy(g_rs_radio_to_phone);
+        if (g_rs_play_to_phone)  kerchunk_resampler_destroy(g_rs_play_to_phone);
+        g_rs_phone_to_radio = kerchunk_resampler_create(8000, sr);
+        g_rs_radio_to_phone = kerchunk_resampler_create(sr, 8000);
+        g_rs_play_to_phone  = kerchunk_resampler_create(sr, 8000);
+    }
+
     /* Tell FreeSWITCH to send/receive audio via UDP unicast.
      * Uses ESL sendmsg with call-command: unicast (same protocol as socket2me).
      * Without "flags: native", FS sends SLIN (signed linear 16-bit) at 8kHz.
@@ -1130,6 +1157,11 @@ static void call_teardown(void)
     jitter_buf_reset(&g_jitter);
     vad_reset();
 
+    /* Tear down per-call resamplers — fresh state on next call. */
+    if (g_rs_phone_to_radio) { kerchunk_resampler_destroy(g_rs_phone_to_radio); g_rs_phone_to_radio = NULL; }
+    if (g_rs_radio_to_phone) { kerchunk_resampler_destroy(g_rs_radio_to_phone); g_rs_radio_to_phone = NULL; }
+    if (g_rs_play_to_phone)  { kerchunk_resampler_destroy(g_rs_play_to_phone);  g_rs_play_to_phone  = NULL; }
+
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "call teardown complete");
     publish_freeswitch_snapshot();
 
@@ -1229,6 +1261,9 @@ static int16_t g_preroll[PREROLL_FRAMES][VAD_FRAME_SAMPLES];
 static int     g_preroll_w;       /* next slot to write (mod size) */
 static int     g_preroll_count;   /* live frames, 0..PREROLL_FRAMES */
 
+/* Resamplers themselves are declared up at the top of the module
+ * (near g_udp_tx_fd) so both audio taps can reach them. */
+
 /* Apply g_phone_gain in-place with saturation. */
 static inline void phone_gain_apply(int16_t *buf, size_t n)
 {
@@ -1242,7 +1277,9 @@ static inline void phone_gain_apply(int16_t *buf, size_t n)
 }
 
 /* Upsample one 8kHz frame to the pipeline rate, apply gain, queue
- * at PRI_ELEVATED with the "phone" source tag. */
+ * at PRI_ELEVATED with the "phone" source tag. Uses the streaming
+ * resampler so the anti-image LPF state carries across frames —
+ * no boundary clicks, properly suppressed images. */
 static void queue_phone_frame(const int16_t *frame_in)
 {
     int16_t frame[VAD_FRAME_SAMPLES];
@@ -1250,24 +1287,14 @@ static void queue_phone_frame(const int16_t *frame_in)
     phone_gain_apply(frame, VAD_FRAME_SAMPLES);
 
     int dst_rate = g_core->sample_rate;
-    if (dst_rate > 8000) {
-        int ratio = dst_rate / 8000;
-        size_t out_n = VAD_FRAME_SAMPLES * (size_t)ratio;
-        int16_t us[960]; /* max 160 * 6 = 960 */
-        if (out_n > sizeof(us)/sizeof(us[0])) out_n = sizeof(us)/sizeof(us[0]);
-        for (size_t i = 0; i < out_n; i++) {
-            size_t src_idx = i / (size_t)ratio;
-            size_t frac = i % (size_t)ratio;
-            if (src_idx + 1 < VAD_FRAME_SAMPLES) {
-                int32_t a = frame[src_idx];
-                int32_t b = frame[src_idx + 1];
-                us[i] = (int16_t)(a + (b - a) * (int32_t)frac / ratio);
-            } else {
-                us[i] = frame[VAD_FRAME_SAMPLES - 1];
-            }
-        }
-        kerchunk_queue_add_buffer_src(us, out_n,
-                                      KERCHUNK_PRI_ELEVATED, 0, "phone");
+    if (dst_rate > 8000 && g_rs_phone_to_radio) {
+        int16_t us[1024]; /* roomy: 160 × (max ratio 6) = 960 */
+        size_t out_n = kerchunk_resampler_process(g_rs_phone_to_radio,
+                                                   frame, VAD_FRAME_SAMPLES,
+                                                   us, sizeof(us)/sizeof(us[0]));
+        if (out_n > 0)
+            kerchunk_queue_add_buffer_src(us, out_n,
+                                          KERCHUNK_PRI_ELEVATED, 0, "phone");
     } else {
         kerchunk_queue_add_buffer_src(frame, VAD_FRAME_SAMPLES,
                                       KERCHUNK_PRI_ELEVATED, 0, "phone");
