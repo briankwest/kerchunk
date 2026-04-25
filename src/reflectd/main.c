@@ -1455,6 +1455,41 @@ static void admin_node_delete(struct mg_connection *c, struct mg_http_message *h
                   "{\"ok\":true,\"id\":\"%s\"}", id);
 }
 
+/* Rewrite [node.<id>] preserving PSK / default_tg / banned, but with
+ * `add_tg` appended to allowed_tgs (no-op if already present). Used
+ * when admin_tg_save grants a node membership: rcfg_node_allowed_on_tg
+ * requires BOTH lists to agree, so we keep the node side in sync or
+ * the editor would silently produce "not authorized" denials. */
+static int extend_node_allowed_tgs(int node_idx, uint16_t add_tg)
+{
+    rcfg_node_t *n = &g_cfg.nodes[node_idx];
+    for (int i = 0; i < n->n_allowed_tgs; i++)
+        if (n->allowed_tgs[i] == add_tg) return 0;
+
+    char tgs[256];
+    int  off = 0;
+    for (int i = 0; i < n->n_allowed_tgs; i++)
+        off += snprintf(tgs + off, sizeof(tgs) - off, "%s%u",
+                        i ? ", " : "", n->allowed_tgs[i]);
+    snprintf(tgs + off, sizeof(tgs) - off, "%s%u",
+             n->n_allowed_tgs ? ", " : "", add_tg);
+
+    char psk_hex[2 * KERCHUNK_LINK_PSK_BYTES + 1];
+    for (int i = 0; i < KERCHUNK_LINK_PSK_BYTES; i++)
+        snprintf(psk_hex + i * 2, 3, "%02x", n->psk[i]);
+
+    char section[80], body[1024];
+    snprintf(section, sizeof(section), "node.%s", n->id);
+    snprintf(body, sizeof(body),
+        "preshared_key_hex = %s\n"
+        "allowed_tgs       = %s\n"
+        "default_tg        = %u\n"
+        "%s",
+        psk_hex, tgs, n->default_tg,
+        n->banned ? "banned            = 1\n" : "");
+    return kerchunk_ini_replace_section(g_cfg_path, section, body);
+}
+
 /* POST /api/admin/talkgroup — create/update [talkgroup.N]. Body:
  *   {tg, name, nodes:["WK7ABC-1", ...]} */
 static void admin_tg_save(struct mg_connection *c, struct mg_http_message *hm)
@@ -1491,6 +1526,24 @@ static void admin_tg_save(struct mg_connection *c, struct mg_http_message *hm)
     if (kerchunk_ini_replace_section(g_cfg_path, section, body) != 0)
         { mg_http_reply(c, 500, "", "{\"error\":\"ini write failed: %s\"}", strerror(errno)); free(name); return; }
     log_msg("admin: saved [%s]", section);
+
+    /* Walk the members again; for each, ensure its [node.<id>]
+     * allowed_tgs includes this TG. */
+    size_t ofs = 0;
+    struct mg_str key, val;
+    while ((ofs = mg_json_next(ns, ofs, &key, &val)) > 0) {
+        if (val.len < 2 || val.buf[0] != '"') continue;
+        char id[RCFG_MAX_NODE_ID];
+        if ((size_t)val.len - 2 >= sizeof(id)) continue;
+        memcpy(id, val.buf + 1, val.len - 2);
+        id[val.len - 2] = '\0';
+        int idx = rcfg_node_idx(&g_cfg, id);
+        if (idx < 0) continue;
+        if (extend_node_allowed_tgs(idx, (uint16_t)tg) != 0)
+            log_msg("warn: failed to extend allowed_tgs on node %s for tg %ld",
+                    id, tg);
+    }
+
     g_reload = 1;
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"tg\":%ld}", tg);
