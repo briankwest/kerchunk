@@ -76,8 +76,11 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
   <h2>Reflector</h2>
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <span id="meta">—</span>
+    <button class="btn" onclick="reloadConfig()" title="Re-read reflectd.conf, push tg_membership_changed, reload TLS material">Reload config</button>
+    <button class="btn btn-warn" onclick="pruneNow()" title="Run recordings_prune() now (instead of waiting for the hourly tick)">Prune recordings now</button>
     <span style="margin-left:auto" class="status" id="status"><span class="live"></span>connecting…</span>
   </div>
+  <div class="status" id="meta2" style="margin-top:6px"></div>
 </div>
 
 <div class="card">
@@ -135,10 +138,25 @@ function fmtTalk(s) {
     return `${m}m ${sec}s`;
 }
 
+function fmtRelative(epochSec, nowSec) {
+    if (!epochSec) return 'never';
+    const ago = Math.max(0, nowSec - epochSec);
+    if (ago < 60)    return ago + 's ago';
+    if (ago < 3600)  return Math.floor(ago / 60) + 'm ago';
+    if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
+    return Math.floor(ago / 86400) + 'd ago';
+}
+
 function render(d) {
     $('meta').innerHTML =
         `<b>${d.reflector}</b> &middot; keepalive ${d.keepalive_s}s &middot; ` +
-        `hangtime ${d.hangtime_ms}ms`;
+        `hangtime ${d.hangtime_ms}ms &middot; recording ` +
+        (d.recording_enabled ? '<span style="color:var(--green)">on</span>'
+                             : '<span style="color:var(--dim)">off</span>');
+    $('meta2').textContent =
+        `up ${fmtRelative(d.started_at, d.now)} · ` +
+        `last reload ${fmtRelative(d.last_reload_at, d.now)} ` +
+        `(${d.reload_count || 0}× since boot)`;
     setStatus(`<span class="live"></span>live (${new Date(d.now*1000).toLocaleTimeString()})`);
 
     $('nodes').innerHTML = (d.nodes || []).map(n => {
@@ -203,6 +221,23 @@ async function release(tg) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ tg })
     });
+}
+
+async function reloadConfig() {
+    const r = await fetch('/api/admin/reload', {
+        method: 'POST', credentials: 'same-origin'
+    });
+    setStatus(r.ok ? `<span class="live"></span>config reload queued`
+                   : `<span class="live" style="background:var(--red)"></span>${r.statusText}`);
+}
+
+async function pruneNow() {
+    const r = await fetch('/api/admin/prune-now', {
+        method: 'POST', credentials: 'same-origin'
+    });
+    if (!r.ok) { setStatus('prune failed: ' + r.statusText); return; }
+    const j = await r.json();
+    setStatus(`<span class="live"></span>pruned ${j.removed} item(s)`);
 }
 
 /* SSE-driven — reflectd pushes a fresh state snapshot on every change

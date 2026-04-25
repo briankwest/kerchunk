@@ -98,6 +98,12 @@ static int version_at_least(const char *client_ver, const char *min_ver)
 
 static int g_udp_fd = -1;
 
+/* Tracking for the dashboard: when did config last reload, and how
+ * many times has it reloaded since startup. Both surface in /api/state. */
+static int64_t g_started_at;
+static int64_t g_last_reload_at;
+static int     g_reload_count;
+
 /* Per-talkgroup runtime state (parallel to g_cfg.tgs[]). */
 typedef struct {
     int            talker_node_idx;  /* -1 if idle */
@@ -842,8 +848,11 @@ static char *build_state_json(size_t *out_len)
     if (!body) { if (out_len) *out_len = 0; return NULL; }
     int    off = snprintf(body, cap,
         "{\"reflector\":\"reflectd\",\"keepalive_s\":%d,\"hangtime_ms\":%d,"
-        "\"now\":%ld,\"nodes\":[",
-        g_cfg.keepalive_s, g_cfg.hangtime_ms, (long)time(NULL));
+        "\"now\":%ld,\"started_at\":%ld,\"last_reload_at\":%ld,"
+        "\"reload_count\":%d,\"recording_enabled\":%s,\"nodes\":[",
+        g_cfg.keepalive_s, g_cfg.hangtime_ms, (long)time(NULL),
+        (long)g_started_at, (long)g_last_reload_at, g_reload_count,
+        g_cfg.recording_enabled ? "true" : "false");
     int first = 1;
     int64_t mono_now = now_ms();
     for (int i = 0; i < g_cfg.n_nodes; i++) {
@@ -1186,11 +1195,114 @@ static void api_recording(struct mg_connection *c, struct mg_http_message *hm)
  * and emit tg_membership_changed for any node that moved. */
 static volatile sig_atomic_t g_reload = 0;
 
+/* Forward decl — body is alongside the other helpers further down. */
+static char *slurp(const char *path);
+
 static void admin_reload(struct mg_connection *c)
 {
     g_reload = 1;
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"action\":\"reload_queued\"}");
+}
+
+/* POST /api/admin/prune-now — fire recordings_prune() immediately
+ * (instead of waiting for the next hourly tick). */
+static void admin_prune_now(struct mg_connection *c)
+{
+    int n = recordings_prune();
+    log_msg("admin: manual prune removed %d item(s)", n);
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"removed\":%d}", n);
+}
+
+/* DELETE /api/recording?path=YYYY-MM-DD/...wav — remove a single WAV
+ * (sandboxed under recording_dir). The corresponding CDR row in the
+ * day's CSV is left in place — it's a historical record, not a media-
+ * control surface. */
+static void admin_recording_delete(struct mg_connection *c,
+                                    struct mg_http_message *hm)
+{
+    char rel[256];
+    if (mg_http_get_var(&hm->query, "path", rel, sizeof(rel)) <= 0) {
+        mg_http_reply(c, 400, "", "{\"error\":\"missing path\"}");
+        return;
+    }
+    char dir_real[PATH_MAX];
+    if (!realpath(recordings_dir(), dir_real)) {
+        mg_http_reply(c, 500, "", "{\"error\":\"recordings_dir unresolved\"}");
+        return;
+    }
+    char cand[PATH_MAX];
+    snprintf(cand, sizeof(cand), "%s/%s", dir_real, rel);
+    char real[PATH_MAX];
+    if (!realpath(cand, real)) {
+        mg_http_reply(c, 404, "", "{\"error\":\"not found\"}");
+        return;
+    }
+    size_t dl = strlen(dir_real);
+    if (strncmp(real, dir_real, dl) != 0 || real[dl] != '/') {
+        mg_http_reply(c, 403, "", "{\"error\":\"path outside recordings_dir\"}");
+        return;
+    }
+    size_t rl = strlen(real);
+    if (rl < 4 || strcmp(real + rl - 4, ".wav") != 0) {
+        mg_http_reply(c, 400, "", "{\"error\":\".wav only\"}");
+        return;
+    }
+    if (unlink(real) != 0) {
+        mg_http_reply(c, 500, "", "{\"error\":\"unlink failed: %s\"}",
+                      strerror(errno));
+        return;
+    }
+    log_msg("admin: deleted recording %s", rel);
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"deleted\":\"%s\"}", rel);
+}
+
+/* DELETE /api/recordings?date=YYYY-MM-DD — remove a whole day's WAVs
+ * + the day CSV. */
+static void admin_recordings_delete_day(struct mg_connection *c,
+                                         struct mg_http_message *hm)
+{
+    char date[16];
+    if (mg_http_get_var(&hm->query, "date", date, sizeof(date)) <= 0) {
+        mg_http_reply(c, 400, "", "{\"error\":\"missing date\"}");
+        return;
+    }
+    if (!valid_date_str(date)) {
+        mg_http_reply(c, 400, "", "{\"error\":\"bad date\"}");
+        return;
+    }
+    char dir[300], csv[300];
+    snprintf(dir, sizeof(dir), "%s/%s",     recordings_dir(), date);
+    snprintf(csv, sizeof(csv), "%s/%s.csv", recordings_dir(), date);
+    char dir_real[PATH_MAX], target_real[PATH_MAX];
+    if (!realpath(recordings_dir(), dir_real)) {
+        mg_http_reply(c, 500, "", "{\"error\":\"recordings_dir unresolved\"}");
+        return;
+    }
+    int removed = 0;
+    if (realpath(dir, target_real)) {
+        size_t dl = strlen(dir_real);
+        if (strncmp(target_real, dir_real, dl) == 0 && target_real[dl] == '/') {
+            DIR *d = opendir(target_real);
+            if (d) {
+                struct dirent *e;
+                char child[512];
+                while ((e = readdir(d)) != NULL) {
+                    if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+                    snprintf(child, sizeof(child), "%s/%s", target_real, e->d_name);
+                    if (unlink(child) == 0) removed++;
+                }
+                closedir(d);
+                rmdir(target_real);
+            }
+        }
+    }
+    if (unlink(csv) == 0) removed++;
+    log_msg("admin: deleted recordings for %s (%d items)", date, removed);
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                  "{\"ok\":true,\"date\":\"%s\",\"removed\":%d}", date, removed);
 }
 
 static void route_admin(struct mg_connection *c, struct mg_http_message *hm)
@@ -1217,6 +1329,21 @@ static void route_admin(struct mg_connection *c, struct mg_http_message *hm)
     if (mg_match(hm->uri, mg_str("/api/recording"), NULL) &&
         mg_match(hm->method, mg_str("GET"), NULL)) {
         api_recording(c, hm);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/recording"), NULL) &&
+        mg_match(hm->method, mg_str("DELETE"), NULL)) {
+        admin_recording_delete(c, hm);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/recordings"), NULL) &&
+        mg_match(hm->method, mg_str("DELETE"), NULL)) {
+        admin_recordings_delete_day(c, hm);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/admin/prune-now"), NULL) &&
+        mg_match(hm->method, mg_str("POST"), NULL)) {
+        admin_prune_now(c);
         return;
     }
     if (!mg_match(hm->method, mg_str("POST"), NULL)) {
@@ -1287,8 +1414,30 @@ static void do_reload(void)
     }
 
     g_cfg = newcfg;
+    g_last_reload_at = time(NULL);
+    g_reload_count++;
+
+    /* Re-slurp the TLS material so a certbot renewal lands without a
+     * daemon restart. New connections after this point use the new
+     * cert; existing TLS sessions stay on the cert they handshook with
+     * (mongoose stores the cert per-conn at mg_tls_init). */
+    if (g_cfg.tls_cert[0]) {
+        char *new_cert = slurp(g_cfg.tls_cert);
+        char *new_key  = slurp(g_cfg.tls_key);
+        if (new_cert && new_key) {
+            free(g_tls_cert_pem); g_tls_cert_pem = new_cert;
+            free(g_tls_key_pem);  g_tls_key_pem  = new_key;
+            log_msg("TLS material re-slurped from %s + %s",
+                    g_cfg.tls_cert, g_cfg.tls_key);
+        } else {
+            free(new_cert); free(new_key);
+            log_msg("WARN: tls_cert/tls_key re-read failed — keeping prior copy");
+        }
+    }
+
     log_msg("config reloaded: %d node(s), %d talkgroup(s)",
             g_cfg.n_nodes, g_cfg.n_tgs);
+    sse_broadcast_state();
 }
 
 /* ── Mongoose event handler ───────────────────────────────────────── */
@@ -1669,6 +1818,7 @@ int main(int argc, char **argv)
     }
 
     g_cfg_path = cfg_path;
+    g_started_at = time(NULL);
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
     signal(SIGHUP,  on_signal);

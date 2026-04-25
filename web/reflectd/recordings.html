@@ -118,6 +118,8 @@ tr.player-row td {
     <label for="date">Date</label>
     <select id="date"></select>
     <button class="btn" onclick="reload()">Refresh</button>
+    <button class="btn" onclick="deleteDay()" title="Remove every WAV + the CSV for the selected day"
+            style="border-color:var(--red);color:var(--red)">Delete day</button>
     <span id="count" class="status" style="margin-left:auto"></span>
   </div>
   <table>
@@ -298,10 +300,37 @@ async function reload() {
               <td>
                 <a class="btn btn-sm" download
                    href="${recordingURL(r.recording)}" title="Download .wav">↓</a>
+                <button class="btn btn-sm"
+                        onclick="deleteRecording(this, '${escapeHtml(r.recording)}')"
+                        title="Delete this recording"
+                        style="border-color:var(--red);color:var(--red)">×</button>
               </td>
             </tr>`;
         }).join('');
     setStatus('refreshed ' + new Date().toLocaleTimeString(), 'ok');
+}
+
+async function deleteRecording(btn, path) {
+    if (!confirm('Delete this recording?\n' + path)) return;
+    const r = await fetch('/api/recording?path=' + encodeURIComponent(path),
+                          { method: 'DELETE', credentials: 'same-origin' });
+    if (!r.ok) { setStatus('delete failed: ' + r.statusText, 'err'); return; }
+    closePlayer();
+    btn.closest('tr').remove();
+    setStatus('deleted ' + path, 'ok');
+}
+
+async function deleteDay() {
+    const date = $('date').value;
+    if (!date) return;
+    if (!confirm(`Delete EVERY recording on ${date} plus the day's CSV?`)) return;
+    const r = await fetch('/api/recordings?date=' + encodeURIComponent(date),
+                          { method: 'DELETE', credentials: 'same-origin' });
+    if (!r.ok) { setStatus('delete day failed: ' + r.statusText, 'err'); return; }
+    const j = await r.json();
+    setStatus(`deleted ${j.removed} item(s) for ${date}`, 'ok');
+    closePlayer();
+    init();
 }
 
 async function init() {
