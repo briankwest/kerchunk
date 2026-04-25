@@ -5,7 +5,7 @@
  * Header-only. No runtime allocations. Consumed by both the reflector
  * (src/reflectd/) and the local module (modules/mod_link.c).
  *
- * See PLAN-LINK.md § 4.1 for the full message catalog and § 4.1.6 for
+ * See LINK-PROTOCOL.md § 4.1 for the full message catalog and § 4.1.6 for
  * the error-code enum.
  */
 
@@ -43,7 +43,7 @@
  * The reflector recognizes PT 99 and just stores the addr. */
 #define KERCHUNK_LINK_RTP_BOOTSTRAP_PT 99
 
-/* Opus parameters per PLAN-LINK.md § 4.2 + the 24 kHz decision. */
+/* Opus parameters per LINK-PROTOCOL.md § 4.2 + the 24 kHz decision. */
 #define KERCHUNK_LINK_OPUS_SAMPLE_RATE 24000
 #define KERCHUNK_LINK_OPUS_FRAME_MS    60
 #define KERCHUNK_LINK_OPUS_FRAME_SAMPLES \

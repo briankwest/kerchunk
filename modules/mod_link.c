@@ -1,7 +1,7 @@
 /*
  * mod_link.c — bridge to a kerchunk-reflectd network.
  *
- * Phase 5: implements the local end of PLAN-LINK.md. Connects to a
+ * Implements the client side of LINK-PROTOCOL.md. Connects to a
  * configured reflector over WebSocket (TLS optional via wss://), logs
  * in with HMAC-SHA256 over a server-issued challenge, and bridges:
  *
@@ -87,7 +87,7 @@ static int              g_thread_started;
 static struct mg_mgr    g_mgr;
 static struct mg_connection *g_ws;        /* control-plane WS */
 
-/* Connection state machine (PLAN-LINK.md § 6 SSE snapshot enum). */
+/* Connection state machine — feeds the dashboard SSE snapshot. */
 typedef enum {
     LST_DISABLED, LST_CONNECTING, LST_AWAIT_HELLO, LST_AWAIT_LOGIN_OK,
     LST_CONNECTED, LST_RECONNECTING, LST_STOPPED,
@@ -120,7 +120,7 @@ static int g_decode_err;
 
 /* SRTP-drift detection: a sliding 10s window. If we accumulate >1000
  * auth failures in any 10s span, force a reconnect to renegotiate the
- * master key (PLAN-LINK.md § 4.6 row "SRTP auth failures > 1000 / 10s"). */
+ * master key (LINK-PROTOCOL.md § 4.6 row "SRTP auth failures > 1000 / 10s"). */
 static int     g_srtp_window_count;
 static int64_t g_srtp_window_start_ms;
 #define SRTP_DRIFT_WINDOW_MS  10000
@@ -131,14 +131,14 @@ static int64_t g_srtp_window_start_ms;
 #define NAT_KEEPALIVE_MS 10000
 static int64_t g_last_nat_keepalive_ms;
 
-/* Server-driven mute (PLAN-LINK § 4.6). When set, mod_link stops
+/* Server-driven mute (LINK-PROTOCOL.md § 4.6). When set, mod_link stops
  * encoding+sending entirely; control plane stays alive. */
 static volatile int g_muted;
 
 static void send_ws_json(const char *json);   /* fwd decl — defined below */
 
 /* Per-stream RTP-seq tracking for accurate loss-rate calculation
- * (PLAN-LINK § 4.1.4 quality report). Walks the seq, counts gaps. */
+ * (LINK-PROTOCOL.md § 4.1.4 quality report). Walks the seq, counts gaps. */
 static uint16_t g_recv_last_seq;
 static int      g_recv_have_seq;
 static int      g_recv_lost;       /* in current 10s window */
@@ -146,7 +146,7 @@ static int      g_recv_received;   /* in current 10s window */
 static int64_t  g_quality_window_start_ms;
 #define QUALITY_REPORT_MS 10000
 
-/* Adaptive bitrate (PLAN-LINK § 11). Reflector can suggest a target
+/* Adaptive bitrate (LINK-PROTOCOL.md § 4.1.4). Reflector can suggest a target
  * bitrate via the target_bitrate message; we update the encoder. */
 static int g_current_bitrate;
 
@@ -1008,7 +1008,7 @@ static void *bg_main(void *ud)
             publish_snapshot();
             next_snapshot_ms = now + 5000;
         }
-        /* PLAN-LINK § 4.1.4: send a quality report every 10s. */
+        /* LINK-PROTOCOL.md § 4.1.4: send a quality report every 10s. */
         if (now >= next_quality_ms && g_state == LST_CONNECTED) {
             send_quality_report();
             next_quality_ms = now + QUALITY_REPORT_MS;

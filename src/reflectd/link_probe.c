@@ -109,7 +109,7 @@ static struct {
     uint16_t      out_seq;
     uint32_t      out_ts;
 
-    /* Receive-side jitter buffer (PLAN-LINK.md § 4.4) */
+    /* Receive-side jitter buffer (LINK-PROTOCOL.md § 4.4) */
     int           jb_initialized;
     uint16_t      jb_next_seq;
     int64_t       jb_next_play_ms;

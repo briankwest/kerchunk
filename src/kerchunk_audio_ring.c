@@ -2,7 +2,7 @@
  * kerchunk_audio_ring.c — SPSC ring + PA-callback commit.
  *
  * See include/kerchunk_audio_ring.h for the contract. Lifted from
- * src/kerchunk_audio.c in PLAN-AUDIO-TICK.md Phase 1.
+ * src/kerchunk_audio.c.
  */
 
 #include "kerchunk_audio_ring.h"

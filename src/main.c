@@ -995,7 +995,7 @@ typedef struct {
 } audio_thread_ctx_t;
 
 /* Audio-thread-owned state. See include/kerchunk_audio_tick.h for the
- * layout and PLAN-AUDIO-TICK.md Phase 0 for the rationale. Initialised
+ * layout for the rationale. Initialised
  * to zeros at BSS time; relay_drain_ms is set to its config default in
  * configure() before the audio thread starts. */
 static kerchunk_audio_state_t g_audio_state = {
@@ -1025,7 +1025,7 @@ const char *kerchunk_get_tx_state(void)
 
 /* Audio thread.
  *
- * Dependency budget (PLAN-AUDIO-TICK.md Phase 0). All non-pure inputs
+ * Dependency budget. All non-pure inputs
  * and outputs are listed here so future phases can lift this loop into
  * a pure kerchunk_audio_tick() function with a known boundary:
  *
@@ -1186,7 +1186,7 @@ static void *audio_thread_fn(void *arg)
         /* ── RX sub-tick: decoder reset edge, DTMF process + events,
          *    relay drain-start edge, relay decision + early-stop.
          *    Pure function over state; see src/kerchunk_audio_tick.c
-         *    and PLAN-AUDIO-TICK.md §4 Phase 2. */
+         *   . */
         kerchunk_audio_tick_rx_out_t rx_out;
         kerchunk_audio_tick_rx(&g_audio_state,
                                &rx_tick,
@@ -1252,8 +1252,7 @@ static void *audio_thread_fn(void *arg)
          *    QUEUE_COMPLETE at tail start, subscribers may enqueue
          *    during the fire, second pass detects the new items
          *    and cancels the tail, third pass drains the queue.
-         *    See src/kerchunk_audio_tick.c §TX and
-         *    PLAN-AUDIO-TICK.md Phase 3. */
+         *    See src/kerchunk_audio_tick.c §TX. */
         for (int tx_pass = 0; tx_pass < 3; tx_pass++) {
             kerchunk_audio_tick_tx_in_t tx_in = {
                 .relay_active      = kerchunk_core_get()->is_receiving(),
@@ -1349,7 +1348,7 @@ static void *audio_thread_fn(void *arg)
         /* ── TX state FSM ──
          *
          * Pure function over scripted inputs — see
-         * src/kerchunk_tx_state.c and PLAN-STATE-MODEL.md §2.2.
+         * src/kerchunk_tx_state.c (TX state model).
          * On transition: update atomic (for cross-thread reads by
          * the web snapshot builder + /api/status), fire
          * KERCHEVT_TX_STATE_CHANGE, log the transition. */

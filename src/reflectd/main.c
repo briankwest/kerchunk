@@ -51,7 +51,7 @@ typedef struct {
     audio_node_t         *audio;   /* SRTP fan-out state, NULL until login */
     int64_t               last_floor_denied_ms;  /* throttle ws spam */
 
-    /* Sliding window of SRTP auth failures — see PLAN-LINK § 4.6 row
+    /* Sliding window of SRTP auth failures — see LINK-PROTOCOL.md § 4.6 row
      * "SRTP auth failures from a node (server)". */
     int64_t               srtp_window_start_ms;
     int                   srtp_fail_count;
@@ -140,7 +140,7 @@ typedef struct {
     int          waiting_pong;      /* 1 if ping in flight */
 
     /* Sliding window of malformed JSON for kick threshold — see
-     * PLAN-LINK § 4.6 row "Malformed control-plane JSON". */
+     * LINK-PROTOCOL.md § 4.6 row "Malformed control-plane JSON". */
     int64_t      bad_msg_window_start_ms;
     int          bad_msg_count;
 } conn_t;
@@ -781,7 +781,7 @@ static void handle_message(struct mg_connection *c, conn_t *cs,
     } else if (strcmp(type, LINK_MSG_PONG) == 0) {
         /* Already refreshed last_traffic_ms above. */
     } else if (strcmp(type, LINK_MSG_QUALITY) == 0) {
-        /* Sustained loss → mute (PLAN-LINK § 4.6). Also broadcast a
+        /* Sustained loss → mute (LINK-PROTOCOL.md § 4.6). Also broadcast a
          * target_bitrate hint to other senders on the same TG so they
          * back off before the channel collapses. */
         double loss_pct = 0.0;

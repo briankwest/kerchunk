@@ -1,7 +1,7 @@
 /*
  * kerchunk_audio_ring.h — SPSC capture ring + PA-callback commit.
  *
- * Lifted out of src/kerchunk_audio.c in PLAN-AUDIO-TICK.md Phase 1
+ * Lifted out of src/kerchunk_audio.c
  * so the underflow-drop and capture-resample paths can be unit tested
  * without standing up PortAudio.
  *

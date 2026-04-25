@@ -1,7 +1,7 @@
 /*
  * config.c — load reflectd's typed roster from an INI file.
  *
- * Section layout (see PLAN-LINK.md § 5):
+ * Section layout (see LINK-PROTOCOL.md § 5):
  *
  *   [reflector]
  *     listen_url = ws://0.0.0.0:8443

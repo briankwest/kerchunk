@@ -494,18 +494,17 @@ Back-compat: if `[txactivity]` section absent, read legacy
 - libplcode DTMF decoder itself: `tools/decode_dtmf_wav` harness +
   libplcode's own test suite (make check in libplcode).
 
-**Now covered (PLAN-AUDIO-TICK.md, April 2026):**
+**Now covered (audio-tick refactor, April 2026):**
 
 All four items originally listed as uncovered have test coverage
-after the five-phase audio-tick refactor:
+after the audio-tick refactor:
 
 - `paInputUnderflow` drop path — covered by
   `tests/test_audio_ring.c` (8 cases) against the pure
-  `kerchunk_audio_ring_commit()` lifted out of `cap_cb`/`duplex_cb`
-  in Phase 1.
+  `kerchunk_audio_ring_commit()` lifted out of `cap_cb`/`duplex_cb`.
 - DTMF decoder reset-BEFORE-process ordering — covered by
   `tests/test_audio_tick_rx.c` (10 cases) against the pure
-  `kerchunk_audio_tick_rx()` in Phase 2. The headline test
+  `kerchunk_audio_tick_rx()`. The headline test
   "COR-assert edge resets decoder" contaminates the decoder with
   '7' state, simulates a user keying up and pressing '5', and
   asserts the first DIGIT surfaced is '5' — the exact failure

@@ -81,7 +81,7 @@ kerchunk_diag_CFLAGS  = -std=c11 -Wall -O2 \
 kerchunk_diag_LDADD   = $(PORTAUDIO_LIBS) -lm
 
 # --- kerchunk-reflectd + kerchunk-link-probe (Phase 1: protocol skeleton) ---
-# See PLAN-LINK.md. Both binaries link mongoose for I/O and openssl for
+# See LINK-PROTOCOL.md. Both binaries link mongoose for I/O and openssl for
 # HMAC. No SRTP / TLS / Opus yet — those land in subsequent phases.
 
 kerchunk_reflectd_SOURCES = src/reflectd/main.c \

@@ -1,9 +1,9 @@
 /*
  * test_audio_tick_rx.c — Unit tests for kerchunk_audio_tick_rx.
  *
- * Covers the RX sub-tick lifted from audio_thread_fn in Phase 2 of
- * PLAN-AUDIO-TICK.md. The two critical items this test suite covers
- * that previously had no coverage:
+ * Covers the RX sub-tick lifted from audio_thread_fn. The two
+ * critical items this test suite covers that previously had no
+ * coverage:
  *   - decoder reset on COR-assert edge (ARCH-COR-DTMF.md §12 item #4)
  *   - DTMF_DIGIT / DTMF_END edge detection via prev_dtmf
  *

@@ -47,7 +47,7 @@ The audio thread's decisions live in pure functions (no I/O, no globals) so they
 - **`kerchunk_audio_ring_commit()`** (include/kerchunk_audio_ring.h) — lifted from `cap_cb`/`duplex_cb`. Handles `paInputUnderflow` drop + capture resample.
 - **`kerchunk_audio_repeat_fill()`** — under-run fill (zero → tail-copy → tile).
 
-See `ARCH-COR-DTMF.md` for the COR/DTMF re-architecture context and `PLAN-AUDIO-TICK.md` for the refactor history.
+See `ARCH-COR-DTMF.md` for the COR/DTMF re-architecture context. The audio-tick refactor history lives in git log.
 
 ## Sound file conventions
 

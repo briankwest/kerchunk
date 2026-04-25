@@ -39,7 +39,7 @@
  *   audio thread does. Cross-thread reads of the current label
  *   go through a caller-owned _Atomic cache (see src/main.c).
  *
- * Companion plan: PLAN-STATE-MODEL.md Phase 1.
+ * (see ARCHITECTURE.md "TX state model").
  */
 
 #ifndef KERCHUNK_TX_STATE_H

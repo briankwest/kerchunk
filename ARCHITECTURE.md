@@ -761,7 +761,7 @@ Optional feature that bridges multiple kerchunk repeaters into a shared
 audio network. A **central reflector** (separate `kerchunk-reflectd`
 daemon, separate deb package) authenticates each repeater and bridges
 SRTP-encrypted Opus audio between members of the same talkgroup. See
-`PLAN-LINK.md` for the full plan, wire protocol, and § 4.6 failure-mode
+`LINK-PROTOCOL.md` for the wire protocol and § 4.6 failure-mode
 acceptance table.
 
 ```

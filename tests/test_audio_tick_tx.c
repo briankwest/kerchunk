@@ -1,8 +1,8 @@
 /*
  * test_audio_tick_tx.c — Unit tests for kerchunk_audio_tick_tx.
  *
- * Covers the TX sub-tick lifted from audio_thread_fn in Phase 3 of
- * PLAN-AUDIO-TICK.md. The critical items covered here:
+ * Covers the TX sub-tick lifted from audio_thread_fn. The critical
+ * items covered here:
  *   - item #3 (ARCH-COR-DTMF.md §12): queue-pause guard applies
  *     regardless of software_relay mode
  *   - tx_delay / tx_tail silence budgets + chunking

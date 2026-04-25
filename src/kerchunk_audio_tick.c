@@ -1,9 +1,8 @@
 /*
  * kerchunk_audio_tick.c — RX sub-tick implementation.
  *
- * PLAN-AUDIO-TICK.md Phase 2. Behavior is byte-for-byte equivalent
- * to the RX path that used to live inline in audio_thread_fn in
- * src/main.c. See include/kerchunk_audio_tick.h for the contract.
+ * Lifted from the RX path that used to live inline in audio_thread_fn
+ * in src/main.c. See include/kerchunk_audio_tick.h for the contract.
  *
  * Ordering note: the original loop did (a) decoder-reset edge,
  * (b) decoder process + events, (c) COR-drop drain-start edge,

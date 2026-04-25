@@ -2,9 +2,9 @@
  * test_audio_ring.c — Unit tests for kerchunk_audio_ring.
  *
  * Validates the SPSC ring primitive and the PA-callback commit
- * function lifted out of kerchunk_audio.c in PLAN-AUDIO-TICK.md
- * Phase 1. The commit function is the testable home for the
- * paInputUnderflow drop behavior (item #1 in ARCH-COR-DTMF.md §12).
+ * function lifted out of kerchunk_audio.c. The commit function is the
+ * testable home for the paInputUnderflow drop behavior (item #1 in
+ * ARCH-COR-DTMF.md §12).
  */
 
 #include "../include/kerchunk_audio_ring.h"

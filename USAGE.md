@@ -1327,7 +1327,7 @@ other site sharing a talkgroup. Audio is encoded as Opus
 (24 kHz mono, 32 kbps with FEC) and carried over SRTP/UDP. Auth is per-
 session HMAC-SHA256 with a preshared key.
 
-See `PLAN-LINK.md` for the full architecture, wire protocol, and § 4.6
+See `LINK-PROTOCOL.md` for the wire protocol and § 4.6
 failure-mode acceptance table.
 
 #### Step 1: install the reflector

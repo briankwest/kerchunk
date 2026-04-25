@@ -2,7 +2,7 @@
  * kerchunk_audio_tick.h — State + (eventually) pure-function API for
  * the audio thread.
  *
- * Phase 0 of the plan in PLAN-AUDIO-TICK.md: consolidate the audio-
+ * Phase 0 consolidates the audio-
  * thread-owned file-scope globals in src/main.c into one struct. No
  * behavioral change; this just reshapes the declarations so future
  * phases can pass the state to a pure kerchunk_audio_tick() function.
@@ -60,7 +60,7 @@ typedef struct kerchunk_audio_state_s {
 
 
 /*
- * ── RX sub-tick (PLAN-AUDIO-TICK.md Phase 2) ─────────────────────
+ * ── RX sub-tick ─────────────────────
  *
  * Pure function over the audio state + a small rx-sub-state + one
  * RX frame. No I/O, no event-bus calls, no global reads. Tests
@@ -135,7 +135,7 @@ void kerchunk_audio_tick_rx(kerchunk_audio_state_t *s,
 
 
 /*
- * ── TX sub-tick (PLAN-AUDIO-TICK.md Phase 3) ─────────────────────
+ * ── TX sub-tick ─────────────────────
  *
  * Pure function over (state, in) → ordered list of actions the
  * shell should perform this tick. Preserves the original TX block's

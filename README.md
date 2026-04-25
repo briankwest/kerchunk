@@ -915,7 +915,7 @@ LLM-driven on-air assistant. Transcripts from mod_asr go through an OpenAI-compa
 
 Config section: `[ai]`. Dependencies: `libcurl`, `libcjson`, mod_asr, mod_tts, a reachable OpenAI-compatible endpoint. DTMF: `*99#` arms the AI (offset 18, override via `[dtmf] dtmf_ai = <pattern>`). CLI: `ai`, `ai tools`, `ai history`, `ai ask <text>`, `ai reset`.
 
-**Model choice matters.** Models below ~7B parameters can struggle with reliable tool call emission. Plan doc (`PLAN-MOD-AI.md`) recommends `qwen2.5:7b`, `llama3.1:8b`, or `mistral-nemo` on Ollama. qwen3.5:0.8b works but lives at the edge of the capability cliff.
+**Model choice matters.** Models below ~7B parameters can struggle with reliable tool call emission. Try `qwen2.5:7b`, `llama3.1:8b`, or `mistral-nemo` on Ollama. qwen3.5:0.8b works but lives at the edge of the capability cliff.
 
 ### mod_poc — PoC Radio Bridge
 
@@ -1148,7 +1148,7 @@ SSE. CLI: `link status / tg <n> / reconnect / clear-alarm`.
 
 Config section: `[link]`. Requires the reflector to be configured with
 a matching `[node.<id>]` block + a 32-byte preshared key. See
-`PLAN-LINK.md` for the full architecture and `USAGE.md` for an
+`LINK-PROTOCOL.md` for the wire protocol and `USAGE.md` for an
 end-to-end setup walkthrough.
 
 | Key | Type | Default | Description |

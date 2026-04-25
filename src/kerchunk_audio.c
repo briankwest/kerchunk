@@ -55,7 +55,7 @@ void kerchunk_audio_preemphasis(int16_t *buf, size_t n, float alpha)
 /* ── PortAudio state ──
  *
  * SPSC ring impl lives in src/kerchunk_audio_ring.c (Phase 1 of
- * PLAN-AUDIO-TICK.md). The ring-commit function there handles the
+ * ARCHITECTURE.md § "Audio-thread decomposition"). The ring-commit function there handles the
  * underflow drop + capture resample paths that used to live inline
  * in cap_cb / duplex_cb below. */
 

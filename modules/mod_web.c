@@ -1966,7 +1966,7 @@ static void handle_admin_api_sounds(struct mg_connection *c)
     mg_http_reply(c, 200, API_HEADERS, "%s", buf);
 }
 
-/* ── CDR browser endpoints — see PLAN-CDR-UI.md
+/* ── CDR browser endpoints — see ARCHITECTURE.md
  *
  * Three read-only views over what mod_cdr already writes to disk:
  *   GET /admin/api/cdr/days      → list of YYYY-MM-DD that have a CSV
