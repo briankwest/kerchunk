@@ -32,6 +32,7 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
 th { color: var(--dim); font-size: 11px; text-transform: uppercase;
      letter-spacing: 1px; font-weight: 600; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 .dot.green  { background: var(--green); }
 .dot.red    { background: var(--red); }
@@ -39,10 +40,14 @@ th { color: var(--dim); font-size: 11px; text-transform: uppercase;
 .talker { color: var(--accent); font-weight: 600; }
 .talker.idle { color: var(--dim); font-style: italic; font-weight: 400; }
 .muted { color: var(--yellow); }
+.sub2  { color: var(--dim); font-size: 11px; }
 .status { font-size: 12px; color: var(--dim); }
 .status.ok  { color: var(--green); }
 .status.err { color: var(--red); }
-.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.live { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+        background: var(--green); margin-right: 4px; vertical-align: middle;
+        animation: pulse 2s infinite; }
+@keyframes pulse { 50% { opacity: 0.4; } }
 
 @media (max-width: 600px) {
   body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
@@ -51,6 +56,8 @@ th { color: var(--dim); font-size: 11px; text-transform: uppercase;
   header nav .btn { min-height: 36px; display: flex;
                     align-items: center; justify-content: center; }
   .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+  table { font-size: 11px; }
+  th, td { padding: 4px 6px; }
 }
 </style>
 </head>
@@ -67,65 +74,93 @@ th { color: var(--dim); font-size: 11px; text-transform: uppercase;
 
 <div class="card">
   <h2>Reflector</h2>
-  <div class="toolbar">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <span id="meta">—</span>
-    <span class="status" id="status" style="margin-left:auto"></span>
+    <span style="margin-left:auto" class="status" id="status"><span class="live"></span>connecting…</span>
   </div>
 </div>
 
 <div class="card">
   <h2>Nodes</h2>
   <table>
-    <thead><tr><th></th><th>Node ID</th><th>State</th><th>TG</th>
-               <th>SRTP fails (30s)</th><th>Actions</th></tr></thead>
-    <tbody id="nodes"><tr><td colspan="6">loading…</td></tr></tbody>
+    <thead><tr>
+      <th></th><th>Node ID</th><th>State</th><th>TG</th>
+      <th class="num">Uptime</th>
+      <th class="num">RX pkts</th><th class="num">TX pkts</th>
+      <th class="num">RX bytes</th><th class="num">TX bytes</th>
+      <th class="num">Holds</th><th class="num">Talk time</th>
+      <th class="num">Loss%</th>
+      <th>Actions</th>
+    </tr></thead>
+    <tbody id="nodes"><tr><td colspan="13">loading…</td></tr></tbody>
   </table>
 </div>
 
 <div class="card">
   <h2>Talkgroups</h2>
   <table>
-    <thead><tr><th>TG</th><th>Name</th><th>Members</th><th>Talker</th>
-               <th>Actions</th></tr></thead>
-    <tbody id="tgs"><tr><td colspan="5">—</td></tr></tbody>
+    <thead><tr>
+      <th>TG</th><th>Name</th><th class="num">Members</th><th>Talker</th>
+      <th class="num">For</th><th>Actions</th>
+    </tr></thead>
+    <tbody id="tgs"><tr><td colspan="6">—</td></tr></tbody>
   </table>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
-function setStatus(msg, kind) { $('status').className = 'status ' + (kind || '');
-                                 $('status').textContent = msg; }
+function setStatus(html) { $('status').innerHTML = html; }
 
-async function api(method, path, body) {
-    const opts = { method, headers: {}, credentials: 'same-origin' };
-    if (body) {
-        opts.headers['Content-Type'] = 'application/json';
-        opts.body = JSON.stringify(body);
-    }
-    try {
-        const res = await fetch(path, opts);
-        const j = await res.json();
-        if (!res.ok) { setStatus(j.error || res.statusText, 'err'); return null; }
-        return j;
-    } catch (e) { setStatus(e.message, 'err'); return null; }
+function fmtUptime(s) {
+    if (!s) return '—';
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (d) return `${d}d ${h}h ${m}m`;
+    if (h) return `${h}h ${m}m ${sec}s`;
+    if (m) return `${m}m ${sec}s`;
+    return `${sec}s`;
+}
+function fmtBytes(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1024*1024) return (b / 1024).toFixed(1) + ' KB';
+    if (b < 1024*1024*1024) return (b / (1024*1024)).toFixed(1) + ' MB';
+    return (b / (1024*1024*1024)).toFixed(2) + ' GB';
+}
+function fmtTalk(s) {
+    if (!s) return '—';
+    if (s < 60) return s.toFixed(1) + 's';
+    const m = Math.floor(s / 60), sec = (s % 60).toFixed(0);
+    return `${m}m ${sec}s`;
 }
 
-async function reload() {
-    const j = await api('GET', '/api/state');
-    if (!j) return;
-    setStatus('refreshed ' + new Date().toLocaleTimeString(), 'ok');
-
+function render(d) {
     $('meta').innerHTML =
-        `<b>${j.reflector}</b> &middot; keepalive ${j.keepalive_s}s &middot; ` +
-        `hangtime ${j.hangtime_ms}ms`;
+        `<b>${d.reflector}</b> &middot; keepalive ${d.keepalive_s}s &middot; ` +
+        `hangtime ${d.hangtime_ms}ms`;
+    setStatus(`<span class="live"></span>live (${new Date(d.now*1000).toLocaleTimeString()})`);
 
-    $('nodes').innerHTML = j.nodes.map(n => `
+    $('nodes').innerHTML = (d.nodes || []).map(n => {
+        const stateLbl = !n.connected ? 'offline'
+            : n.muted ? `<span class="muted">muted</span>`
+            : 'connected';
+        const dotClass = !n.connected ? 'red' : n.muted ? 'yellow' : 'green';
+        return `
         <tr>
-          <td><span class="dot ${n.connected ? (n.muted ? 'yellow' : 'green') : 'red'}"></span></td>
-          <td>${n.id}</td>
-          <td>${n.connected ? (n.muted ? '<span class="muted">muted</span>' : 'connected') : 'offline'}</td>
-          <td>${n.tg || '—'}</td>
-          <td>${n.srtp_fail_30s}</td>
+          <td><span class="dot ${dotClass}"></span></td>
+          <td>${n.id}<br><span class="sub2">${n.client_version || ''}</span></td>
+          <td>${stateLbl}${n.mute_reason
+                ? `<br><span class="sub2">${n.mute_reason}</span>` : ''}</td>
+          <td class="num">${n.tg || '—'}</td>
+          <td class="num">${fmtUptime(n.uptime_s)}</td>
+          <td class="num">${n.rtp_in.toLocaleString()}</td>
+          <td class="num">${n.rtp_out.toLocaleString()}</td>
+          <td class="num">${fmtBytes(n.bytes_in)}</td>
+          <td class="num">${fmtBytes(n.bytes_out)}</td>
+          <td class="num">${n.floor_holds}</td>
+          <td class="num">${fmtTalk(n.floor_seconds)}</td>
+          <td class="num">${n.last_loss_pct.toFixed(1)}</td>
           <td>
             ${n.connected ?
                 (n.muted
@@ -134,39 +169,54 @@ async function reload() {
               : ''}
             ${n.connected ? `<button class="btn btn-red" onclick="act('kick','${n.id}')">Kick</button>` : ''}
           </td>
-        </tr>`).join('') || '<tr><td colspan="6">no nodes configured</td></tr>';
+        </tr>`;
+    }).join('') || '<tr><td colspan="13">no nodes configured</td></tr>';
 
-    $('tgs').innerHTML = j.talkgroups.map(t => `
+    $('tgs').innerHTML = (d.talkgroups || []).map(t => `
         <tr>
-          <td>${t.tg}</td>
+          <td class="num">${t.tg}</td>
           <td>${t.name}</td>
-          <td>${t.members}</td>
+          <td class="num">${t.members}</td>
           <td>${t.talker
               ? `<span class="talker">${t.talker}</span>`
               : `<span class="talker idle">(idle)</span>`}</td>
+          <td class="num">${t.talker ? (t.talker_for_ms / 1000).toFixed(1) + 's' : '—'}</td>
           <td>
             ${t.talker ? `<button class="btn btn-warn" onclick="release(${t.tg})">Release floor</button>` : ''}
           </td>
-        </tr>`).join('') || '<tr><td colspan="5">no talkgroups</td></tr>';
+        </tr>`).join('') || '<tr><td colspan="6">no talkgroups</td></tr>';
 }
 
 async function act(action, node_id) {
     const body = { node_id };
     if (action === 'mute') body.retry_in_s = 60;
     if (action === 'kick') body.reason = 'admin from dashboard';
-    const j = await api('POST', '/api/admin/' + action, body);
-    if (j) setStatus(`${action} ${node_id}: OK`, 'ok');
-    setTimeout(reload, 200);
+    await fetch('/api/admin/' + action, {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+    });
 }
-
 async function release(tg) {
-    const j = await api('POST', '/api/admin/release-floor', { tg });
-    if (j) setStatus(`release-floor TG ${tg}: OK`, 'ok');
-    setTimeout(reload, 200);
+    await fetch('/api/admin/release-floor', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ tg })
+    });
 }
 
-reload();
-setInterval(reload, 3000);
+/* SSE-driven — reflectd pushes a fresh state snapshot on every change
+ * AND once per second for live counter updates. No polling. */
+function subscribe() {
+    const es = new EventSource('/api/events', { withCredentials: true });
+    es.onmessage = (ev) => { try { render(JSON.parse(ev.data)); } catch (_) {} };
+    es.onerror = () => {
+        setStatus('<span class="live" style="background:var(--red)"></span>reconnecting…');
+        es.close();
+        setTimeout(subscribe, 2000);
+    };
+}
+subscribe();
 </script>
 </body>
 </html>

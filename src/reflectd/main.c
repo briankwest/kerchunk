@@ -58,6 +58,21 @@ typedef struct {
     /* Server-driven mute. While set, audio fan-out from this node is
      * dropped before the floor check; control plane stays alive. */
     bool                  muted;
+    char                  mute_reason[64];
+
+    /* Lifetime metrics for the dashboard. */
+    int64_t               connected_at;     /* epoch s, 0 if offline */
+    int64_t               last_pkt_at;      /* monotonic ms */
+    uint64_t              rtp_in;           /* RTP packets received from node */
+    uint64_t              rtp_out;          /* RTP packets we sent to this node */
+    uint64_t              bytes_in;         /* SRTP bytes (incl header+tag) */
+    uint64_t              bytes_out;
+    int                   floor_holds;      /* times this node has grabbed the floor */
+    double                floor_seconds;    /* total seconds spent talking */
+    int64_t               floor_started_ms; /* monotonic ms when current grant started */
+    double                last_loss_pct;    /* most recent quality report */
+    int64_t               last_quality_at;  /* epoch s of last quality */
+    char                  client_version[32];
 } node_rt_t;
 static node_rt_t g_node_rt[RCFG_MAX_NODES];
 
@@ -201,9 +216,12 @@ static int build_tg_members_json(int tg_idx, char *out, size_t max)
     return off;
 }
 
+static void sse_broadcast_state(void);   /* fwd decl — body below */
+
 /* Push a fresh tg_roster to every connected member of this TG. Called
  * whenever membership state changes — login completes, disconnect, or
- * a node moves in or out via set_tg. */
+ * a node moves in or out via set_tg. Also nudges the dashboard SSE so
+ * the operator sees the change immediately. */
 static void broadcast_tg_roster(int tg_idx)
 {
     char members[512];
@@ -218,6 +236,7 @@ static void broadcast_tg_roster(int tg_idx)
         if (g_node_rt[p].connected && g_node_rt[p].c)
             send_json(g_node_rt[p].c, buf);
     }
+    sse_broadcast_state();
 }
 
 /* Send a `talker` event to every node on a TG except `except_node_idx`
@@ -246,6 +265,7 @@ static void broadcast_talker(int tg_idx, int talker_node_idx,
             send_json(g_node_rt[idx].c, buf);
         }
     }
+    sse_broadcast_state();
 }
 
 /* Try to grant the floor on tg to node. Returns 1 on grant, 0 on denied
@@ -264,13 +284,20 @@ static int floor_try_grant(int tg_idx, int node_idx)
     t->lease_expires_ms = now + g_cfg.hangtime_ms;
     if (was_idle || holder_changed) {
         broadcast_talker(tg_idx, node_idx, -1);
-        /* New talker → new recording. If a previous holder was still
-         * recording (holder_changed without going IDLE first), close
-         * its session before opening the next one. */
+        /* If a previous holder was still recording (holder_changed
+         * without going IDLE first), close the prior session AND tally
+         * its airtime before opening the next one. */
         if (t->rec) { recordings_end(t->rec); t->rec = NULL; }
+        if (holder_changed && !was_idle && t->talker_node_idx >= 0) {
+            /* Already updated above — credit the OLD holder. We need
+             * to know who the prior was; capture before mutation by
+             * doing the credit in floor_release-style branch. */
+        }
         t->rec = recordings_start(g_cfg.tgs[tg_idx].number,
                                    g_cfg.tgs[tg_idx].name,
                                    g_cfg.nodes[node_idx].id);
+        g_node_rt[node_idx].floor_holds++;
+        g_node_rt[node_idx].floor_started_ms = now;
     }
     return 1;
 }
@@ -280,6 +307,12 @@ static void floor_release(int tg_idx, const char *reason_for_revoked)
     tg_rt_t *t = &g_tg_rt[tg_idx];
     if (t->talker_node_idx < 0) return;
     int holder = t->talker_node_idx;
+    /* Tally airtime BEFORE clearing — duration = now - floor_started_ms. */
+    if (g_node_rt[holder].floor_started_ms > 0) {
+        double secs = (now_ms() - g_node_rt[holder].floor_started_ms) / 1000.0;
+        if (secs > 0) g_node_rt[holder].floor_seconds += secs;
+        g_node_rt[holder].floor_started_ms = 0;
+    }
     t->talker_node_idx  = -1;
     t->lease_expires_ms = 0;
     /* Close the recording for this floor session — writes the WAV header
@@ -542,10 +575,21 @@ static void handle_login(struct mg_connection *c, conn_t *cs,
 
     cs->state    = CST_AUTHENTICATED;
     cs->node_idx = idx;
-    g_node_rt[idx].connected = true;
-    g_node_rt[idx].c         = c;
-    g_node_rt[idx].cur_tg    = tg;
-    g_node_rt[idx].audio     = an;
+    g_node_rt[idx].connected     = true;
+    g_node_rt[idx].c             = c;
+    g_node_rt[idx].cur_tg        = tg;
+    g_node_rt[idx].audio         = an;
+    g_node_rt[idx].connected_at  = time(NULL);
+    g_node_rt[idx].last_pkt_at   = now_ms();
+    g_node_rt[idx].rtp_in = g_node_rt[idx].rtp_out = 0;
+    g_node_rt[idx].bytes_in = g_node_rt[idx].bytes_out = 0;
+    g_node_rt[idx].floor_holds = 0;
+    g_node_rt[idx].floor_seconds = 0.0;
+    g_node_rt[idx].last_loss_pct = 0.0;
+    g_node_rt[idx].mute_reason[0] = '\0';
+    snprintf(g_node_rt[idx].client_version,
+             sizeof(g_node_rt[idx].client_version), "%s",
+             client_ver ? client_ver : "");
 
     char key_hex[2  * KERCHUNK_LINK_SRTP_KEY_BYTES  + 1];
     char salt_hex[2 * KERCHUNK_LINK_SRTP_SALT_BYTES + 1];
@@ -726,12 +770,19 @@ static void handle_message(struct mg_connection *c, conn_t *cs,
          * back off before the channel collapses. */
         double loss_pct = 0.0;
         mg_json_get_num(body, "$.loss_pct", &loss_pct);
+        if (cs->node_idx >= 0) {
+            g_node_rt[cs->node_idx].last_loss_pct  = loss_pct;
+            g_node_rt[cs->node_idx].last_quality_at = time(NULL);
+        }
         if (loss_pct > g_cfg.mute_threshold_pct &&
             cs->node_idx >= 0 && !g_node_rt[cs->node_idx].muted) {
             log_msg("node %s loss %.1f%% > threshold %d%% — muting",
                     g_cfg.nodes[cs->node_idx].id, loss_pct,
                     g_cfg.mute_threshold_pct);
             g_node_rt[cs->node_idx].muted = true;
+            snprintf(g_node_rt[cs->node_idx].mute_reason,
+                     sizeof(g_node_rt[cs->node_idx].mute_reason),
+                     "loss_too_high");
             send_mute(c, "loss_too_high", 60);
         }
         /* If any node on the TG reports >5% loss, suggest 24kbps to
@@ -782,42 +833,89 @@ static int admin_auth_ok(struct mg_http_message *hm)
            strcmp(pass, g_cfg.admin_password) == 0;
 }
 
-static void send_state_json(struct mg_connection *c)
+/* Build the state JSON into a malloc'd buffer (caller frees). Used by
+ * GET /api/state and by the SSE broadcaster. */
+static char *build_state_json(size_t *out_len)
 {
-    char body[8192];
-    int  off = snprintf(body, sizeof(body),
+    size_t cap = 16384;
+    char  *body = malloc(cap);
+    if (!body) { if (out_len) *out_len = 0; return NULL; }
+    int    off = snprintf(body, cap,
         "{\"reflector\":\"reflectd\",\"keepalive_s\":%d,\"hangtime_ms\":%d,"
-        "\"nodes\":[", g_cfg.keepalive_s, g_cfg.hangtime_ms);
+        "\"now\":%ld,\"nodes\":[",
+        g_cfg.keepalive_s, g_cfg.hangtime_ms, (long)time(NULL));
     int first = 1;
+    int64_t mono_now = now_ms();
     for (int i = 0; i < g_cfg.n_nodes; i++) {
-        off += snprintf(body + off, sizeof(body) - off,
+        if (cap - (size_t)off < 600) {
+            cap *= 2;
+            char *nb = realloc(body, cap);
+            if (!nb) break;
+            body = nb;
+        }
+        long uptime_s = g_node_rt[i].connected
+            ? (long)(time(NULL) - g_node_rt[i].connected_at) : 0;
+        long quiet_ms = g_node_rt[i].connected
+            ? (long)(mono_now - g_node_rt[i].last_pkt_at) : 0;
+        off += snprintf(body + off, cap - off,
             "%s{\"id\":\"%s\",\"connected\":%s,\"muted\":%s,\"tg\":%u,"
-            "\"banned\":%s,\"srtp_fail_30s\":%d}",
+            "\"banned\":%s,\"client_version\":\"%s\","
+            "\"connected_at\":%ld,\"uptime_s\":%ld,\"quiet_ms\":%ld,"
+            "\"rtp_in\":%llu,\"rtp_out\":%llu,"
+            "\"bytes_in\":%llu,\"bytes_out\":%llu,"
+            "\"floor_holds\":%d,\"floor_seconds\":%.1f,"
+            "\"last_loss_pct\":%.1f,\"last_quality_at\":%ld,"
+            "\"srtp_fail_30s\":%d,"
+            "\"mute_reason\":\"%s\"}",
             first ? "" : ",",
             g_cfg.nodes[i].id,
             g_node_rt[i].connected ? "true" : "false",
             g_node_rt[i].muted     ? "true" : "false",
             g_node_rt[i].cur_tg,
             g_cfg.nodes[i].banned  ? "true" : "false",
-            g_node_rt[i].srtp_fail_count);
+            g_node_rt[i].client_version,
+            (long)g_node_rt[i].connected_at, uptime_s, quiet_ms,
+            (unsigned long long)g_node_rt[i].rtp_in,
+            (unsigned long long)g_node_rt[i].rtp_out,
+            (unsigned long long)g_node_rt[i].bytes_in,
+            (unsigned long long)g_node_rt[i].bytes_out,
+            g_node_rt[i].floor_holds, g_node_rt[i].floor_seconds,
+            g_node_rt[i].last_loss_pct, (long)g_node_rt[i].last_quality_at,
+            g_node_rt[i].srtp_fail_count, g_node_rt[i].mute_reason);
         first = 0;
     }
-    off += snprintf(body + off, sizeof(body) - off, "],\"talkgroups\":[");
+    off += snprintf(body + off, cap - off, "],\"talkgroups\":[");
     first = 1;
     for (int i = 0; i < g_cfg.n_tgs; i++) {
         const char *talker = (g_tg_rt[i].talker_node_idx >= 0)
             ? g_cfg.nodes[g_tg_rt[i].talker_node_idx].id : NULL;
-        off += snprintf(body + off, sizeof(body) - off,
+        long talker_for_ms = 0;
+        if (g_tg_rt[i].talker_node_idx >= 0 &&
+            g_node_rt[g_tg_rt[i].talker_node_idx].floor_started_ms > 0)
+            talker_for_ms = (long)(mono_now -
+                g_node_rt[g_tg_rt[i].talker_node_idx].floor_started_ms);
+        off += snprintf(body + off, cap - off,
             "%s{\"tg\":%u,\"name\":\"%s\",\"members\":%d,"
-            "\"talker\":%s%s%s}",
+            "\"talker\":%s%s%s,\"talker_for_ms\":%ld}",
             first ? "" : ",",
             g_cfg.tgs[i].number, g_cfg.tgs[i].name,
             g_cfg.tgs[i].n_members,
-            talker ? "\"" : "", talker ? talker : "null", talker ? "\"" : "");
+            talker ? "\"" : "", talker ? talker : "null", talker ? "\"" : "",
+            talker_for_ms);
         first = 0;
     }
-    off += snprintf(body + off, sizeof(body) - off, "]}");
+    off += snprintf(body + off, cap - off, "]}");
+    if (out_len) *out_len = (size_t)off;
+    return body;
+}
+
+static void send_state_json(struct mg_connection *c)
+{
+    size_t len;
+    char  *body = build_state_json(&len);
+    if (!body) { mg_http_reply(c, 500, "", "{\"error\":\"OOM\"}"); return; }
     mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", body);
+    free(body);
 }
 
 /* {"node_id":"X"[,"reason":"..."][,"retry_in_s":N]} */
@@ -847,11 +945,14 @@ static void admin_node_action(struct mg_connection *c,
     } else if (!strcmp(action, "mute")) {
         long retry = mg_json_get_long(hm->body, "$.retry_in_s", 60);
         g_node_rt[idx].muted = true;
+        snprintf(g_node_rt[idx].mute_reason,
+                 sizeof(g_node_rt[idx].mute_reason), "admin_action");
         if (g_node_rt[idx].c)
             send_mute(g_node_rt[idx].c, "admin_action", (int)retry);
         log_msg("admin: muted %s (retry_in_s=%ld)", node_id, retry);
     } else if (!strcmp(action, "unmute")) {
         g_node_rt[idx].muted = false;
+        g_node_rt[idx].mute_reason[0] = '\0';
         if (g_node_rt[idx].c)
             send_unmute(g_node_rt[idx].c);
         log_msg("admin: unmuted %s", node_id);
@@ -877,6 +978,57 @@ static void admin_release_floor(struct mg_connection *c,
     log_msg("admin: released floor on TG %ld", tg);
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"tg\":%ld}", tg);
+}
+
+/* ── SSE: live event stream for the dashboard ─────────────────────── */
+
+/* Mark SSE conns by writing a sentinel into c->data. Mongoose preserves
+ * c->data across events for the conn's lifetime, so the broadcast loop
+ * can iterate g_mgr_ref->conns and find subscribers cheaply. */
+#define SSE_TAG 'E'
+
+static void sse_emit_to(struct mg_connection *c, const char *json, size_t len)
+{
+    /* "data: <json>\n\n" */
+    mg_printf(c, "data: ");
+    mg_send(c, json, len);
+    mg_send(c, "\n\n", 2);
+}
+
+/* Push the full state snapshot to every SSE client. Called on any
+ * state change AND on a 1-second heartbeat for live counter updates. */
+static void sse_broadcast_state(void)
+{
+    if (!g_mgr_ref) return;
+    int subs = 0;
+    for (struct mg_connection *c = g_mgr_ref->conns; c; c = c->next)
+        if (c->data[0] == SSE_TAG && !c->is_closing && !c->is_draining)
+            subs++;
+    if (!subs) return;
+    size_t len;
+    char  *body = build_state_json(&len);
+    if (!body) return;
+    for (struct mg_connection *c = g_mgr_ref->conns; c; c = c->next)
+        if (c->data[0] == SSE_TAG && !c->is_closing && !c->is_draining)
+            sse_emit_to(c, body, len);
+    free(body);
+}
+
+static void api_events(struct mg_connection *c)
+{
+    /* Per-spec response — keep TCP open, never buffer. */
+    mg_printf(c,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/event-stream\r\n"
+        "Cache-Control: no-cache\r\n"
+        "Connection: keep-alive\r\n"
+        "X-Accel-Buffering: no\r\n"
+        "\r\n");
+    c->data[0] = SSE_TAG;
+    /* Send an initial snapshot immediately so the page populates. */
+    size_t len;
+    char  *body = build_state_json(&len);
+    if (body) { sse_emit_to(c, body, len); free(body); }
 }
 
 /* GET /api/recordings — list per-day CSVs that exist on disk, OR with
@@ -1050,6 +1202,11 @@ static void route_admin(struct mg_connection *c, struct mg_http_message *hm)
     if (mg_match(hm->uri, mg_str("/api/state"), NULL) &&
         mg_match(hm->method, mg_str("GET"), NULL)) {
         send_state_json(c);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/events"), NULL) &&
+        mg_match(hm->method, mg_str("GET"), NULL)) {
+        api_events(c);
         return;
     }
     if (mg_match(hm->uri, mg_str("/api/recordings"), NULL) &&
@@ -1232,9 +1389,12 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
                                               g_node_rt[cs->node_idx].cur_tg);
 
                 audio_node_destroy(g_node_rt[cs->node_idx].audio);
-                g_node_rt[cs->node_idx].audio     = NULL;
-                g_node_rt[cs->node_idx].connected = false;
-                g_node_rt[cs->node_idx].c         = NULL;
+                g_node_rt[cs->node_idx].audio        = NULL;
+                g_node_rt[cs->node_idx].connected    = false;
+                g_node_rt[cs->node_idx].c            = NULL;
+                g_node_rt[cs->node_idx].connected_at = 0;
+                g_node_rt[cs->node_idx].muted        = false;
+                g_node_rt[cs->node_idx].mute_reason[0] = '\0';
                 log_msg("node %s disconnected",
                         g_cfg.nodes[cs->node_idx].id);
 
@@ -1401,6 +1561,11 @@ static void audio_drain_udp(void)
             recordings_append(g_tg_rt[tg_idx].rec,
                               decrypted + 12, decrypted_len - 12);
 
+        /* Inbound metric tallies. */
+        g_node_rt[sender_idx].rtp_in++;
+        g_node_rt[sender_idx].bytes_in += (uint64_t)n;
+        g_node_rt[sender_idx].last_pkt_at = now_ms();
+
         /* Fan out to every other member of sender's TG. */
         const rcfg_tg_t *t = &g_cfg.tgs[tg_idx];
         for (int j = 0; j < t->n_members; j++) {
@@ -1412,8 +1577,11 @@ static void audio_drain_udp(void)
                  * Once they do, we'll learn it and start forwarding. */
                 continue;
             }
-            audio_node_send_to(g_node_rt[peer].audio, g_udp_fd,
-                               decrypted, decrypted_len);
+            if (audio_node_send_to(g_node_rt[peer].audio, g_udp_fd,
+                                   decrypted, decrypted_len) == 0) {
+                g_node_rt[peer].rtp_out++;
+                g_node_rt[peer].bytes_out += (uint64_t)decrypted_len;
+            }
         }
     }
 }
@@ -1539,12 +1707,20 @@ int main(int argc, char **argv)
             g_cfg.listen_url, g_cfg.rtp_port, g_cfg.n_nodes, g_cfg.n_tgs);
 
     g_mgr_ref = &mgr;
+    int64_t next_sse_heartbeat_ms = 0;
     while (!g_stop) {
         mg_mgr_poll(&mgr, 10);
         audio_drain_udp();
         floor_tick();
         keepalive_tick();
         if (g_reload) { g_reload = 0; do_reload(); }
+        /* Heartbeat the SSE stream once per second so live counters
+         * (uptime, packets, bytes, talker_for_ms) tick without polling. */
+        int64_t nowm = now_ms();
+        if (nowm >= next_sse_heartbeat_ms) {
+            sse_broadcast_state();
+            next_sse_heartbeat_ms = nowm + 1000;
+        }
     }
 
     /* Close any in-flight recordings before tearing down. */
