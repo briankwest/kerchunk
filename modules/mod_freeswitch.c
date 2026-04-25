@@ -15,6 +15,7 @@
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
 #include "kerchunk_queue.h"
+#include "kerchunk_wav.h"  /* kerchunk_resample_into */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -723,14 +724,13 @@ static void playback_audio_tap(const kerchevt_t *evt, void *ud)
 
     int src_rate = g_core->sample_rate;
     if (src_rate > 8000) {
-        int ratio = src_rate / 8000;
-        size_t out_n = evt->audio.n / (size_t)ratio;
-        int16_t ds[960];
-        if (out_n > sizeof(ds)/sizeof(ds[0])) out_n = sizeof(ds)/sizeof(ds[0]);
-        for (size_t i = 0; i < out_n; i++)
-            ds[i] = evt->audio.samples[i * ratio];
-        sendto(g_udp_tx_fd, ds, out_n * sizeof(int16_t), MSG_DONTWAIT,
-               (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
+        int16_t ds[256]; /* worst case 960 / 6 = 160 */
+        size_t out_n = kerchunk_resample_into(ds, sizeof(ds)/sizeof(ds[0]),
+                                              evt->audio.samples, evt->audio.n,
+                                              src_rate, 8000);
+        if (out_n > 0)
+            sendto(g_udp_tx_fd, ds, out_n * sizeof(int16_t), MSG_DONTWAIT,
+                   (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
     } else {
         sendto(g_udp_tx_fd, evt->audio.samples,
                evt->audio.n * sizeof(int16_t), MSG_DONTWAIT,
@@ -748,15 +748,13 @@ static void radio_audio_tap(const kerchevt_t *evt, void *ud)
     if (!g_call_active || !g_cor_active || g_udp_tx_fd < 0)
         return;
 
-    /* Downsample from pipeline rate (48kHz) to FS rate (8kHz SLIN) */
+    /* Downsample from pipeline rate (48kHz) to FS rate (8kHz SLIN). */
     int src_rate = g_core->sample_rate;
     if (src_rate > 8000) {
-        int ratio = src_rate / 8000;
-        size_t out_n = evt->audio.n / (size_t)ratio;
-        int16_t ds[960]; /* max 48000/50 / 6 = 160 */
-        if (out_n > sizeof(ds)/sizeof(ds[0])) out_n = sizeof(ds)/sizeof(ds[0]);
-        for (size_t i = 0; i < out_n; i++)
-            ds[i] = evt->audio.samples[i * ratio];
+        int16_t ds[256];
+        size_t out_n = kerchunk_resample_into(ds, sizeof(ds)/sizeof(ds[0]),
+                                              evt->audio.samples, evt->audio.n,
+                                              src_rate, 8000);
         ssize_t sent = sendto(g_udp_tx_fd, ds, out_n * sizeof(int16_t), MSG_DONTWAIT,
                (struct sockaddr *)&g_fs_udp_addr, g_fs_udp_addrlen);
         g_tx_pkt_count++;
@@ -1251,23 +1249,13 @@ static void queue_phone_frame(const int16_t *frame_in)
 
     int dst_rate = g_core->sample_rate;
     if (dst_rate > 8000) {
-        int ratio = dst_rate / 8000;
-        size_t out_n = VAD_FRAME_SAMPLES * (size_t)ratio;
-        int16_t us[960]; /* max 160 * 6 = 960 */
-        if (out_n > sizeof(us)/sizeof(us[0])) out_n = sizeof(us)/sizeof(us[0]);
-        for (size_t i = 0; i < out_n; i++) {
-            size_t src_idx = i / (size_t)ratio;
-            size_t frac = i % (size_t)ratio;
-            if (src_idx + 1 < VAD_FRAME_SAMPLES) {
-                int32_t a = frame[src_idx];
-                int32_t b = frame[src_idx + 1];
-                us[i] = (int16_t)(a + (b - a) * (int32_t)frac / ratio);
-            } else {
-                us[i] = frame[VAD_FRAME_SAMPLES - 1];
-            }
-        }
-        kerchunk_queue_add_buffer_src(us, out_n,
-                                      KERCHUNK_PRI_ELEVATED, 0, "phone");
+        int16_t us[1024]; /* worst case 160 × 6 = 960 */
+        size_t out_n = kerchunk_resample_into(us, sizeof(us)/sizeof(us[0]),
+                                              frame, VAD_FRAME_SAMPLES,
+                                              8000, dst_rate);
+        if (out_n > 0)
+            kerchunk_queue_add_buffer_src(us, out_n,
+                                          KERCHUNK_PRI_ELEVATED, 0, "phone");
     } else {
         kerchunk_queue_add_buffer_src(frame, VAD_FRAME_SAMPLES,
                                       KERCHUNK_PRI_ELEVATED, 0, "phone");

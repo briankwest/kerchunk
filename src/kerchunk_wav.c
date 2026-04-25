@@ -212,25 +212,27 @@ int kerchunk_pcm_write(const char *path, const int16_t *buf, size_t n)
     return 0;
 }
 
-int kerchunk_resample(const int16_t *src, size_t src_n, int src_rate,
-                      int dst_rate, int16_t **dst, size_t *dst_n)
+/* Linear-interp resample into a caller-provided buffer. Same
+ * algorithm used by both kerchunk_resample (which malloc's the
+ * destination) and direct callers in the audio hot path.
+ * Bounds output by dst_max so a too-small destination doesn't
+ * overrun. */
+size_t kerchunk_resample_into(int16_t *dst, size_t dst_max,
+                               const int16_t *src, size_t src_n,
+                               int src_rate, int dst_rate)
 {
-    if (!src || !dst || !dst_n || src_rate <= 0 || dst_rate <= 0)
-        return -1;
+    if (!dst || !src || src_rate <= 0 || dst_rate <= 0 || dst_max == 0)
+        return 0;
 
     if (src_rate == dst_rate) {
-        int16_t *out = malloc(src_n * sizeof(int16_t));
-        if (!out) return -1;
-        memcpy(out, src, src_n * sizeof(int16_t));
-        *dst = out;
-        *dst_n = src_n;
-        return 0;
+        size_t n = src_n < dst_max ? src_n : dst_max;
+        memcpy(dst, src, n * sizeof(int16_t));
+        return n;
     }
 
     size_t out_n = (size_t)((double)src_n * dst_rate / src_rate);
     if (out_n == 0) out_n = 1;
-    int16_t *out = malloc(out_n * sizeof(int16_t));
-    if (!out) return -1;
+    if (out_n > dst_max) out_n = dst_max;
 
     double step = (double)src_rate / (double)dst_rate;
     double pos = 0.0;
@@ -239,11 +241,28 @@ int kerchunk_resample(const int16_t *src, size_t src_n, int src_rate,
         double frac = pos - (double)idx;
         int16_t s0 = (idx < src_n) ? src[idx] : 0;
         int16_t s1 = (idx + 1 < src_n) ? src[idx + 1] : s0;
-        out[i] = (int16_t)(s0 + frac * (s1 - s0));
+        dst[i] = (int16_t)(s0 + frac * (s1 - s0));
         pos += step;
     }
+    return out_n;
+}
 
+int kerchunk_resample(const int16_t *src, size_t src_n, int src_rate,
+                      int dst_rate, int16_t **dst, size_t *dst_n)
+{
+    if (!src || !dst || !dst_n || src_rate <= 0 || dst_rate <= 0)
+        return -1;
+
+    /* Allocate worst-case output, then call the no-alloc variant. */
+    size_t cap = (src_rate == dst_rate)
+                 ? src_n
+                 : (size_t)((double)src_n * dst_rate / src_rate);
+    if (cap == 0) cap = 1;
+    int16_t *out = malloc(cap * sizeof(int16_t));
+    if (!out) return -1;
+
+    size_t got = kerchunk_resample_into(out, cap, src, src_n, src_rate, dst_rate);
     *dst = out;
-    *dst_n = out_n;
+    *dst_n = got;
     return 0;
 }
