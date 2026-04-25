@@ -728,6 +728,15 @@ static void on_talker(struct mg_str body)
 /* Phase 7 — protocol-defined deny / revoke / shutdown / mute paths.
  * Each surfaces in g_last_error so the operator can see what happened. */
 
+static void on_tg_ok(struct mg_str body)
+{
+    long tg = mg_json_get_long(body, "$.tg", 0);
+    if (tg <= 0 || tg > 65535) return;
+    g_current_tg = (int)tg;
+    set_error("");
+    publish_snapshot();
+}
+
 static void on_tg_denied(struct mg_str body)
 {
     char *code = mg_json_get_str(body, "$.code");
@@ -859,6 +868,7 @@ static void on_ws_msg(struct mg_str body)
     else if (!strcmp(type, LINK_MSG_LOGIN_OK))          on_login_ok(body);
     else if (!strcmp(type, LINK_MSG_LOGIN_DENIED))      on_login_denied(body);
     else if (!strcmp(type, LINK_MSG_TALKER))            on_talker(body);
+    else if (!strcmp(type, LINK_MSG_TG_OK))             on_tg_ok(body);
     else if (!strcmp(type, LINK_MSG_TG_DENIED))         on_tg_denied(body);
     else if (!strcmp(type, LINK_MSG_FLOOR_DENIED))      on_floor_denied(body);
     else if (!strcmp(type, LINK_MSG_FLOOR_REVOKED))     on_floor_revoked(body);
