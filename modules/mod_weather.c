@@ -31,7 +31,7 @@ static int  g_auto_announce   = 0;         /* off by default (FCC 95.1733) */
 /* Two cadences — the dashboard refresh and the on-air announcement
  * have different latency expectations. Fetch runs whenever an
  * api_key is set; announce only when auto_announce is on. */
-static int  g_fetch_interval_ms    = 300000;    /* 5 min */
+static int  g_fetch_interval_ms    = 900000;    /* 15 min */
 static int  g_announce_interval_ms = 1800000;   /* 30 min */
 static int  g_announce_temp   = 1;
 static int  g_announce_cond   = 1;
@@ -750,7 +750,7 @@ static int weather_configure(const kerchunk_config_t *cfg)
      * upgrading from the old single-knob `interval` get the same
      * announce cadence; the dashboard simply gets fresher data. */
     g_fetch_interval_ms    = kerchunk_config_get_duration_ms(cfg, "weather",
-                                                              "fetch_interval", 300000);
+                                                              "fetch_interval", 900000);
     g_announce_interval_ms = kerchunk_config_get_duration_ms(cfg, "weather",
                                                               "interval", 1800000);
 

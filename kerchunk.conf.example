@@ -415,7 +415,7 @@ file = /var/log/kerchunk/events.log  ; Log file path
 [weather]
 api_key = YOUR_WEATHERAPI_KEY    ; weatherapi.com API key
 location = 74501                 ; ZIP code or city name
-fetch_interval = 5m              ; Dashboard refresh cadence (always runs)
+fetch_interval = 15m             ; Dashboard refresh cadence (always runs)
 interval = 30m                   ; On-air announce cadence (auto_announce only)
 auto_announce = off              ; on | off
 announce_temp = on               ; Include temperature
