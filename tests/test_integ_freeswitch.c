@@ -161,8 +161,10 @@ void test_integ_freeswitch(void)
     {
         vad_reset();
         g_vox_ptt_held = 0;
-        g_vad_threshold = 800;
-        g_vad_hold_ms = 500;
+        g_vad_threshold     = 800;
+        g_vad_hold_ms       = 500;
+        g_vad_attack_frames = 2;  /* pin for this test — see VOX PTT
+                                   * cycle below for rationale */
 
         /* Generate loud signal (RMS > threshold) */
         int16_t loud[160];
@@ -395,8 +397,13 @@ void test_integ_freeswitch(void)
         g_call_active = 1;
         g_cor_active = 0;
         g_vox_ptt_held = 0;
-        g_vad_threshold = 800;
-        g_vad_hold_ms = 100;
+        g_vad_threshold     = 800;
+        g_vad_hold_ms       = 100;
+        g_vad_attack_frames = 2;   /* pin for this test — production
+                                    * default is higher (5) but this
+                                    * test wants to verify the attack
+                                    * → assert transition with the
+                                    * minimum number of frames. */
         vad_reset();
         jitter_buf_reset(&g_jitter);
 
