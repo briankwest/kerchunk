@@ -1017,6 +1017,7 @@ Public pages (no authentication required):
 Admin pages (require `auth_token`):
 - **Admin dashboard** (`/admin.html`) shows real-time SSE event stream, state machines, statistics, controls, TTS input, and event log
 - **Users** (`/users.html`) provides user and group CRUD with TOTP QR code management
+- **CDR Browser** (`/admin/cdr.html`) browses historical Call Detail Records by date with live filtering by user / method, sortable columns, emergency-row highlighting, and inline WAV playback (custom mini-player with scrub + volume, single-row-at-a-time). Today's view auto-refreshes via the `cdr_updated` SSE snapshot — new records appear without a page reload.
 - **Config** (`/config.html`) provides a live configuration editor with reload
 - **Coverage** (`/coverage.html`) is a GMRS RF coverage planner with terrain analysis
 

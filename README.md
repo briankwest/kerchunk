@@ -999,7 +999,9 @@ Config section: `[web]`
 
 Public API: `GET /api/status`, `GET /api/weather`, `GET /api/nws`, `/api/audio` WebSocket (listen-only), `POST /api/register`
 
-Admin API: `GET /admin/api/status` (includes sensitive fields), `GET /admin/api/stats`, `GET /admin/api/users`, `GET /admin/api/groups`, `GET /admin/api/config`, `GET /admin/api/commands`, `GET /admin/api/events` (SSE), `/admin/api/audio` WebSocket (PTT), `POST /admin/api/cmd`, `POST /admin/api/config/reload`, CRUD `POST/PUT/DELETE /admin/api/users/{id}`, `POST/PUT/DELETE /admin/api/groups/{id}`
+Admin API: `GET /admin/api/status` (includes sensitive fields), `GET /admin/api/stats`, `GET /admin/api/users`, `GET /admin/api/groups`, `GET /admin/api/config`, `GET /admin/api/commands`, `GET /admin/api/events` (SSE), `GET /admin/api/sounds` (sound-tree for Play picker), `GET /admin/api/cdr/days`, `GET /admin/api/cdr?date=YYYY-MM-DD`, `GET /admin/api/recording?path=…&download=1` (Range-aware WAV streaming, sandboxed to `recordings_dir`), `/admin/api/audio` WebSocket (PTT), `POST /admin/api/cmd`, `POST /admin/api/config/reload`, CRUD `POST/PUT/DELETE /admin/api/users/{id}`, `POST/PUT/DELETE /admin/api/groups/{id}`
+
+Admin pages: `/admin/` (dashboard), `/admin/users.html`, `/admin/cdr.html` (historical CDR browser with date picker, filters, inline WAV playback), `/admin/config.html`, `/admin/coverage.html`, `/admin/ptt.html`, `/admin/bulletin.html`
 
 ### mod_webhook — Webhook Notifications
 

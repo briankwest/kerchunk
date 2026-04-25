@@ -598,7 +598,11 @@ replaces the old single-signal cor_drop_hold mask. See
   ├── POST /api/cmd          → execute CLI command (admin)
   ├── POST /api/register     → self-registration (public)
   ├── POST /api/config/reload → reload config (admin)
-  ├── GET  /admin/api/sounds  → sound-tree listing for the Play picker
+  ├── GET  /admin/api/sounds      → sound-tree listing for the Play picker
+  ├── GET  /admin/api/cdr/days    → list of YYYY-MM-DD with a CSV on disk
+  ├── GET  /admin/api/cdr?date=…  → that day's records as JSON
+  ├── GET  /admin/api/recording?path=… → stream a WAV from recordings_dir
+  │                                      (Range supported; ?download=1 → save-as)
   └── CRUD /api/users, /api/groups (admin)
 ```
 

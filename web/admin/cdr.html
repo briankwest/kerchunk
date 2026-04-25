@@ -518,6 +518,49 @@ document.getElementById('next-day').addEventListener('click', () => stepDay(+1))
   .forEach(id => document.getElementById(id)
     .addEventListener('input', render));
 
+/* Today auto-refresh.
+ * Subscribe to the existing cdr_updated SSE snapshot — it fires every
+ * time mod_cdr's in-memory tally changes (which means a row was just
+ * written). Refetch the day's records only if we're currently viewing
+ * today; coalesce bursts so rapid succession (e.g. CW ID + courtesy
+ * tone in the same second) doesn't trigger N back-to-back fetches.
+ * Also: don't refetch while a recording is actively playing — losing
+ * playback to a re-render is more annoying than waiting for the
+ * record to appear after the user closes the player. */
+let g_refreshTimer = null;
+function scheduleTodayRefresh() {
+  const today = new Date().toISOString().slice(0, 10);
+  const cur   = document.getElementById('date-picker').value;
+  if (cur !== today) return;
+  if (g_playerRowId) return;     /* don't yank an active player */
+  if (g_refreshTimer) return;    /* already scheduled */
+  g_refreshTimer = setTimeout(() => {
+    g_refreshTimer = null;
+    if (!g_playerRowId &&
+        document.getElementById('date-picker').value === today)
+      loadDate(today);
+  }, 1500);  /* 1.5s coalesce window */
+}
+
+(function connectSSE() {
+  let es = null, retry = 0;
+  function open() {
+    try { if (es) es.close(); } catch(_) {}
+    es = new EventSource('/admin/api/events');
+    es.onopen = () => { retry = 0; };
+    es.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch(_) { return; }
+      if (m.type === 'cdr_updated') scheduleTodayRefresh();
+    };
+    es.onerror = () => {
+      try { es.close(); } catch(_) {}
+      retry = Math.min(retry + 1, 5);
+      setTimeout(open, 1000 * retry);
+    };
+  }
+  open();
+})();
+
 loadDays();
 </script>
 </body>
