@@ -26,6 +26,7 @@ header .sub { color: var(--dim); font-size: 14px; }
        color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
        text-decoration: none; display: inline-block; font-family: inherit; }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-sm { font-size: 10px; padding: 2px 8px; }
 .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .toolbar select, .toolbar input[type=date] {
     padding: 5px 8px; background: var(--bg); color: var(--text);
@@ -35,12 +36,57 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
 th { color: var(--dim); font-size: 11px; text-transform: uppercase;
      letter-spacing: 1px; font-weight: 600; }
-td.dur, td.tg { font-variant-numeric: tabular-nums; }
-audio { vertical-align: middle; height: 28px; max-width: 220px; }
+td.dur, td.tg, td.bytes { font-variant-numeric: tabular-nums; }
 .empty { color: var(--dim); font-style: italic; padding: 12px; }
 .status { font-size: 12px; color: var(--dim); }
 .status.ok { color: var(--green); }
 .status.err { color: var(--red); }
+
+/* Inline player row — matches /admin/cdr.html exactly. */
+tr.player-row td {
+    padding: 10px 14px;
+    background: rgba(88,166,255,0.05);
+    border-top: 1px solid rgba(88,166,255,0.2);
+    border-bottom: 1px solid rgba(88,166,255,0.2);
+}
+.player {
+    display: flex; align-items: center; gap: 10px;
+    font-variant-numeric: tabular-nums; font-size: 12px;
+}
+.player .pp {
+    width: 32px; height: 32px; border-radius: 50%;
+    border: 1px solid var(--accent); background: var(--card); color: var(--accent);
+    font-size: 14px; line-height: 1; cursor: pointer; flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+}
+.player .pp:hover  { background: rgba(88,166,255,0.15); }
+.player .pp:active { background: rgba(88,166,255,0.25); }
+.player .time { color: var(--dim); white-space: nowrap; }
+.player .scrub {
+    flex: 1; height: 6px; background: var(--border); border-radius: 3px;
+    cursor: pointer; position: relative; overflow: hidden;
+}
+.player .scrub .fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: var(--accent); border-radius: 3px; width: 0%; pointer-events: none;
+}
+.player .scrub .buf {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: rgba(88,166,255,0.25); border-radius: 3px; width: 0%; pointer-events: none;
+}
+.player .label { color: var(--dim); font-size: 11px; }
+.player .vol {
+    appearance: none; -webkit-appearance: none;
+    width: 80px; height: 4px; background: var(--border); border-radius: 2px; cursor: pointer;
+}
+.player .vol::-webkit-slider-thumb {
+    appearance: none; -webkit-appearance: none;
+    width: 12px; height: 12px; background: var(--accent); border-radius: 50%; cursor: pointer;
+}
+.player .vol::-moz-range-thumb {
+    width: 12px; height: 12px; background: var(--accent);
+    border-radius: 50%; border: none; cursor: pointer;
+}
 
 @media (max-width: 600px) {
   body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
@@ -49,7 +95,10 @@ audio { vertical-align: middle; height: 28px; max-width: 220px; }
   header nav .btn { min-height: 36px; display: flex;
                     align-items: center; justify-content: center; }
   .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
-  audio { max-width: 140px; }
+  .player .vol { width: 60px; }
+  .player .label { display: none; }
+  table { font-size: 11px; }
+  th, td { padding: 4px 6px; }
 }
 </style>
 </head>
@@ -80,11 +129,19 @@ audio { vertical-align: middle; height: 28px; max-width: 220px; }
   </table>
 </div>
 
+<!-- Single shared <audio> element — all play buttons drive this one. -->
+<audio id="audio-player" preload="none"></audio>
+
 <div class="status" id="status"></div>
 
 <script>
 const $ = id => document.getElementById(id);
 function setStatus(m, k) { $('status').className = 'status ' + (k||''); $('status').textContent = m; }
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+}
 
 async function api(path) {
     const res = await fetch(path, { credentials: 'same-origin' });
@@ -92,14 +149,124 @@ async function api(path) {
     return res.json();
 }
 
-function fmtDur(s) {
-    const m = Math.floor(s / 60), sec = (s % 60).toFixed(1);
-    return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+function fmtMmSs(s) {
+    if (!isFinite(s) || s < 0) return '0:00';
+    const m = Math.floor(s / 60), r = Math.floor(s - m * 60);
+    return m + ':' + (r < 10 ? '0' : '') + r;
 }
+function fmtDur(s) {
+    return s < 60 ? s.toFixed(1) + 's'
+                  : Math.floor(s/60) + 'm ' + (s%60).toFixed(0) + 's';
+}
+
+let g_playerRowId = null;
+let g_playerVol   = parseFloat(localStorage.getItem('reflectd_player_vol') || '0.85');
+
+function recordingURL(path) {
+    return '/api/recording?path=' + encodeURIComponent(path);
+}
+
+function togglePlay(btn) {
+    const path  = btn.dataset.path;
+    const rowId = btn.dataset.row;
+    const label = btn.dataset.label;
+    const a = $('audio-player');
+    if (g_playerRowId === rowId && a.src) {
+        if (a.paused) a.play().catch(() => {}); else a.pause();
+        return;
+    }
+    closePlayer();
+    g_playerRowId = rowId;
+    a.src = recordingURL(path);
+    a.volume = g_playerVol;
+    insertPlayerRow(rowId, label);
+    a.play().catch(() => {});
+}
+
+function insertPlayerRow(rowId, label) {
+    const row = document.getElementById(rowId);
+    if (!row) return;
+    const cols = row.children.length;
+    const tr = document.createElement('tr');
+    tr.className = 'player-row';
+    tr.id = 'pr-' + rowId;
+    tr.innerHTML =
+      '<td colspan="' + cols + '">'
+      + '<div class="player">'
+      +   '<button class="pp" id="pp-btn" title="Play / pause">⏸</button>'
+      +   '<div class="time" id="pp-cur">0:00</div>'
+      +   '<div class="scrub" id="pp-scrub">'
+      +     '<div class="buf" id="pp-buf"></div>'
+      +     '<div class="fill" id="pp-fill"></div>'
+      +   '</div>'
+      +   '<div class="time" id="pp-dur">0:00</div>'
+      +   '<input type="range" min="0" max="100" value="' + Math.round(g_playerVol*100)
+      +     '" class="vol" id="pp-vol" title="Volume">'
+      +   '<span class="label">' + escapeHtml(label) + '</span>'
+      + '</div>'
+      + '</td>';
+    row.parentNode.insertBefore(tr, row.nextSibling);
+
+    const a = $('audio-player');
+    $('pp-btn').addEventListener('click', () => {
+        if (a.paused) a.play().catch(() => {}); else a.pause();
+    });
+    $('pp-scrub').addEventListener('click', (e) => {
+        if (!a.duration) return;
+        const r = e.currentTarget.getBoundingClientRect();
+        const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+        a.currentTime = frac * a.duration;
+    });
+    $('pp-vol').addEventListener('input', (e) => {
+        g_playerVol = parseInt(e.target.value, 10) / 100;
+        a.volume = g_playerVol;
+        localStorage.setItem('reflectd_player_vol', String(g_playerVol));
+    });
+}
+
+function closePlayer() {
+    const a = $('audio-player');
+    a.pause();
+    a.removeAttribute('src');
+    a.load();
+    if (g_playerRowId) {
+        const tr = document.getElementById('pr-' + g_playerRowId);
+        if (tr) tr.remove();
+    }
+    g_playerRowId = null;
+    document.querySelectorAll('.play-btn').forEach(b => b.textContent = '▶');
+}
+
+(function wireAudioEvents() {
+    const a = $('audio-player');
+    function updateUI() {
+        if (!g_playerRowId) return;
+        const cur  = $('pp-cur'), dur = $('pp-dur');
+        const fill = $('pp-fill'), buf = $('pp-buf'), btn = $('pp-btn');
+        const playBtn = document.querySelector('.play-btn[data-row="' + g_playerRowId + '"]');
+        if (cur) cur.textContent = fmtMmSs(a.currentTime);
+        if (dur) dur.textContent = fmtMmSs(a.duration || 0);
+        if (fill && a.duration)
+            fill.style.width = (a.currentTime / a.duration * 100) + '%';
+        if (buf && a.duration && a.buffered.length) {
+            const end = a.buffered.end(a.buffered.length - 1);
+            buf.style.width = (end / a.duration * 100) + '%';
+        }
+        if (btn)     btn.textContent     = a.paused ? '▶' : '⏸';
+        if (playBtn) playBtn.textContent = a.paused ? '▶' : '⏸';
+    }
+    a.addEventListener('timeupdate',     updateUI);
+    a.addEventListener('loadedmetadata', updateUI);
+    a.addEventListener('progress',       updateUI);
+    a.addEventListener('play',           updateUI);
+    a.addEventListener('pause',          updateUI);
+    a.addEventListener('ended',          () => { closePlayer(); });
+})();
 
 async function reload() {
     const date = $('date').value;
     if (!date) { $('rows').innerHTML = '<tr><td colspan="7" class="empty">no date</td></tr>'; return; }
+    closePlayer();
     const j = await api('/api/recordings?date=' + encodeURIComponent(date));
     if (!j) return;
     if (!j.records || j.records.length === 0) {
@@ -109,19 +276,31 @@ async function reload() {
     }
     $('count').textContent = j.records.length + ' recording' + (j.records.length === 1 ? '' : 's');
     $('rows').innerHTML = j.records
-        .slice().reverse()         // newest first
-        .map(r => `
-        <tr>
-          <td>${r.time}</td>
-          <td class="tg">${r.tg}</td>
-          <td>${r.tg_name || ''}</td>
-          <td>${r.node_id || ''}</td>
-          <td class="dur">${fmtDur(r.duration_s)}</td>
-          <td><audio controls preload="none"
-                     src="/api/recording?path=${encodeURIComponent(r.recording)}"></audio></td>
-          <td><a class="btn" download
-                 href="/api/recording?path=${encodeURIComponent(r.recording)}">↓</a></td>
-        </tr>`).join('');
+        .slice().reverse()    // newest first
+        .map((r, i) => {
+            const rowId = 'rec-' + i;
+            const label = r.tg_name + ' · ' + r.node_id;
+            return `
+            <tr id="${rowId}">
+              <td>${r.time}</td>
+              <td class="tg">${r.tg}</td>
+              <td>${escapeHtml(r.tg_name || '')}</td>
+              <td>${escapeHtml(r.node_id || '')}</td>
+              <td class="dur">${fmtDur(r.duration_s)}</td>
+              <td>
+                <button class="btn btn-sm play-btn"
+                        onclick="togglePlay(this)"
+                        data-path="${escapeHtml(r.recording)}"
+                        data-row="${rowId}"
+                        data-label="${escapeHtml(label)}"
+                        title="Play / pause">▶</button>
+              </td>
+              <td>
+                <a class="btn btn-sm" download
+                   href="${recordingURL(r.recording)}" title="Download .wav">↓</a>
+              </td>
+            </tr>`;
+        }).join('');
     setStatus('refreshed ' + new Date().toLocaleTimeString(), 'ok');
 }
 
@@ -131,7 +310,7 @@ async function init() {
     const days = (j.days || []).sort().reverse();
     if (days.length === 0) {
         $('date').innerHTML = '<option>(no recordings yet)</option>';
-        $('rows').innerHTML  = '<tr><td colspan="7" class="empty">no recordings yet</td></tr>';
+        $('rows').innerHTML = '<tr><td colspan="7" class="empty">no recordings yet</td></tr>';
         return;
     }
     $('date').innerHTML = days.map(d => `<option value="${d}">${d}</option>`).join('');

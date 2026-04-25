@@ -818,11 +818,27 @@ static void on_tg_membership_changed(struct mg_str body)
 static void on_kicked(struct mg_str body)
 {
     char *code = mg_json_get_str(body, "$.code");
-    set_error("kicked: %s", code ? code : "?");
-    if (link_err_is_permanent(code))
+    char *msg  = mg_json_get_str(body, "$.msg");
+    set_error("kicked: %s%s%s",
+              code ? code : "?",
+              msg && msg[0] ? " — " : "",
+              msg && msg[0] ? msg   : "");
+    if (link_err_is_permanent(code)) {
         set_state(LST_STOPPED);
-    free(code);
+    } else {
+        /* Transient kick (admin_action, idle_timeout, loss_too_high,
+         * auth_failures, etc.) — back off 30 s ±20 % so the operator
+         * has a window to investigate before we hammer back. Without
+         * this we'd reconnect in reconnect_min_ms (default 1 s) which
+         * makes the kick effectively a no-op. */
+        int base = 30000;
+        int jit  = (rand() % (base / 5 + 1)) - base / 10;
+        g_next_reconnect_ms = now_ms() + base + jit;
+        g_reconnect_attempt = 1;
+    }
+    free(code); free(msg);
     if (g_ws) g_ws->is_closing = 1;
+    publish_snapshot();
 }
 
 static void on_ws_msg(struct mg_str body)
