@@ -13,6 +13,15 @@ case "$1" in
                     --gecos "kerchunk-reflectd" kerchunk-reflectd
         fi
 
+        # Let kerchunk-reflectd read Let's Encrypt private keys (and any
+        # other files certbot installs as 0640 root:kerchunk). Idempotent:
+        # usermod is a no-op if the user is already in the group, and the
+        # `|| true` makes a missing kerchunk group benign on hosts that
+        # haven't installed the main package.
+        if getent group kerchunk >/dev/null 2>&1; then
+            usermod -a -G kerchunk kerchunk-reflectd || true
+        fi
+
         # Runtime directories
         install -d -o kerchunk-reflectd -g kerchunk-reflectd -m 0755 \
                 /var/log/kerchunk-reflectd
