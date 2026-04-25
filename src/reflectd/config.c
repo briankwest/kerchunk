@@ -221,8 +221,6 @@ static int load_globals(rcfg_t *out, const kerchunk_config_t *cfg)
         cfg, "reflector", "hangtime_ms", KERCHUNK_LINK_DEFAULT_HANGTIME_MS);
     out->mute_threshold_pct = kerchunk_config_get_int(
         cfg, "reflector", "mute_threshold_pct", 15);
-    out->mute_window_s      = kerchunk_config_get_int(
-        cfg, "reflector", "mute_window_s", 30);
     out->auth_fail_kick     = kerchunk_config_get_int(
         cfg, "reflector", "auth_fail_kick", 200);
     out->max_reconnects_per_node_per_min = kerchunk_config_get_int(

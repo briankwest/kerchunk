@@ -51,7 +51,6 @@ typedef struct {
     int      hangtime_ms;
     char     min_client_version[32]; /* "kerchunk 1.0.0" — lex compare */
     int      mute_threshold_pct;
-    int      mute_window_s;
     int      auth_fail_kick;
     int      max_reconnects_per_node_per_min;
 

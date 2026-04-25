@@ -186,6 +186,38 @@ static void log_msg(const char *fmt, ...)
     fputc('\n', stderr);
 }
 
+/* ── Admin audit ring ─────────────────────────────────────────────
+ * Ring buffer of admin actions, surfaced via GET /api/admin/audit
+ * for the dashboard. Persists in-memory only — restart loses
+ * history (operators that need durable audit should still pull
+ * from journald). */
+typedef struct {
+    int64_t at;          /* epoch s */
+    char    src_ip[40];  /* peer IP that issued the action */
+    char    msg[160];    /* "kicked WK7ABC", "saved [node.X]", … */
+} audit_entry_t;
+
+#define AUDIT_RING_SIZE 64
+static audit_entry_t g_audit[AUDIT_RING_SIZE];
+static int           g_audit_n;     /* total entries written (incl. overwrites) */
+
+static void audit(struct mg_connection *c, const char *fmt, ...)
+{
+    audit_entry_t *e = &g_audit[g_audit_n % AUDIT_RING_SIZE];
+    e->at = (int64_t)time(NULL);
+    if (c) {
+        mg_snprintf(e->src_ip, sizeof(e->src_ip), "%M", mg_print_ip, &c->rem);
+    } else {
+        snprintf(e->src_ip, sizeof(e->src_ip), "%s", "(local)");
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(e->msg, sizeof(e->msg), fmt, ap);
+    va_end(ap);
+    g_audit_n++;
+    log_msg("admin: %s [from %s]", e->msg, e->src_ip);
+}
+
 /* ── Time helper (monotonic ms) ───────────────────────────────────── */
 
 static int64_t now_ms(void)
@@ -973,7 +1005,7 @@ static void admin_node_action(struct mg_connection *c,
         if (g_node_rt[idx].c)
             send_kicked(g_node_rt[idx].c, LINK_ERR_ADMIN_ACTION,
                         reason ? reason : "operator kick");
-        log_msg("admin: kicked %s", node_id);
+        audit(c, "kicked %s", node_id);
         free(reason);
     } else if (!strcmp(action, "mute")) {
         long retry = mg_json_get_long(hm->body, "$.retry_in_s", 60);
@@ -982,13 +1014,13 @@ static void admin_node_action(struct mg_connection *c,
                  sizeof(g_node_rt[idx].mute_reason), "admin_action");
         if (g_node_rt[idx].c)
             send_mute(g_node_rt[idx].c, "admin_action", (int)retry);
-        log_msg("admin: muted %s (retry_in_s=%ld)", node_id, retry);
+        audit(c, "muted %s (retry_in_s=%ld)", node_id, retry);
     } else if (!strcmp(action, "unmute")) {
         g_node_rt[idx].muted = false;
         g_node_rt[idx].mute_reason[0] = '\0';
         if (g_node_rt[idx].c)
             send_unmute(g_node_rt[idx].c);
-        log_msg("admin: unmuted %s", node_id);
+        audit(c, "unmuted %s", node_id);
     }
 
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
@@ -1008,7 +1040,7 @@ static void admin_release_floor(struct mg_connection *c,
         return;
     }
     floor_release(tg_idx, LINK_ERR_ADMIN_ACTION);
-    log_msg("admin: released floor on TG %ld", tg);
+    audit(c, "released floor on TG %ld", tg);
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"tg\":%ld}", tg);
 }
@@ -1225,6 +1257,7 @@ static char *slurp(const char *path);
 static void admin_reload(struct mg_connection *c)
 {
     g_reload = 1;
+    audit(c, "reload queued");
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"action\":\"reload_queued\"}");
 }
@@ -1234,7 +1267,7 @@ static void admin_reload(struct mg_connection *c)
 static void admin_prune_now(struct mg_connection *c)
 {
     int n = recordings_prune();
-    log_msg("admin: manual prune removed %d item(s)", n);
+    audit(c, "manual prune removed %d item(s)", n);
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"removed\":%d}", n);
 }
@@ -1278,7 +1311,7 @@ static void admin_recording_delete(struct mg_connection *c,
                       strerror(errno));
         return;
     }
-    log_msg("admin: deleted recording %s", rel);
+    audit(c, "deleted recording %s", rel);
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"deleted\":\"%s\"}", rel);
 }
@@ -1345,6 +1378,39 @@ static int render_str_csv(struct mg_str arr, char *out, size_t max)
  * Includes preshared_key_hex (the dashboard is admin-auth gated; the
  * file is on disk anyway and operators need the key to share it with
  * new repeater owners). */
+
+/* GET /api/admin/audit — last AUDIT_RING_SIZE admin actions, oldest
+ * first. Each entry: {at: <epoch s>, src: "<peer ip>", msg: "<text>"}. */
+static void admin_audit_get(struct mg_connection *c)
+{
+    size_t cap = 16384, off = 0;
+    char  *body = malloc(cap);
+    if (!body) { mg_http_reply(c, 500, "", "{\"error\":\"OOM\"}"); return; }
+
+    int total = g_audit_n;
+    int n = total < AUDIT_RING_SIZE ? total : AUDIT_RING_SIZE;
+    int start = total - n;   /* oldest of the kept entries */
+
+    off = (size_t)snprintf(body, cap, "{\"entries\":[");
+    for (int i = 0; i < n; i++) {
+        audit_entry_t *e = &g_audit[(start + i) % AUDIT_RING_SIZE];
+        char esc_msg[320];
+        size_t j = 0;
+        for (size_t k = 0; e->msg[k] && j + 2 < sizeof(esc_msg); k++) {
+            if (e->msg[k] == '"' || e->msg[k] == '\\') esc_msg[j++] = '\\';
+            esc_msg[j++] = e->msg[k];
+        }
+        esc_msg[j] = '\0';
+        off += (size_t)snprintf(body + off, cap - off,
+            "%s{\"at\":%lld,\"src\":\"%s\",\"msg\":\"%s\"}",
+            i ? "," : "",
+            (long long)e->at, e->src_ip, esc_msg);
+    }
+    off += (size_t)snprintf(body + off, cap - off, "]}");
+    mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", body);
+    free(body);
+}
+
 static void admin_config_get(struct mg_connection *c)
 {
     size_t cap = 16384, off = 0;
@@ -1432,7 +1498,7 @@ static void admin_node_save(struct mg_connection *c, struct mg_http_message *hm)
 
     if (kerchunk_ini_replace_section(g_cfg_path, section, body) != 0)
         { mg_http_reply(c, 500, "", "{\"error\":\"ini write failed: %s\"}", strerror(errno)); goto out; }
-    log_msg("admin: saved [%s]", section);
+    audit(c, "saved [%s]", section);
     g_reload = 1;
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"id\":\"%s\"}", id);
@@ -1449,7 +1515,7 @@ static void admin_node_delete(struct mg_connection *c, struct mg_http_message *h
     snprintf(section, sizeof(section), "node.%s", id);
     if (kerchunk_ini_remove_section(g_cfg_path, section) != 0)
         { mg_http_reply(c, 500, "", "{\"error\":\"ini remove failed\"}"); return; }
-    log_msg("admin: removed [%s]", section);
+    audit(c, "removed [%s]", section);
     g_reload = 1;
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"id\":\"%s\"}", id);
@@ -1525,7 +1591,7 @@ static void admin_tg_save(struct mg_connection *c, struct mg_http_message *hm)
 
     if (kerchunk_ini_replace_section(g_cfg_path, section, body) != 0)
         { mg_http_reply(c, 500, "", "{\"error\":\"ini write failed: %s\"}", strerror(errno)); free(name); return; }
-    log_msg("admin: saved [%s]", section);
+    audit(c, "saved [%s]", section);
 
     /* Walk the members again; for each, ensure its [node.<id>]
      * allowed_tgs includes this TG. */
@@ -1562,7 +1628,7 @@ static void admin_tg_delete(struct mg_connection *c, struct mg_http_message *hm)
     snprintf(section, sizeof(section), "talkgroup.%ld", tg);
     if (kerchunk_ini_remove_section(g_cfg_path, section) != 0)
         { mg_http_reply(c, 500, "", "{\"error\":\"ini remove failed\"}"); return; }
-    log_msg("admin: removed [%s]", section);
+    audit(c, "removed [%s]", section);
     g_reload = 1;
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"tg\":%ld}", tg);
@@ -1609,7 +1675,7 @@ static void admin_recordings_delete_day(struct mg_connection *c,
         }
     }
     if (unlink(csv) == 0) removed++;
-    log_msg("admin: deleted recordings for %s (%d items)", date, removed);
+    audit(c, "deleted recordings for %s (%d items)", date, removed);
     mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                   "{\"ok\":true,\"date\":\"%s\",\"removed\":%d}", date, removed);
 }
@@ -1658,6 +1724,11 @@ static void route_admin(struct mg_connection *c, struct mg_http_message *hm)
     if (mg_match(hm->uri, mg_str("/api/admin/config"), NULL) &&
         mg_match(hm->method, mg_str("GET"), NULL)) {
         admin_config_get(c);
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/admin/audit"), NULL) &&
+        mg_match(hm->method, mg_str("GET"), NULL)) {
+        admin_audit_get(c);
         return;
     }
     if (mg_match(hm->uri, mg_str("/api/admin/node"), NULL) &&

@@ -72,4 +72,10 @@ esac
 
 #DEBHELPER#
 
+# Belt-and-braces restart — see kerchunk.postinst for rationale.
+if [ -d /run/systemd/system ] && \
+   systemctl is-active --quiet kerchunk-reflectd.service 2>/dev/null; then
+    systemctl try-restart kerchunk-reflectd.service >/dev/null 2>&1 || true
+fi
+
 exit 0

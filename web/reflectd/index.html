@@ -117,6 +117,18 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
   </table></div>
 </div>
 
+<div class="card">
+  <h2>Recent admin actions
+    <span class="status" id="audit-status" style="margin-left:8px"></span>
+  </h2>
+  <div class="table-wrap"><table>
+    <thead><tr>
+      <th>When</th><th>From</th><th>Action</th>
+    </tr></thead>
+    <tbody id="audit"><tr><td colspan="3">loading…</td></tr></tbody>
+  </table></div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 function setStatus(html) { $('status').innerHTML = html; }
@@ -259,6 +271,44 @@ function subscribe() {
     };
 }
 subscribe();
+
+/* Audit log — polled at 10s. Cheap; ring is at most 64 entries.
+ * Could be SSE-pushed later, but polling avoids a second event
+ * channel on the dashboard for now. */
+function fmtAgo(epoch, nowS) {
+    const ago = Math.max(0, nowS - epoch);
+    if (ago < 60)    return ago + 's ago';
+    if (ago < 3600)  return Math.floor(ago / 60) + 'm ago';
+    if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
+    return Math.floor(ago / 86400) + 'd ago';
+}
+async function loadAudit() {
+    try {
+        const r = await fetch('/api/admin/audit', { credentials: 'same-origin' });
+        if (!r.ok) throw new Error(r.statusText);
+        const j = await r.json();
+        const nowS = Math.floor(Date.now() / 1000);
+        const rows = (j.entries || []).slice().reverse();   /* newest first */
+        $('audit').innerHTML = rows.length === 0
+            ? '<tr><td colspan="3" class="status">no actions yet</td></tr>'
+            : rows.map(e => {
+                const msg = String(e.msg || '').replace(/[<>&]/g,
+                    c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+                const src = String(e.src || '').replace(/[<>&]/g,
+                    c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+                return `<tr>
+                    <td><span class="status">${fmtAgo(e.at, nowS)}</span></td>
+                    <td><span class="sub2">${src}</span></td>
+                    <td>${msg}</td>
+                </tr>`;
+            }).join('');
+        $('audit-status').textContent = '(' + rows.length + ')';
+    } catch (e) {
+        $('audit-status').textContent = 'load failed';
+    }
+}
+loadAudit();
+setInterval(loadAudit, 10000);
 </script>
 </body>
 </html>

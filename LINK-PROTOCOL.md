@@ -442,7 +442,6 @@ hangtime_ms = 1500                         ; floor lease
 ; Auto-mute thresholds (server-driven)
 mute_threshold_pct = 15                    ; sustained loss% from a node
                                            ; (mute on ≥2 of last 3 reports)
-mute_window_s = 30
 auth_fail_kick = 200                       ; SRTP auth fails before kick (per 30s)
 max_reconnects_per_node_per_min = 6
 

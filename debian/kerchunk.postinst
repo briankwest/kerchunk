@@ -58,4 +58,16 @@ esac
 
 #DEBHELPER#
 
+# Belt-and-braces restart: if the service is running, restart it on
+# the new binary, regardless of what deb-systemd-helper thinks about
+# its enabled state. Operators who enabled with plain `systemctl
+# enable kerchunkd` (not via deb-systemd-helper) otherwise see
+# "kerchunkd.service is a disabled or a static unit not running, not
+# starting it." on every upgrade and have to manually restart to pick
+# up the new build.
+if [ -d /run/systemd/system ] && \
+   systemctl is-active --quiet kerchunkd.service 2>/dev/null; then
+    systemctl try-restart kerchunkd.service >/dev/null 2>&1 || true
+fi
+
 exit 0
