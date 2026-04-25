@@ -30,9 +30,10 @@ header .sub { color: var(--dim); font-size: 14px; }
 .btn-warn { border-color: var(--yellow); color: var(--yellow); }
 .btn-red  { border-color: var(--red); color: var(--red); }
 .btn-go   { border-color: var(--green); color: var(--green); }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 640px; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border);
-         vertical-align: top; }
+         vertical-align: top; white-space: nowrap; }
 th { color: var(--dim); font-size: 11px; text-transform: uppercase;
      letter-spacing: 1px; font-weight: 600; }
 td.num { font-variant-numeric: tabular-nums; text-align: right; }
@@ -123,13 +124,13 @@ input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-s
       <button class="btn btn-go" onclick="openNode(null)">+ Add node</button>
     </span>
   </h2>
-  <table>
+  <div class="table-wrap"><table>
     <thead><tr>
       <th>ID</th><th>Default TG</th><th>Allowed TGs</th>
       <th>PSK (first 8)</th><th>Status</th><th>Actions</th>
     </tr></thead>
     <tbody id="nodes"><tr><td colspan="6">loading…</td></tr></tbody>
-  </table>
+  </table></div>
 </div>
 
 <div class="card">
@@ -139,12 +140,12 @@ input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-s
       <button class="btn btn-go" onclick="openTg(null)">+ Add talkgroup</button>
     </span>
   </h2>
-  <table>
+  <div class="table-wrap"><table>
     <thead><tr>
       <th>TG</th><th>Name</th><th>Members</th><th>Actions</th>
     </tr></thead>
     <tbody id="tgs"><tr><td colspan="4">loading…</td></tr></tbody>
-  </table>
+  </table></div>
 </div>
 
 <!-- Node edit dialog -->

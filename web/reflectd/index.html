@@ -28,8 +28,14 @@ header .sub { color: var(--dim); font-size: 14px; }
 .btn:hover  { border-color: var(--accent); color: var(--accent); }
 .btn-warn { border-color: var(--yellow); color: var(--yellow); }
 .btn-red  { border-color: var(--red); color: var(--red); }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+/* Tables are wrapped in .table-wrap so a too-wide table scrolls
+ * horizontally INSIDE its card instead of pushing the whole page
+ * wider than the viewport (which on a phone drags the header off
+ * the left edge). */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 700px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border);
+         white-space: nowrap; }
 th { color: var(--dim); font-size: 11px; text-transform: uppercase;
      letter-spacing: 1px; font-weight: 600; }
 td.num { font-variant-numeric: tabular-nums; text-align: right; }
@@ -86,7 +92,7 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
 <div class="card">
   <h2>Nodes</h2>
-  <table>
+  <div class="table-wrap"><table>
     <thead><tr>
       <th></th><th>Node ID</th><th>State</th><th>TG</th>
       <th class="num">Uptime</th>
@@ -97,18 +103,18 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
       <th>Actions</th>
     </tr></thead>
     <tbody id="nodes"><tr><td colspan="13">loading…</td></tr></tbody>
-  </table>
+  </table></div>
 </div>
 
 <div class="card">
   <h2>Talkgroups</h2>
-  <table>
+  <div class="table-wrap"><table>
     <thead><tr>
       <th>TG</th><th>Name</th><th class="num">Members</th><th>Talker</th>
       <th class="num">For</th><th>Actions</th>
     </tr></thead>
     <tbody id="tgs"><tr><td colspan="6">—</td></tr></tbody>
-  </table>
+  </table></div>
 </div>
 
 <script>
