@@ -79,6 +79,7 @@
 #define LINK_MSG_TG_OK                 "tg_ok"
 #define LINK_MSG_TG_DENIED             "tg_denied"
 #define LINK_MSG_TG_MEMBERSHIP_CHANGED "tg_membership_changed"
+#define LINK_MSG_TG_ROSTER             "tg_roster"
 #define LINK_MSG_MUTE                  "mute"
 #define LINK_MSG_UNMUTE                "unmute"
 #define LINK_MSG_TALKER                "talker"
