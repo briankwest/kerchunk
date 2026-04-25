@@ -207,6 +207,10 @@ static int load_globals(rcfg_t *out, const kerchunk_config_t *cfg)
 
     out->keepalive_s        = kerchunk_config_get_int(
         cfg, "reflector", "keepalive_s", KERCHUNK_LINK_DEFAULT_KEEPALIVE_S);
+
+    const char *minver = kerchunk_config_get(cfg, "reflector", "min_client_version");
+    snprintf(out->min_client_version, sizeof(out->min_client_version),
+             "%s", minver ? minver : "");
     out->hangtime_ms        = kerchunk_config_get_int(
         cfg, "reflector", "hangtime_ms", KERCHUNK_LINK_DEFAULT_HANGTIME_MS);
     out->mute_threshold_pct = kerchunk_config_get_int(

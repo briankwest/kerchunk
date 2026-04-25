@@ -47,6 +47,7 @@ typedef struct {
 
     int      keepalive_s;
     int      hangtime_ms;
+    char     min_client_version[32]; /* "kerchunk 1.0.0" — lex compare */
     int      mute_threshold_pct;
     int      mute_window_s;
     int      auth_fail_kick;

@@ -49,6 +49,20 @@ typedef struct {
 } node_rt_t;
 static node_rt_t g_node_rt[RCFG_MAX_NODES];
 
+/* Lex-compare two version strings of the form "kerchunk X.Y.Z" or
+ * "X.Y.Z". Returns <0, 0, >0 like strcmp. Empty min ⇒ always pass. */
+static int version_at_least(const char *client_ver, const char *min_ver)
+{
+    if (!min_ver || !min_ver[0]) return 0;
+    if (!client_ver) return -1;
+    /* Strip a leading "kerchunk " prefix from either side. */
+    const char *cv = client_ver;
+    if (strncmp(cv, "kerchunk ", 9) == 0) cv += 9;
+    const char *mv = min_ver;
+    if (strncmp(mv, "kerchunk ", 9) == 0) mv += 9;
+    return strcmp(cv, mv);
+}
+
 static int g_udp_fd = -1;
 
 /* Per-talkgroup runtime state (parallel to g_cfg.tgs[]). */
@@ -73,7 +87,9 @@ typedef struct {
     conn_state_t state;
     uint8_t      challenge[KERCHUNK_LINK_CHALLENGE_BYTES];
     int          node_idx;          /* -1 until authenticated */
-    time_t       last_traffic;
+    int64_t      last_traffic_ms;   /* monotonic — for idle timeout */
+    int64_t      last_ping_ms;      /* when we last sent a ping */
+    int          waiting_pong;      /* 1 if ping in flight */
 } conn_t;
 
 /* ── Hex helpers ──────────────────────────────────────────────────── */
@@ -209,6 +225,58 @@ static void floor_release(int tg_idx, const char *reason_for_revoked)
     }
 }
 
+/* Walk every connection: send a ping if quiet for keepalive_s, close
+ * the conn if no reply within another keepalive_s window. */
+static struct mg_mgr *g_mgr_ref;   /* set in main() so the tick can iterate */
+static void keepalive_tick(void)
+{
+    if (!g_mgr_ref) return;
+    int64_t now = now_ms();
+    int64_t kalive_ms = (int64_t)g_cfg.keepalive_s * 1000;
+    for (struct mg_connection *c = g_mgr_ref->conns; c; c = c->next) {
+        conn_t *cs = (conn_t *)c->fn_data;
+        if (!cs || c->is_listening || c->is_closing || c->is_draining) continue;
+        if (cs->state != CST_AUTHENTICATED) continue;
+
+        int64_t quiet = now - cs->last_traffic_ms;
+        if (cs->waiting_pong) {
+            int64_t since_ping = now - cs->last_ping_ms;
+            if (since_ping > kalive_ms) {
+                /* No pong → peer is gone. Close cleanly. */
+                log_msg("node %s idle timeout — closing",
+                        g_cfg.nodes[cs->node_idx].id);
+                c->is_closing = 1;
+            }
+        } else if (quiet > kalive_ms) {
+            char buf[64];
+            snprintf(buf, sizeof(buf),
+                     "{\"type\":\"%s\",\"seq\":%lld}",
+                     LINK_MSG_PING, (long long)now);
+            send_json(c, buf);
+            cs->last_ping_ms  = now;
+            cs->waiting_pong  = 1;
+        }
+    }
+}
+
+/* Send reflector_shutdown(deploy, restart_in_s) to every authenticated
+ * conn so they back off cleanly instead of stampeding on a restart. */
+static void broadcast_shutdown(int restart_in_s)
+{
+    if (!g_mgr_ref) return;
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"%s\",\"reason\":\"deploy\",\"restart_in_s\":%d}",
+             LINK_MSG_REFLECTOR_SHUTDOWN, restart_in_s);
+    for (struct mg_connection *c = g_mgr_ref->conns; c; c = c->next) {
+        conn_t *cs = (conn_t *)c->fn_data;
+        if (!cs || c->is_listening) continue;
+        if (cs->state == CST_AUTHENTICATED)
+            send_json(c, buf);
+        c->is_draining = 1;
+    }
+}
+
 /* Walk all TGs every poll tick; release any floor whose lease expired. */
 static void floor_tick(void)
 {
@@ -275,13 +343,15 @@ static void send_hello(struct mg_connection *c, conn_t *cs)
     char buf[KERCHUNK_LINK_MAX_MSG];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"%s\",\"challenge\":\"%s\","
-             "\"reflector_version\":\"reflectd 0.2.0\","
-             "\"min_client_version\":\"kerchunk 1.0.0\","
+             "\"reflector_version\":\"reflectd 0.7.0\","
+             "\"min_client_version\":\"%s\","
              "\"proto\":\"%s\"}",
-             LINK_MSG_HELLO, chal_hex, KERCHUNK_LINK_PROTO_VERSION);
+             LINK_MSG_HELLO, chal_hex,
+             g_cfg.min_client_version[0] ? g_cfg.min_client_version : "",
+             KERCHUNK_LINK_PROTO_VERSION);
     send_json(c, buf);
     cs->state = CST_AWAITING_LOGIN;
-    cs->last_traffic = time(NULL);
+    cs->last_traffic_ms = now_ms();
 }
 
 static void send_login_denied(struct mg_connection *c,
@@ -318,6 +388,11 @@ static void handle_login(struct mg_connection *c, conn_t *cs,
     }
     if (g_node_rt[idx].connected) {
         send_login_denied(c, LINK_ERR_NODE_BUSY, "already connected");
+        goto out;
+    }
+    if (version_at_least(client_ver, g_cfg.min_client_version) < 0) {
+        send_login_denied(c, LINK_ERR_VERSION_MISMATCH,
+                          "client below min_client_version");
         goto out;
     }
 
@@ -479,7 +554,8 @@ static void handle_simulate_talk_end(conn_t *cs)
 static void handle_message(struct mg_connection *c, conn_t *cs,
                            const char *line, size_t len)
 {
-    cs->last_traffic = time(NULL);
+    cs->last_traffic_ms = now_ms();
+    cs->waiting_pong = 0;
     struct mg_str body = mg_str_n(line, len);
     char *type = mg_json_get_str(body, "$.type");
     if (!type) {
@@ -817,13 +893,20 @@ int main(int argc, char **argv)
     log_msg("listening on %s + udp:%d with %d node(s), %d talkgroup(s)",
             g_cfg.listen_url, g_cfg.rtp_port, g_cfg.n_nodes, g_cfg.n_tgs);
 
+    g_mgr_ref = &mgr;
     while (!g_stop) {
         mg_mgr_poll(&mgr, 10);
         audio_drain_udp();
         floor_tick();
+        keepalive_tick();
     }
 
-    log_msg("shutting down");
+    log_msg("shutting down — sending reflector_shutdown to clients");
+    broadcast_shutdown(15);
+    /* Let the WS frames drain; clients re-connect after restart_in_s ±20%. */
+    int64_t drain_until = now_ms() + 500;
+    while (now_ms() < drain_until)
+        mg_mgr_poll(&mgr, 50);
     if (g_udp_fd >= 0) close(g_udp_fd);
     for (int i = 0; i < g_cfg.n_nodes; i++)
         audio_node_destroy(g_node_rt[i].audio);

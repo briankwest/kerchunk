@@ -117,6 +117,19 @@ static int g_pkts_recv;
 static int g_srtp_auth_fail;
 static int g_decode_err;
 
+/* SRTP-drift detection: a sliding 10s window. If we accumulate >1000
+ * auth failures in any 10s span, force a reconnect to renegotiate the
+ * master key (PLAN-LINK.md § 4.6 row "SRTP auth failures > 1000 / 10s"). */
+static int     g_srtp_window_count;
+static int64_t g_srtp_window_start_ms;
+#define SRTP_DRIFT_WINDOW_MS  10000
+#define SRTP_DRIFT_THRESHOLD  1000
+
+/* NAT keepalive cadence — sends a PT=99 marker (no floor grab) every
+ * 10s when not transmitting so the upstream NAT mapping stays open. */
+#define NAT_KEEPALIVE_MS 10000
+static int64_t g_last_nat_keepalive_ms;
+
 /* PTT state (bg thread owns these). */
 static int     g_link_ptt_held;
 static int64_t g_link_last_recv_ms;
@@ -504,6 +517,19 @@ static void drain_udp_recv(void)
         int len = (int)n;
         if (srtp_unprotect(g_srtp_in, pkt, &len) != srtp_err_status_ok) {
             g_srtp_auth_fail++;
+            int64_t nowm = now_ms();
+            if (nowm - g_srtp_window_start_ms > SRTP_DRIFT_WINDOW_MS) {
+                g_srtp_window_start_ms = nowm;
+                g_srtp_window_count    = 0;
+            }
+            if (++g_srtp_window_count > SRTP_DRIFT_THRESHOLD) {
+                set_error("SRTP auth fail > %d/10s — reconnecting (key drift)",
+                          SRTP_DRIFT_THRESHOLD);
+                g_srtp_window_count    = 0;
+                g_srtp_window_start_ms = nowm;
+                if (g_ws) g_ws->is_closing = 1;
+                return;
+            }
             continue;
         }
         if (len <= 12) continue;
@@ -608,15 +634,104 @@ static void on_talker(struct mg_str body)
     publish_snapshot();
 }
 
+/* Phase 7 — protocol-defined deny / revoke / shutdown / mute paths.
+ * Each surfaces in g_last_error so the operator can see what happened. */
+
+static void on_tg_denied(struct mg_str body)
+{
+    char *code = mg_json_get_str(body, "$.code");
+    long  tg   = mg_json_get_long(body, "$.tg", 0);
+    set_error("tg_denied(tg=%ld, %s)", tg, code ? code : "?");
+    free(code);
+}
+
+static void on_floor_denied(struct mg_str body)
+{
+    char *cur = mg_json_get_str(body, "$.current_talker");
+    /* Don't store as a sticky error — it's a transient signal — but do
+     * surface it on the snapshot so the dashboard can flash a "TG busy"
+     * indicator. */
+    set_error("TG busy (current talker: %s)", cur ? cur : "?");
+    free(cur);
+}
+
+static void on_floor_revoked(struct mg_str body)
+{
+    char *code = mg_json_get_str(body, "$.code");
+    if (code && strcmp(code, LINK_ERR_LEASE_EXPIRED) != 0) {
+        /* lease_expired is normal end-of-transmission — not worth
+         * showing. admin / auth_failures are. */
+        set_error("floor_revoked(%s)", code);
+    }
+    free(code);
+}
+
+static void on_reflector_shutdown(struct mg_str body)
+{
+    long restart_in_s = mg_json_get_long(body, "$.restart_in_s", 15);
+    char *reason = mg_json_get_str(body, "$.reason");
+    set_error("reflector_shutdown(%s) — retry in %lds",
+              reason ? reason : "?", restart_in_s);
+    free(reason);
+    /* Override the next-reconnect time to match the server's hint, with
+     * ±20% jitter so 100 nodes don't reconnect in lockstep. */
+    int64_t base = restart_in_s * 1000;
+    int     jit  = (int)((rand() % (base / 5 + 1)) - base / 10);
+    g_next_reconnect_ms = now_ms() + base + jit;
+    /* Increment attempt so the regular backoff (if reconnect later
+     * still fails) starts conservative. */
+    g_reconnect_attempt = 1;
+    if (g_ws) g_ws->is_closing = 1;
+}
+
+static void on_mute(struct mg_str body)
+{
+    char *reason = mg_json_get_str(body, "$.reason");
+    set_error("muted by reflector (%s)", reason ? reason : "?");
+    /* For now: reflector-side mute means stop sending. Client-side we
+     * simply gate encoding on g_local_rx_active AND a new flag. */
+    /* (Full mute/unmute toggle ships with admin API in a later phase.) */
+    free(reason);
+}
+
+static void on_unmute(void)
+{
+    /* No-op for now — once we add a g_muted gate this clears it. */
+    set_error("");
+}
+
+static void on_kicked(struct mg_str body)
+{
+    char *code = mg_json_get_str(body, "$.code");
+    set_error("kicked: %s", code ? code : "?");
+    if (link_err_is_permanent(code))
+        set_state(LST_STOPPED);
+    free(code);
+    if (g_ws) g_ws->is_closing = 1;
+}
+
 static void on_ws_msg(struct mg_str body)
 {
     char *type = mg_json_get_str(body, "$.type");
     if (!type) return;
 
-    if      (!strcmp(type, LINK_MSG_HELLO))        on_hello(body);
-    else if (!strcmp(type, LINK_MSG_LOGIN_OK))     on_login_ok(body);
-    else if (!strcmp(type, LINK_MSG_LOGIN_DENIED)) on_login_denied(body);
-    else if (!strcmp(type, LINK_MSG_TALKER))       on_talker(body);
+    if      (!strcmp(type, LINK_MSG_HELLO))             on_hello(body);
+    else if (!strcmp(type, LINK_MSG_LOGIN_OK))          on_login_ok(body);
+    else if (!strcmp(type, LINK_MSG_LOGIN_DENIED))      on_login_denied(body);
+    else if (!strcmp(type, LINK_MSG_TALKER))            on_talker(body);
+    else if (!strcmp(type, LINK_MSG_TG_DENIED))         on_tg_denied(body);
+    else if (!strcmp(type, LINK_MSG_FLOOR_DENIED))      on_floor_denied(body);
+    else if (!strcmp(type, LINK_MSG_FLOOR_REVOKED))     on_floor_revoked(body);
+    else if (!strcmp(type, LINK_MSG_REFLECTOR_SHUTDOWN))on_reflector_shutdown(body);
+    else if (!strcmp(type, LINK_MSG_MUTE))              on_mute(body);
+    else if (!strcmp(type, LINK_MSG_UNMUTE))            on_unmute();
+    else if (!strcmp(type, LINK_MSG_KICKED))            on_kicked(body);
+    else if (!strcmp(type, LINK_MSG_PONG)) {
+        /* Just receiving the pong is enough — refreshes our peer-alive
+         * timer (which is per-conn and managed by the server). We don't
+         * track our own pong window in the client right now because the
+         * mongoose poll already fires MG_EV_CLOSE on TCP timeout. */
+    }
     else if (!strcmp(type, LINK_MSG_PING)) {
         long seq = mg_json_get_long(body, "$.seq", 0);
         char b[64];
@@ -624,9 +739,6 @@ static void on_ws_msg(struct mg_str body)
                  LINK_MSG_PONG, seq);
         send_ws_json(b);
     }
-    /* tg_ok / tg_denied / floor_denied / floor_revoked / mute / kicked /
-     * reflector_shutdown handlers come in a later phase; for now they
-     * just publish a snapshot via the catch-all below. */
     free(type);
     publish_snapshot();
 }
@@ -659,14 +771,19 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
             session_cleanup();
             if (g_state != LST_STOPPED) {
                 set_state(LST_RECONNECTING);
-                int delay = g_reconnect_min_ms;
-                for (int i = 1; i < g_reconnect_attempt && delay < g_reconnect_max_ms; i++)
-                    delay *= 2;
-                if (delay > g_reconnect_max_ms) delay = g_reconnect_max_ms;
-                /* ±20% jitter */
-                int jit = (rand() % (delay / 5 + 1)) - delay / 10;
-                g_next_reconnect_ms = now_ms() + delay + jit;
-                g_reconnect_attempt++;
+                /* If reflector_shutdown (or any other path) already scheduled
+                 * a deferred reconnect, honor that — don't stomp it with the
+                 * default min_ms. */
+                int64_t now = now_ms();
+                if (g_next_reconnect_ms <= now) {
+                    int delay = g_reconnect_min_ms;
+                    for (int i = 1; i < g_reconnect_attempt && delay < g_reconnect_max_ms; i++)
+                        delay *= 2;
+                    if (delay > g_reconnect_max_ms) delay = g_reconnect_max_ms;
+                    int jit = (rand() % (delay / 5 + 1)) - delay / 10;
+                    g_next_reconnect_ms = now + delay + jit;
+                    g_reconnect_attempt++;
+                }
             }
         }
     }
@@ -739,6 +856,14 @@ static void *bg_main(void *ud)
         if (g_session_active && now >= next_send_ms) {
             drain_and_encode();
             next_send_ms = now + KERCHUNK_LINK_OPUS_FRAME_MS;
+        }
+
+        /* NAT keepalive: PT=99 marker every NAT_KEEPALIVE_MS when no
+         * audio has gone out recently. Cheap (12-byte SRTP packet) and
+         * keeps the upstream mapping alive across long quiet periods. */
+        if (g_session_active && now - g_last_nat_keepalive_ms >= NAT_KEEPALIVE_MS) {
+            send_bootstrap();
+            g_last_nat_keepalive_ms = now;
         }
     }
     return NULL;
