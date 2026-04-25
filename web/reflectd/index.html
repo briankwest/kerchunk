@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>kerchunk-reflectd — admin</title>
+<title>kerchunk-reflectd — Roster</title>
 <style>
 :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
         --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
@@ -14,16 +14,18 @@ body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
        max-width: 1400px; margin: 0 auto; }
 header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 header h1 { font-size: 20px; }
+header nav { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; width: 100%; }
+header nav .btn { text-decoration: none; white-space: nowrap; flex: 1; text-align: center;
+                  padding: 5px 10px; }
 header .sub { color: var(--dim); font-size: 14px; }
-header .auth { margin-left: auto; display: flex; gap: 6px; align-items: center; }
-.card { background: var(--card); border: 1px solid var(--border);
-        border-radius: 8px; padding: 14px; margin-bottom: 12px; }
-.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase;
-           letter-spacing: 1px; margin-bottom: 10px; }
-.btn { padding: 4px 10px; border: 1px solid var(--border); background: var(--card);
-       color: var(--text); border-radius: 4px; cursor: pointer; font-size: 11px;
-       font-family: inherit; }
-.btn:hover { border-color: var(--accent); color: var(--accent); }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+        padding: 14px; margin-bottom: 12px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px;
+           margin-bottom: 10px; }
+.btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
+       text-decoration: none; display: inline-block; font-family: inherit; }
+.btn:hover  { border-color: var(--accent); color: var(--accent); }
 .btn-warn { border-color: var(--yellow); color: var(--yellow); }
 .btn-red  { border-color: var(--red); color: var(--red); }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -36,29 +38,39 @@ th { color: var(--dim); font-size: 11px; text-transform: uppercase;
 .dot.yellow { background: var(--yellow); }
 .talker { color: var(--accent); font-weight: 600; }
 .talker.idle { color: var(--dim); font-style: italic; font-weight: 400; }
-.status { font-size: 12px; color: var(--dim); margin-top: 6px; }
+.muted { color: var(--yellow); }
+.status { font-size: 12px; color: var(--dim); }
 .status.ok  { color: var(--green); }
 .status.err { color: var(--red); }
-.muted { color: var(--yellow); }
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+@media (max-width: 600px) {
+  body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  header { gap: 8px; margin-bottom: 10px; }
+  header h1 { font-size: 16px; }
+  header nav .btn { min-height: 36px; display: flex;
+                    align-items: center; justify-content: center; }
+  .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+}
 </style>
 </head>
 <body>
 
 <header>
   <h1>kerchunk-reflectd</h1>
-  <span class="sub">Repeater linking reflector — admin</span>
-  <nav style="margin-left:auto; display:flex; gap:6px;">
+  <span class="sub">Repeater linking reflector</span>
+  <nav>
     <a href="/admin/" class="btn" style="border-color:var(--accent);color:var(--accent)">Roster</a>
     <a href="/admin/recordings.html" class="btn">Recordings</a>
   </nav>
-  <div class="auth" style="width:100%;display:flex;gap:6px;align-items:center;margin-top:6px">
-    <button class="btn" onclick="reload()">Refresh</button>
-  </div>
 </header>
 
 <div class="card">
   <h2>Reflector</h2>
-  <div id="meta">—</div>
+  <div class="toolbar">
+    <span id="meta">—</span>
+    <span class="status" id="status" style="margin-left:auto"></span>
+  </div>
 </div>
 
 <div class="card">
@@ -66,7 +78,7 @@ th { color: var(--dim); font-size: 11px; text-transform: uppercase;
   <table>
     <thead><tr><th></th><th>Node ID</th><th>State</th><th>TG</th>
                <th>SRTP fails (30s)</th><th>Actions</th></tr></thead>
-    <tbody id="nodes"><tr><td colspan="6">Enter token + Refresh</td></tr></tbody>
+    <tbody id="nodes"><tr><td colspan="6">loading…</td></tr></tbody>
   </table>
 </div>
 
@@ -79,17 +91,11 @@ th { color: var(--dim); font-size: 11px; text-transform: uppercase;
   </table>
 </div>
 
-<div id="status" class="status"></div>
-
 <script>
 const $ = id => document.getElementById(id);
-
 function setStatus(msg, kind) { $('status').className = 'status ' + (kind || '');
                                  $('status').textContent = msg; }
 
-/* Auth is HTTP Basic — the browser caches credentials per-origin after
- * the first 401, so subsequent fetches inherit them automatically.
- * No token field needed in the UI. */
 async function api(method, path, body) {
     const opts = { method, headers: {}, credentials: 'same-origin' };
     if (body) {
