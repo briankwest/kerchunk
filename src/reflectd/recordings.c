@@ -15,6 +15,8 @@
 #include "recordings.h"
 #include "../../include/kerchunk_link_proto.h"
 
+#include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +29,7 @@
 
 static char g_dir[256];
 static int  g_enabled;
-static int  g_max_age_days;   /* TODO: auto-prune in a follow-up commit */
+static int  g_max_age_days;   /* drives recordings_prune() */
 
 struct rec_session {
     FILE        *wav;
@@ -62,6 +64,82 @@ int recordings_global_init(const char *dir, int enabled, int max_age_days)
 }
 
 void recordings_global_shutdown(void) { /* no-op — sessions own their own state */ }
+
+/* "YYYY-MM-DD" → days_since_epoch. Returns -1 on parse error. */
+static int parse_ymd_to_days(const char *ymd)
+{
+    if (!ymd || strlen(ymd) != 10) return -1;
+    if (ymd[4] != '-' || ymd[7] != '-') return -1;
+    for (int i = 0; i < 10; i++)
+        if (i != 4 && i != 7 && !isdigit((unsigned char)ymd[i])) return -1;
+    struct tm tm = {0};
+    tm.tm_year = atoi(ymd) - 1900;
+    tm.tm_mon  = atoi(ymd + 5) - 1;
+    tm.tm_mday = atoi(ymd + 8);
+    /* Use timegm-equivalent: setenv TZ=UTC, mktime, restore. We just
+     * use the seconds-since-epoch from mktime in local time and divide
+     * by 86400 — fine for "older than N days" comparisons. */
+    time_t t = mktime(&tm);
+    if (t == (time_t)-1) return -1;
+    return (int)(t / 86400);
+}
+
+/* rm -rf a directory recursively. */
+static void rmrf(const char *path)
+{
+    DIR *d = opendir(path);
+    if (!d) { unlink(path); return; }
+    struct dirent *e;
+    char child[512];
+    while ((e = readdir(d)) != NULL) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        snprintf(child, sizeof(child), "%s/%s", path, e->d_name);
+        struct stat st;
+        if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode)) rmrf(child);
+        else                                                unlink(child);
+    }
+    closedir(d);
+    rmdir(path);
+}
+
+int recordings_prune(void)
+{
+    if (!g_enabled || g_max_age_days <= 0 || !g_dir[0]) return 0;
+
+    int today_days = (int)(time(NULL) / 86400);
+    int cutoff = today_days - g_max_age_days;
+
+    DIR *d = opendir(g_dir);
+    if (!d) return 0;
+    int removed = 0;
+    struct dirent *e;
+    char path[512];
+    while ((e = readdir(d)) != NULL) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+
+        /* Match either YYYY-MM-DD/ subdir (10 chars, no extension)
+         * or YYYY-MM-DD.csv (14 chars). */
+        size_t n = strlen(e->d_name);
+        char ymd[11] = {0};
+        if (n == 10) {
+            memcpy(ymd, e->d_name, 10);
+        } else if (n == 14 && strcmp(e->d_name + 10, ".csv") == 0) {
+            memcpy(ymd, e->d_name, 10);
+        } else {
+            continue;
+        }
+        int day = parse_ymd_to_days(ymd);
+        if (day < 0 || day >= cutoff) continue;
+
+        snprintf(path, sizeof(path), "%s/%s", g_dir, e->d_name);
+        struct stat st;
+        if (lstat(path, &st) == 0 && S_ISDIR(st.st_mode)) rmrf(path);
+        else                                               unlink(path);
+        removed++;
+    }
+    closedir(d);
+    return removed;
+}
 
 /* Write the canonical 44-byte WAV header. Sizes are patched in
  * recordings_end once we know how many PCM bytes were appended. */

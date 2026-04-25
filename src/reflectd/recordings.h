@@ -37,4 +37,11 @@ void           recordings_end(rec_session_t *s);
 /* Path helpers used by the HTTP API. Caller-allocated buf. */
 const char *recordings_dir(void);
 
+/* Walk recording_dir and rm -rf YYYY-MM-DD subdirs (plus matching
+ * YYYY-MM-DD.csv) older than max_age_days. Safe to call repeatedly;
+ * no-op if recording is disabled or max_age_days <= 0. Returns the
+ * number of items removed (sum of dirs + CSV files). Intended to be
+ * called from the reflectd main loop on an hourly tick. */
+int recordings_prune(void);
+
 #endif /* KERCHUNK_REFLECTD_RECORDINGS_H */

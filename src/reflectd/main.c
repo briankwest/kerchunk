@@ -1308,8 +1308,8 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
     /* HTTP request:
      *   /link       → WS upgrade for mod_link clients
      *   /api/...    → admin JSON API (Bearer token required)
-     *   /admin/...  → static dashboard files (no auth — uses Bearer
-     *                 from the form input, JS calls /api/* directly)
+     *   /admin/...  → static dashboard files (also Basic-Auth gated;
+     *                 JS calls /api/... directly with same-origin creds)
      *   /           → 302 redirect to /admin/
      *   anything else → 404
      */
@@ -1323,7 +1323,7 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
             mg_http_reply(c, 302, "Location: /admin/\r\n", "");
         } else if (mg_match(hm->uri, mg_str("/admin/#"), NULL) ||
                    mg_match(hm->uri, mg_str("/admin"),   NULL)) {
-            /* Same Basic Auth gate as /api/* — browsers prompt natively
+            /* Same Basic Auth gate as /api/... — browsers prompt natively
              * on 401 and cache credentials per origin so the JS doesn't
              * need to manage tokens. */
             if (!admin_auth_ok(hm)) {
@@ -1708,6 +1708,7 @@ int main(int argc, char **argv)
 
     g_mgr_ref = &mgr;
     int64_t next_sse_heartbeat_ms = 0;
+    int64_t next_prune_ms = 30 * 1000;   /* first pass shortly after start */
     while (!g_stop) {
         mg_mgr_poll(&mgr, 10);
         audio_drain_udp();
@@ -1720,6 +1721,12 @@ int main(int argc, char **argv)
         if (nowm >= next_sse_heartbeat_ms) {
             sse_broadcast_state();
             next_sse_heartbeat_ms = nowm + 1000;
+        }
+        if (nowm >= next_prune_ms) {
+            int n = recordings_prune();
+            if (n > 0) log_msg("pruned %d recording dir(s)/CSV(s) older than %d days",
+                               n, g_cfg.recording_max_age_days);
+            next_prune_ms = nowm + 3600 * 1000;   /* hourly */
         }
     }
 
