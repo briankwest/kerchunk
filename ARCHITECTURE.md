@@ -286,7 +286,7 @@ Shutdown proceeds in strict order to avoid use-after-free and ensure clean teard
   ┌──────────┐     ┌─────────────────────────────────┐
   │ WAV file │     │                                 │
   │ PCM buf  │────►│  1. Assert PTT                  │
-  │ Tone gen │     │  2. TX delay (silence)           │
+  │ Tone gen │     │  2. TX delay (silence)          │
   │ Silence  │     │  3. Drain frame (960 samples)   │
   └──────────┘     │  4. Scrambler (if enabled)      │
    (priority       │  5. Write to playback ring      │──► Playback Ring ──► ALSA
@@ -441,7 +441,7 @@ signals — the raw HID COS bit and the DTMF decoder's detected state.
   │  HID poll    │────────────────────────────────┤
   └──────────────┘                                │
                                                   ├─ OR ─► present
-  ┌──────────────┐   DTMF decoder.detected       │
+  ┌──────────────┐   DTMF decoder.detected        │
   │ Audio thread │──── (atomic_int) ──────────────┘
   └──────────────┘
 
