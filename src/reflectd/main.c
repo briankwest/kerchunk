@@ -201,6 +201,9 @@ typedef struct {
 static audit_entry_t g_audit[AUDIT_RING_SIZE];
 static int           g_audit_n;     /* total entries written (incl. overwrites) */
 
+/* Forward decl — defined where the SSE machinery lives. */
+static void sse_broadcast_typed(const char *type, const char *payload, size_t plen);
+
 static void audit(struct mg_connection *c, const char *fmt, ...)
 {
     audit_entry_t *e = &g_audit[g_audit_n % AUDIT_RING_SIZE];
@@ -216,6 +219,22 @@ static void audit(struct mg_connection *c, const char *fmt, ...)
     va_end(ap);
     g_audit_n++;
     log_msg("admin: %s [from %s]", e->msg, e->src_ip);
+
+    /* Push the new entry as a typed SSE event so dashboards append
+     * immediately — no polling. */
+    char esc_msg[320];
+    size_t j = 0;
+    for (size_t k = 0; e->msg[k] && j + 2 < sizeof(esc_msg); k++) {
+        if (e->msg[k] == '"' || e->msg[k] == '\\') esc_msg[j++] = '\\';
+        esc_msg[j++] = e->msg[k];
+    }
+    esc_msg[j] = '\0';
+    char payload[480];
+    int n = snprintf(payload, sizeof(payload),
+        "{\"at\":%lld,\"src\":\"%s\",\"msg\":\"%s\"}",
+        (long long)e->at, e->src_ip, esc_msg);
+    if (n > 0 && (size_t)n < sizeof(payload))
+        sse_broadcast_typed("audit", payload, (size_t)n);
 }
 
 /* ── Time helper (monotonic ms) ───────────────────────────────────── */
@@ -1060,6 +1079,30 @@ static void sse_emit_to(struct mg_connection *c, const char *json, size_t len)
     mg_send(c, "\n\n", 2);
 }
 
+/* Wrap a payload as {"type":"<t>","data":<payload>} and broadcast.
+ * Lets the dashboard dispatch on .type instead of treating every SSE
+ * message as a full state snapshot. */
+static void sse_broadcast_typed(const char *type, const char *payload, size_t plen)
+{
+    if (!g_mgr_ref) return;
+    int subs = 0;
+    for (struct mg_connection *c = g_mgr_ref->conns; c; c = c->next)
+        if (c->data[0] == SSE_TAG && !c->is_closing && !c->is_draining)
+            subs++;
+    if (!subs) return;
+
+    size_t cap = strlen(type) + plen + 32;
+    char  *line = malloc(cap);
+    if (!line) return;
+    int n = snprintf(line, cap, "{\"type\":\"%s\",\"data\":%s}", type, payload);
+    if (n < 0 || (size_t)n >= cap) { free(line); return; }
+
+    for (struct mg_connection *c = g_mgr_ref->conns; c; c = c->next)
+        if (c->data[0] == SSE_TAG && !c->is_closing && !c->is_draining)
+            sse_emit_to(c, line, (size_t)n);
+    free(line);
+}
+
 /* Push the full state snapshot to every SSE client. Called on any
  * state change AND on a 1-second heartbeat for live counter updates. */
 static void sse_broadcast_state(void)
@@ -1073,9 +1116,7 @@ static void sse_broadcast_state(void)
     size_t len;
     char  *body = build_state_json(&len);
     if (!body) return;
-    for (struct mg_connection *c = g_mgr_ref->conns; c; c = c->next)
-        if (c->data[0] == SSE_TAG && !c->is_closing && !c->is_draining)
-            sse_emit_to(c, body, len);
+    sse_broadcast_typed("state", body, len);
     free(body);
 }
 
@@ -1090,10 +1131,21 @@ static void api_events(struct mg_connection *c)
         "X-Accel-Buffering: no\r\n"
         "\r\n");
     c->data[0] = SSE_TAG;
-    /* Send an initial snapshot immediately so the page populates. */
+    /* Send an initial snapshot immediately so the page populates.
+     * Wrap in {"type":"state","data":...} to match sse_broadcast_typed,
+     * so the dashboard handler can dispatch on .type uniformly. */
     size_t len;
     char  *body = build_state_json(&len);
-    if (body) { sse_emit_to(c, body, len); free(body); }
+    if (body) {
+        size_t cap = len + 32;
+        char  *line = malloc(cap);
+        if (line) {
+            int n = snprintf(line, cap, "{\"type\":\"state\",\"data\":%s}", body);
+            if (n > 0 && (size_t)n < cap) sse_emit_to(c, line, (size_t)n);
+            free(line);
+        }
+        free(body);
+    }
 }
 
 /* GET /api/recordings — list per-day CSVs that exist on disk, OR with

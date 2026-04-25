@@ -259,22 +259,6 @@ async function pruneNow() {
     setStatus(`<span class="live"></span>pruned ${j.removed} item(s)`);
 }
 
-/* SSE-driven — reflectd pushes a fresh state snapshot on every change
- * AND once per second for live counter updates. No polling. */
-function subscribe() {
-    const es = new EventSource('/api/events', { withCredentials: true });
-    es.onmessage = (ev) => { try { render(JSON.parse(ev.data)); } catch (_) {} };
-    es.onerror = () => {
-        setStatus('<span class="live" style="background:var(--red)"></span>reconnecting…');
-        es.close();
-        setTimeout(subscribe, 2000);
-    };
-}
-subscribe();
-
-/* Audit log — polled at 10s. Cheap; ring is at most 64 entries.
- * Could be SSE-pushed later, but polling avoids a second event
- * channel on the dashboard for now. */
 function fmtAgo(epoch, nowS) {
     const ago = Math.max(0, nowS - epoch);
     if (ago < 60)    return ago + 's ago';
@@ -282,33 +266,64 @@ function fmtAgo(epoch, nowS) {
     if (ago < 86400) return Math.floor(ago / 3600) + 'h ago';
     return Math.floor(ago / 86400) + 'd ago';
 }
-async function loadAudit() {
+function escHtml(s) {
+    return String(s).replace(/[<>&]/g,
+        c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+}
+
+let g_audit = [];   /* newest first */
+function renderAudit() {
+    const nowS = Math.floor(Date.now() / 1000);
+    $('audit').innerHTML = g_audit.length === 0
+        ? '<tr><td colspan="3" class="status">no actions yet</td></tr>'
+        : g_audit.map(e => `<tr>
+            <td><span class="status">${fmtAgo(e.at, nowS)}</span></td>
+            <td><span class="sub2">${escHtml(e.src)}</span></td>
+            <td>${escHtml(e.msg)}</td>
+        </tr>`).join('');
+    $('audit-status').textContent = g_audit.length
+        ? '(' + g_audit.length + ')' : '';
+}
+function pushAudit(e) {
+    g_audit.unshift(e);
+    if (g_audit.length > 64) g_audit.length = 64;
+    renderAudit();
+}
+
+/* Initial backfill — SSE only delivers entries that occur after we
+ * connect, so on first page load we still need the ring history. */
+async function loadAuditOnce() {
     try {
         const r = await fetch('/api/admin/audit', { credentials: 'same-origin' });
-        if (!r.ok) throw new Error(r.statusText);
+        if (!r.ok) return;
         const j = await r.json();
-        const nowS = Math.floor(Date.now() / 1000);
-        const rows = (j.entries || []).slice().reverse();   /* newest first */
-        $('audit').innerHTML = rows.length === 0
-            ? '<tr><td colspan="3" class="status">no actions yet</td></tr>'
-            : rows.map(e => {
-                const msg = String(e.msg || '').replace(/[<>&]/g,
-                    c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-                const src = String(e.src || '').replace(/[<>&]/g,
-                    c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-                return `<tr>
-                    <td><span class="status">${fmtAgo(e.at, nowS)}</span></td>
-                    <td><span class="sub2">${src}</span></td>
-                    <td>${msg}</td>
-                </tr>`;
-            }).join('');
-        $('audit-status').textContent = '(' + rows.length + ')';
-    } catch (e) {
-        $('audit-status').textContent = 'load failed';
-    }
+        g_audit = (j.entries || []).slice().reverse();
+        renderAudit();
+    } catch (_) {}
 }
-loadAudit();
-setInterval(loadAudit, 10000);
+loadAuditOnce();
+/* Re-tick relative timestamps every 30s so "5s ago" doesn't get stuck. */
+setInterval(renderAudit, 30000);
+
+/* SSE-driven — reflectd wraps every push as {type, data}. Dispatch
+ * on .type so we can multiplex state snapshots and audit events
+ * over the same connection. No polling. */
+function subscribe() {
+    const es = new EventSource('/api/events', { withCredentials: true });
+    es.onmessage = (ev) => {
+        try {
+            const m = JSON.parse(ev.data);
+            if (m.type === 'state' && m.data) render(m.data);
+            else if (m.type === 'audit' && m.data) pushAudit(m.data);
+        } catch (_) {}
+    };
+    es.onerror = () => {
+        setStatus('<span class="live" style="background:var(--red)"></span>reconnecting…');
+        es.close();
+        setTimeout(subscribe, 2000);
+    };
+}
+subscribe();
 </script>
 </body>
 </html>
