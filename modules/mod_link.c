@@ -504,20 +504,38 @@ static void drain_and_encode(void)
 }
 
 /* Track loss for the quality report. Called every received audio packet
- * with the parsed RTP seq. The window is reset by send_quality_report()
- * at the report tick — not lazily on next-packet — so each report
- * covers exactly one window and a stale loss% can't be re-reported
- * across silent periods. */
+ * with the parsed RTP seq.
+ *
+ * The window is reset by send_quality_report() at the report tick —
+ * not lazily on next-packet — so each report covers exactly one window
+ * and a stale loss% can't be re-reported across silent periods.
+ *
+ * Out-of-order arrivals are credited back: when a packet shows up with
+ * a seq lower than the highest we've seen, we previously counted it
+ * as "missing" — decrement g_recv_lost. Without this, even a tiny
+ * amount of LAN reordering pegs reported loss at a steady false rate
+ * (15%+ with mild jitter), which would constantly trip the reflector. */
 static void quality_track_seq(uint16_t seq)
 {
-    if (g_recv_have_seq) {
-        int16_t gap = (int16_t)(seq - g_recv_last_seq) - 1;
-        if (gap > 0 && gap < 200) g_recv_lost += gap;
-    } else {
+    if (!g_recv_have_seq) {
         g_recv_have_seq = 1;
+        g_recv_last_seq = seq;
+        g_recv_received++;
+        return;
     }
-    g_recv_last_seq = seq;
-    g_recv_received++;
+    int16_t delta = (int16_t)(seq - g_recv_last_seq);
+    if (delta > 0) {
+        /* Forward jump: delta-1 packets are presumed lost (still in
+         * flight or genuinely dropped). Cap at 200 so a sender swap
+         * doesn't attribute 60k packets of bogus loss. */
+        if (delta < 200) g_recv_lost += (delta - 1);
+        g_recv_last_seq = seq;
+    } else if (delta < 0 && delta > -200) {
+        /* Late arrival of something we'd already counted as lost. */
+        if (g_recv_lost > 0) g_recv_lost--;
+    }
+    /* delta == 0 → duplicate. Don't double-count receipt either. */
+    if (delta != 0) g_recv_received++;
 }
 
 static void send_quality_report(void)
@@ -536,9 +554,11 @@ static void send_quality_report(void)
     int total        = received + lost;
     int loss_pct_x10 = total > 0 ? (lost * 1000 / total) : 0;
 
-    /* Suppress reports with no traffic — there's nothing to evaluate
-     * and the reflector treating a silent window as 0% is misleading. */
-    if (total == 0) return;
+    /* Suppress reports with very few packets in the window — losing
+     * 1 of 4 is 25%, statistically meaningless and would trip mute on
+     * any brief reorder. 30 packets ≈ 1.8s of audio at 60ms frames,
+     * enough to make the percentage trustworthy. */
+    if (total < 30) return;
 
     int jb_depth_ms = 0;
     char buf[256];
