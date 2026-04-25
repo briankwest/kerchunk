@@ -368,11 +368,7 @@ void test_resample(void)
     }
     test_end();
 
-    /* 2. Upsample 8k → 48k (6x).
-     * The new resampler applies an anti-image LPF, so a steep
-     * linear ramp gets attenuated at the high-frequency end.
-     * Just verify the count + a sane range — don't pin specific
-     * sample values. */
+    /* 2. Upsample 8k → 48k (6x) */
     test_begin("resample: 8k to 48k upsample");
     {
         int16_t src[80];
@@ -381,15 +377,11 @@ void test_resample(void)
         size_t dst_n = 0;
         int rc = kerchunk_resample(src, 80, 8000, 48000, &dst, &dst_n);
         test_assert(rc == 0, "resample failed");
-        test_assert(dst_n >= 470 && dst_n <= 482, "wrong output count");
-        /* All output samples bounded in the input's range. */
-        int16_t mn = 0, mx = 0;
-        for (size_t i = 0; i < dst_n; i++) {
-            if (dst[i] < mn) mn = dst[i];
-            if (dst[i] > mx) mx = dst[i];
-        }
-        test_assert(mx > 1000 && mx <= 8500, "peak out of range");
-        test_assert(mn >= -200, "below-zero overshoot too large");
+        test_assert(dst_n == 480, "expected 480 samples");
+        /* first and last samples should match (endpoints) */
+        test_assert(dst[0] == 0, "first sample wrong");
+        /* sample 479 should be near src[79] = 7900 */
+        test_assert(dst[479] >= 7800 && dst[479] <= 7900, "last sample out of range");
         free(dst);
     }
     test_end();
@@ -409,10 +401,7 @@ void test_resample(void)
     }
     test_end();
 
-    /* 4. Upsample 8k → 16k (2x). With an LPF in the path, an
-     * 8-sample step input (way too short for the filter to settle)
-     * will produce attenuated output. Just verify count + that
-     * output is bounded inside the input range. */
+    /* 4. Upsample 8k → 16k (2x) */
     test_begin("resample: 8k to 16k");
     {
         int16_t src[] = {0, 1000, 2000, 3000};
@@ -420,11 +409,9 @@ void test_resample(void)
         size_t dst_n = 0;
         int rc = kerchunk_resample(src, 4, 8000, 16000, &dst, &dst_n);
         test_assert(rc == 0, "resample failed");
-        test_assert(dst_n >= 7 && dst_n <= 9, "wrong output count");
-        for (size_t i = 0; i < dst_n; i++) {
-            test_assert(dst[i] >= -200 && dst[i] <= 3500,
-                        "sample outside expected range");
-        }
+        test_assert(dst_n == 8, "expected 8 samples");
+        /* interpolated midpoints should be ~500, ~1500, ~2500 */
+        test_assert(dst[1] >= 400 && dst[1] <= 600, "interpolation off");
         free(dst);
     }
     test_end();
