@@ -287,10 +287,11 @@ Simple energy-based VAD. Telephone audio is bandlimited (300-3400 Hz) and
 relatively clean. We don't need WebRTC-grade VAD.
 
 ```c
-#define VAD_FRAME_SAMPLES    160       /* 20ms at 8kHz */
-#define VAD_THRESHOLD        800       /* RMS threshold (configurable) */
-#define VAD_HOLD_MS          500       /* Hold time after last speech */
-#define VAD_ATTACK_FRAMES    2         /* Require N consecutive speech frames */
+#define VAD_FRAME_SAMPLES       160    /* 20ms at 8kHz */
+#define VAD_THRESHOLD_DEF       800    /* RMS threshold (configurable) */
+#define VAD_HOLD_MS_DEF         500    /* Hold time after last speech */
+#define VAD_ATTACK_FRAMES_DEF   5      /* Require N consecutive speech frames */
+#define PREROLL_FRAMES          10     /* 200ms ring of pre-VAD audio */
 
 static int compute_rms(const int16_t *buf, size_t n)
 {
@@ -305,9 +306,18 @@ static int compute_rms(const int16_t *buf, size_t n)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `vad_threshold` | 800 | RMS energy threshold for speech detection |
-| `vad_hold_ms` | 500 | Hold time after last speech before PTT release |
-| `vad_attack_frames` | 2 | Consecutive speech frames required to assert PTT |
+| `vad_threshold` | `800` | RMS energy threshold for speech detection |
+| `vad_hold_ms` | `500ms` | Hold time after last speech before PTT release |
+| `vad_attack_frames` | `5` | Consecutive 20 ms frames required before VAD asserts speech (raised from 2 — fewer false-trigger PTT cycles on phone-line clicks) |
+| `phone_gain` | `0.5` | Per-sample gain (0.0–2.0) applied to phone audio before upsample. `0.5` (–6 dB) keeps SignalWire/FS-side hot feeds clear of clipping at the radio. |
+
+**Pre-roll buffer.** Because `vad_attack_frames` defaults to 5, the
+VAD swallows the first ~80 ms of an utterance before declaring
+speech and asserting PTT. To preserve the leading edge,
+mod_freeswitch keeps a 10-frame (200 ms) ring of every jitter-buffer
+read regardless of VAD verdict, and replays it into the queue at
+the moment of PTT engage. The listener hears the actual phoneme
+onset, not the audio that arrived after VAD finally settled.
 
 ### 5.3. Jitter Buffer
 
@@ -539,11 +549,13 @@ sip_gateway = voip_provider
 udp_base_port = 16000
 dial_prefix = 1
 dial_whitelist =             ; empty = allow all, or: 918,539,405
-max_call_duration = 180      ; seconds
-dial_timeout = 30            ; seconds
-inactivity_timeout = 60      ; seconds
-vad_threshold = 800
-vad_hold_ms = 500
+max_call_duration = 3m
+dial_timeout = 30s
+inactivity_timeout = 60s
+vad_threshold = 800          ; RMS floor to qualify as speech
+vad_hold_ms = 500ms          ; keep PTT this long after last speech frame
+vad_attack_frames = 5        ; consecutive 20 ms frames before VAD asserts
+phone_gain = 0.5             ; phone audio gain (0.0..2.0); 0.5 = -6 dB
 admin_only = off
 ```
 

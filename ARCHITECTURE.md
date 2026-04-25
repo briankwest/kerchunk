@@ -598,8 +598,57 @@ replaces the old single-signal cor_drop_hold mask. See
   ├── POST /api/cmd          → execute CLI command (admin)
   ├── POST /api/register     → self-registration (public)
   ├── POST /api/config/reload → reload config (admin)
+  ├── GET  /admin/api/sounds  → sound-tree listing for the Play picker
   └── CRUD /api/users, /api/groups (admin)
 ```
+
+### SSE event types
+
+`/api/events` and `/admin/api/events` carry a JSON-per-line stream
+of typed events. Producer modules call `g_core->sse_publish(type,
+payload, admin_only)`; mod_web wraps each as
+`{"type":<type>,"data":<payload>,"ts":<now_us>}`, broadcasts to
+every connected client, and caches the last value per type so a
+fresh subscriber gets a snapshot replay on first connect.
+
+| `type` | Producer | Audience | Notes |
+|---|---|---|---|
+| `status` | mod_web | public | Authoritative repeater state — rx_state, tx_state, cor, ptt, emergency, emergency_expires_at, queue_depth, audio_listeners, audio_sample_rate, audio_bitrate_kbps, registration_enabled |
+| `weather_updated` | mod_weather | public | Current conditions + 3-day forecast |
+| `nws_updated` | mod_nws | public | Active alerts (full body) |
+| `bulletin_updated` | mod_web | public | Operator bulletin |
+| `caller_session_updated` | mod_caller | admin | Authenticated user, method, remaining session time |
+| `voicemail_updated` | mod_voicemail | admin | Per-user mailbox counts, armed/recording state |
+| `cdr_updated` | mod_cdr | admin | today_calls (voice-only), today_seconds, in-call state |
+| `cwid_updated` | mod_cwid | public | Mode (always/on_call), next-fire epoch, quiet-hours state |
+| `recorder_updated` | mod_recorder | admin | Active recording + last saved file |
+| `freeswitch_updated` | mod_freeswitch | admin | ESL link state + call FSM |
+| `otp_sessions_updated` | mod_otp | admin | List of users currently holding elevated access |
+| `stats_updated` / `sys_updated` / `sys_history_updated` | mod_stats / mod_sysstats | public | RRD samples for charts |
+
+Plus the per-event types serialized from the in-process event bus
+(`rx_state_change`, `tx_state_change`, `cor_assert`, `ptt_assert`,
+…). Snapshot types update on state change; the per-event types fire
+on each occurrence.
+
+### Access log
+
+Each HTTP request logs one line at `INFO` level with status code
+and bytes-buffered:
+
+```
+192.168.86.1 GET /logo.png 304 83        ← revalidation, no body
+192.168.86.1 GET /logo.png 200 122       ← header bytes (1.5 MB body
+                                         ←  streamed via mongoose
+                                         ←  sendfile path)
+192.168.86.1 GET /api/status 200 588
+127.0.0.1    POST /admin/api/cmd 200 47
+```
+
+`bytes` is what mongoose buffered into `c->send` — accurate for
+`mg_http_reply` API responses, header-only for streamed file
+bodies. The status code is always exact and is the load-bearing
+operational signal.
 
 ---
 
@@ -607,7 +656,8 @@ replaces the old single-signal cor_drop_hold mask. See
 
 | Requirement | Implementation | Reference |
 |-------------|----------------|-----------|
-| Station ID every 15 min | CW ID interval capped at 900000ms | FCC 95.1751 |
+| Station ID every 15 min | CW ID interval capped at 15m (900000 ms) | FCC 95.1751 |
+| Repeater IDs only when in operation | `cwid_mode = on_call` (recommended) — silent when no traffic, IDs at start + every interval + at end of each conversation | FCC 95.1751 |
 | Voice ID | Speaks frequency + PL tone after CW ID | FCC 95.1751 |
 | No unsolicited one-way | Auto-announce defaults off | FCC 95.1733 |
 | Kerchunk filter | COR debounce (default 150ms) | — |

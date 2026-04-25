@@ -495,11 +495,12 @@ Order matters for dependencies:
 | `timeout_time` | `180000` | Time-out timer (3 min max continuous TX), in ms |
 | `cor_debounce` | `150` | Kerchunk filter debounce, in ms (0 to disable) |
 | `tx_delay` | `100` | Silence after PTT assert before audio, in ms |
-| `tx_tail` | `200` | Silence after audio before PTT release, in ms |
+| `tx_tail` | `200ms` | Silence after audio before PTT release |
 | `software_relay` | `off` | Relay RX audio to TX in software |
-| `relay_drain` | `500` | Continue relaying after COR drop, in ms |
+| `relay_drain` | `500ms` | Continue relaying after COR drop |
 | `require_identification` | `off` | Closed repeater: deny access unless identified |
-| `cwid_interval` | `600000` | CW ID interval in ms (capped at 900000 per FCC) |
+| `cwid_mode` | `always` | `always` = fixed-interval ID, `on_call` = ID only during/after activity (FCC-aligned) |
+| `cwid_interval` | `10m` | CW ID interval (accepts `15m`, `5m`, raw ms). Capped at 15m per FCC 95.1751 |
 | `cwid_wpm` | `20` | Morse code speed in words per minute |
 | `cwid_freq` | `800` | CW tone frequency in Hz |
 | `voice_id` | `on` | Announce frequency/PL via TTS after CW ID |
@@ -540,8 +541,9 @@ Replaces the old `[repeater] cor_drop_hold` mechanism. See
 |-----|---------|-------------|
 | `api_key` | (none) | weatherapi.com API key (required) |
 | `location` | (none) | ZIP code or city name |
-| `interval` | `1800000` | Auto-announce interval (30 min), in ms |
-| `auto_announce` | `off` | Periodic announcements (off by default for FCC compliance) |
+| `fetch_interval` | `5m` | Dashboard refresh cadence — runs whenever an `api_key` is set, regardless of `auto_announce`, so the dashboard's weather card stays current on FCC-compliant configs |
+| `interval` | `30m` | On-air announce cadence (only fires when `auto_announce = on`) |
+| `auto_announce` | `off` | Periodic on-air announcements (off by default for FCC 95.1733) |
 | `announce_temp` | `on` | Include temperature in announcement |
 | `announce_conditions` | `on` | Include sky conditions |
 | `announce_wind` | `on` | Include wind speed and direction |
@@ -551,7 +553,7 @@ Replaces the old `[repeater] cor_drop_hold` mechanism. See
 | Key | Default | Description |
 |-----|---------|-------------|
 | `enabled` | `off` | Periodic auto-announce (off by default for FCC compliance) |
-| `interval` | `900000` | Auto-announce interval (15 min), in ms |
+| `interval` | `15m` | Auto-announce interval |
 | `timezone` | (none) | `central`, `eastern`, `mountain`, or `pacific` |
 
 #### `[nws]` -- NWS Weather Alerts
@@ -678,12 +680,21 @@ After playback, mod_parrot logs the **peak sample level** (dBFS) and **speech-ac
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `inter_digit_timeout` | `3000` | Timeout between digits before reset, in ms |
+| `inter_digit_timeout` | `3s` | Timeout between digits before reset |
 | `hits_to_begin` | `1` | Consecutive 20 ms tone blocks before decoder lock-on |
 | `misses_to_end` | `3` | Consecutive 20 ms silent blocks before tone-end |
 | `min_off_frames` | `1` | Silence (in 20 ms blocks) required before SAME digit can re-fire |
 
 The decoder is a libplcode Goertzel-based state machine (IDLE → PENDING → ACTIVE → COOLDOWN). The kerchunk defaults above are **looser** than libplcode's upstream (`2/3/2`) so tight-squelch radios that briefly drop audio between the CTCSS recovery and the tone still detect the digit, and so fast double-taps of the same digit (`*88#`, `*911#`) aren't collapsed into one. Raise these on noisy lines if you see spurious double-detects. The decoder is reset on every COR-assert edge — stale state from a prior session never leaks into a new keyup (see `ARCH-COR-DTMF.md` §12 item #4).
+
+**Tuning `min_off_frames` for problematic radios.** Some handhelds
+(notably BTECHs) chop the carrier mid-DTMF-press, so a single
+keypress can register as 2+ digits on the receive side. If you see
+this, raise `min_off_frames` to `5` (100 ms) or higher. Press-and-
+hold scenarios on radios with periodic ~150–220 ms dropouts may
+need `15` (300 ms). Same-digit-only debounce — different digits in
+sequence are unaffected. Note that this knob takes effect at
+daemon startup, not via SIGHUP reload.
 
 #### `[recording]` -- Transmission Recording
 
@@ -774,14 +785,23 @@ DTMF: `*97#` toggle, `*970#` off, `*971#`-`*978#` set code. CW ID and emergency 
 | `esl_password` | `ClueCon` | ESL password |
 | `sip_gateway` | (none) | SIP gateway name for outbound calls |
 | `udp_base_port` | `16000` | Base UDP port for audio streams |
-| `max_call_duration` | `180` | Maximum call duration in seconds |
-| `dial_timeout` | `30` | Dial timeout in seconds |
-| `inactivity_timeout` | `60` | Hang up after this many seconds of silence |
-| `vad_threshold` | `200` | Voice Activity Detection threshold |
-| `vad_hold_ms` | `300` | VAD hold time in ms |
+| `max_call_duration` | `3m` | Maximum call duration |
+| `dial_timeout` | `30s` | Max dial+connect time |
+| `inactivity_timeout` | `60s` | Hang up after this much silence |
+| `vad_threshold` | `800` | RMS floor for phone-side speech detection |
+| `vad_hold_ms` | `500ms` | Keep PTT held this long after last speech frame |
+| `vad_attack_frames` | `5` | Consecutive 20 ms frames before VAD asserts. Filters out brief noise/clicks; raise if false-trigger PTT cycles persist |
+| `phone_gain` | `0.5` | Phone audio gain (0.0–2.0). `0.5` = –6 dB headroom; drop further if phone audio clips on the radio. SignalWire/FS-side feeds often arrive near full-scale |
 | `admin_only` | `false` | Restrict autopatch to authenticated users |
 | `dial_prefix` | (none) | Prefix prepended to all dialed numbers |
 | `dial_whitelist` | (none) | Comma-separated list of allowed number patterns |
+
+**Pre-roll buffer.** Because `vad_attack_frames` swallows the first
+~80 ms of an utterance before declaring speech, mod_freeswitch
+keeps a 200 ms ring of every jitter-buffer read regardless of VAD
+verdict. On PTT engage it replays the ring into the queue so the
+listener hears the actual phoneme onset, not the audio that
+arrived after VAD finally settled.
 
 DTMF: `*0<digits>#` to dial, `*0#` to hang up. See [FREESWITCH.md](FREESWITCH.md) for FreeSWITCH server configuration and architecture details.
 

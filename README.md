@@ -678,9 +678,9 @@ Interval capped at 15 min (FCC 95.1751).
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `cwid_mode` | string | `always` | `always` = fixed timer, `on_call` = activity-triggered |
-| `cwid_interval` | ms | `600000` | ID interval during active conversation (capped at 900000) |
-| `cwid_tail` | ms | (interval) | on_call: delay before final ID after last activity |
+| `cwid_mode` | string | `always` | `always` = fixed timer, `on_call` = activity-triggered. `on_call` is the FCC-aligned default: a quiet repeater isn't "in operation" so doesn't need to ID. |
+| `cwid_interval` | duration | `10m` | ID interval. Accepts `15m`, `300s`, `600000` (ms). Capped at 15 min per FCC 95.1751. |
+| `cwid_tail` | duration | (interval) | on_call: delay before final ID after last activity |
 | `cwid_wpm` | int | `20` | Words per minute (min 5) |
 | `cwid_freq` | Hz | `800` | Tone frequency |
 | `tx_ctcss` | int | -- | CTCSS freq x10 (e.g., 1318 = 131.8 Hz). Announced in voice ID as "PL 131.8" |
@@ -704,8 +704,8 @@ Config section: `[courtesy]`
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `methods` | string | | Comma-separated: `dtmf_ani,dtmf_login` |
-| `ani_window` | ms | `500` | Window after COR for ANI digits |
-| `login_timeout` | ms | `1800000` | Login session timeout (30 min) |
+| `ani_window` | duration | `1s` | Window after COR for ANI digits |
+| `login_timeout` | duration | `30m` | Login session timeout |
 
 Config section: `[caller]`
 
@@ -713,10 +713,10 @@ Config section: `[caller]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `inter_digit_timeout` | ms | `3000` | Reset timeout between digits |
+| `inter_digit_timeout` | duration | `3s` | Reset timeout between digits |
 | `hits_to_begin` | blocks (20 ms) | `1` | Consecutive tone blocks before decoder lock-on |
 | `misses_to_end` | blocks (20 ms) | `3` | Consecutive silent blocks before tone-end |
-| `min_off_frames` | blocks (20 ms) | `1` | Silence required before SAME digit can re-fire |
+| `min_off_frames` | blocks (20 ms) | `1` | Silence required before SAME digit can re-fire. Bump to 5–15 if a single keypress on your radio (especially BTECHs) registers as 2+ digits — radios that chop the carrier mid-press will trigger duplicate detections. |
 
 Config section: `[dtmf]`. Defaults are tuned loose for tight-squelch
 radios; raise on noisy lines if you see spurious double-detects.
@@ -740,8 +740,9 @@ Uses TTS ("Current weather. Partly cloudy. Temperature 72 degrees. Wind from the
 |-----|------|---------|-------------|
 | `api_key` | string | | weatherapi.com API key |
 | `location` | string | | ZIP code or city |
-| `interval` | ms | `1800000` | Fetch/announce interval |
-| `auto_announce` | on/off | `off` | Periodic (FCC 95.1733) |
+| `fetch_interval` | duration | `5m` | Dashboard refresh cadence — runs whenever an api_key is set, regardless of `auto_announce`, so the weather card stays current on FCC-compliant default configs |
+| `interval` | duration | `30m` | On-air announce cadence (only fires when `auto_announce = on`) |
+| `auto_announce` | on/off | `off` | Periodic on-air announcement (FCC 95.1733) |
 | `announce_temp` | on/off | `on` | Include temperature |
 | `announce_conditions` | on/off | `on` | Include conditions |
 | `announce_wind` | on/off | `on` | Include wind |
@@ -813,7 +814,16 @@ Config section: `[parrot]`
 
 ### mod_cdr — Call Detail Records
 
-Daily CSV files with caller, method, duration, emergency flag, recording path.
+Daily CSV files (`<directory>/YYYY-MM-DD.csv`) with caller, method,
+duration, emergency flag, recording path. Filename + date columns
+are local time; the leading timestamp column is UTC epoch seconds.
+
+The dashboard's `today_calls` / `today_seconds` counters tally
+**voice transmissions only** — announcements (CW ID, weather, time,
+ASR/AI, parrot, voicemail prompts) still get a CSV row for audit
+but don't bump the counters. On daemon restart, today's CSV is
+replayed (skipping `system`-author rows) so the counters survive
+reboots and deb upgrades mid-day.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -1043,8 +1053,13 @@ Ham-only (`*0<digits>#` to dial, `*0#` to hang up). Connects to a local FreeSWIT
 | `esl_password` | string | `ClueCon` | ESL password |
 | `sip_gateway` | string | | Dial prefix for outbound bridge |
 | `admin_only` | on/off | `off` | Require admin access to use |
-| `dial_timeout` | s | `60` | Max dial+connect time |
-| `inactivity_timeout` | s | `600` | Max idle time during call |
+| `dial_timeout` | duration | `30s` | Max dial+connect time |
+| `inactivity_timeout` | duration | `60s` | Max idle time during call |
+| `max_call_duration` | duration | `3m` | Hard cap on call length |
+| `vad_threshold` | int | `800` | RMS floor to qualify as phone-side speech |
+| `vad_hold_ms` | duration | `500ms` | Keep PTT held this long after last speech frame |
+| `vad_attack_frames` | int | `5` | Consecutive 20 ms frames before VAD asserts (filters out clicks/short noise) |
+| `phone_gain` | float | `0.5` | Phone audio gain (0.0–2.0). `0.5` = –6 dB; drop further if phone audio clips on the radio |
 
 See [FREESWITCH.md](FREESWITCH.md) for the full ESL + dialplan setup. Config section: `[freeswitch]`. CLI: `freeswitch`.
 
