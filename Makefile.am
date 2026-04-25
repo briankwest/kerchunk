@@ -134,7 +134,8 @@ kerchunkmod_LTLIBRARIES = \
 	modules/mod_otp.la \
 	modules/mod_webhook.la \
 	modules/mod_scrambler.la \
-	modules/mod_freeswitch.la
+	modules/mod_freeswitch.la \
+	modules/mod_link.la
 
 if HAVE_RTLSDR
 kerchunkmod_LTLIBRARIES += modules/mod_sdr.la
@@ -235,6 +236,18 @@ modules_mod_freeswitch_la_SOURCES = modules/mod_freeswitch.c
 modules_mod_freeswitch_la_CFLAGS  = $(MOD_CFLAGS)
 modules_mod_freeswitch_la_LDFLAGS = $(MOD_LDFLAGS)
 modules_mod_freeswitch_la_LIBADD  = $(PLCODE_LIBS)
+
+# --- mod_link (link to kerchunk-reflectd network) ---
+
+modules_mod_link_la_SOURCES = modules/mod_link.c vendor/mongoose.c
+modules_mod_link_la_CFLAGS  = $(MOD_CFLAGS) -Ivendor \
+			      -DMG_TLS=MG_TLS_OPENSSL \
+			      -DMG_ENABLE_LINES=0 \
+			      -Wno-pedantic \
+			      $(OPENSSL_CFLAGS) $(SRTP2_CFLAGS) $(OPUS_CFLAGS)
+modules_mod_link_la_LDFLAGS = $(MOD_LDFLAGS)
+modules_mod_link_la_LIBADD  = $(PLCODE_LIBS) $(OPENSSL_LIBS) \
+			      $(SRTP2_LIBS) $(OPUS_LIBS) -lm
 
 # --- curl modules ---
 

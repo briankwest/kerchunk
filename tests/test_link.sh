@@ -250,5 +250,23 @@ if [ -z "$g_decoded" ] || [ "$g_decoded" -lt 15 ] || [ "$g_decoded" -gt 35 ]; th
 fi
 pass "gamma got ~one stream during contention: decoded=$g_decoded"
 
+# ── Phase 5: mod_link compiles + exports the loader symbol ────────
+echo "Phase 5 mod_link build sanity:"
+
+MOD="$BUILDDIR/modules/.libs/mod_link.so"
+if [ ! -f "$MOD" ]; then
+    fail "mod_link.so not built at $MOD"
+fi
+if ! nm -D --defined-only "$MOD" 2>/dev/null | grep -q ' T kerchunk_module_init$'; then
+    fail "mod_link.so missing kerchunk_module_init export"
+fi
+pass "mod_link.so built and exports kerchunk_module_init"
+
+# Verify the linked shared deps are what we expect (libopus + libsrtp2).
+needed=$(objdump -p "$MOD" 2>/dev/null | awk '/NEEDED/ {print $2}')
+echo "$needed" | grep -q libopus  || fail "mod_link.so missing libopus dep — got: $(echo $needed | tr '\n' ' ')"
+echo "$needed" | grep -q libsrtp  || fail "mod_link.so missing libsrtp2 dep — got: $(echo $needed | tr '\n' ' ')"
+pass "mod_link.so links libopus + libsrtp2"
+
 echo "test_link: all cases passed"
 exit 0
