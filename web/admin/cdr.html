@@ -33,6 +33,8 @@ table tr:last-child td { border-bottom: none; }
 table tr:hover td { background: rgba(88,166,255,0.04); }
 table tr.emergency td { background: rgba(248,81,73,0.10); }
 table tr.system { color: var(--dim); }
+table tr.tx td { color: var(--accent); }
+table tr.tx .col-method { font-weight: 600; }
 
 .btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
        color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
@@ -182,6 +184,7 @@ tr.player-row td {
     </div>
     <div class="group">
       <label><input type="checkbox" id="show-voice" checked> voice</label>
+      <label><input type="checkbox" id="show-tx" checked> TX</label>
       <label><input type="checkbox" id="show-system"> announcements</label>
       <label><input type="checkbox" id="show-emergency" checked> emergency</label>
     </div>
@@ -262,17 +265,21 @@ function filtered() {
   const u = document.getElementById('filter-user').value.toLowerCase();
   const m = document.getElementById('filter-method').value.toLowerCase();
   const showVoice  = document.getElementById('show-voice').checked;
+  const showTx     = document.getElementById('show-tx').checked;
   const showSys    = document.getElementById('show-system').checked;
   const showEmerg  = document.getElementById('show-emergency').checked;
 
   return g_records.filter(r => {
     const isSys   = r.user_name === 'system';
+    const isTx    = r.user_name === 'transmit' && r.method === 'TX';
     const isEmerg = !!r.emergency;
-    // Type-class gates (emergency rows always shown if showEmerg, even if voice/sys off)
+    /* Type-class gates. Emergency rows always pass if showEmerg
+     * regardless of other type toggles. */
     if (isEmerg && !showEmerg) return false;
     if (!isEmerg) {
-      if (isSys && !showSys) return false;
-      if (!isSys && !showVoice) return false;
+      if (isTx  && !showTx)    return false;
+      if (isSys && !showSys)   return false;
+      if (!isSys && !isTx && !showVoice) return false;
     }
     if (u && !(r.user_name || '').toLowerCase().includes(u)) return false;
     if (m && !(r.method || '').toLowerCase().includes(m)) return false;
@@ -324,8 +331,13 @@ function render() {
 
   for (const r of rows) {
     const isSys   = r.user_name === 'system';
+    const isTx    = r.user_name === 'transmit' && r.method === 'TX';
     const isEmerg = !!r.emergency;
-    const cls = (isEmerg ? 'emergency ' : '') + (isSys ? 'system' : '');
+    const cls = [
+      isEmerg ? 'emergency' : '',
+      isSys   ? 'system'    : '',
+      isTx    ? 'tx'        : '',
+    ].filter(Boolean).join(' ');
     const isWav = !isSys && r.recording && r.recording.toLowerCase().endsWith('.wav');
     const recCol = isSys
       ? '<span class="col-desc">' + escapeHtml(r.recording || '') + '</span>'
@@ -514,7 +526,7 @@ document.getElementById('date-picker').addEventListener('change', e => {
 });
 document.getElementById('prev-day').addEventListener('click', () => stepDay(-1));
 document.getElementById('next-day').addEventListener('click', () => stepDay(+1));
-['filter-user','filter-method','show-voice','show-system','show-emergency']
+['filter-user','filter-method','show-voice','show-tx','show-system','show-emergency']
   .forEach(id => document.getElementById(id)
     .addEventListener('input', render));
 

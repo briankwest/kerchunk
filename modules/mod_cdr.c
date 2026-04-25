@@ -316,17 +316,62 @@ static void on_caller_identified(const kerchevt_t *evt, void *ud)
     publish_cdr_snapshot();
 }
 
+/* Write a standalone CDR row for a TX recording (parrot, autopatch
+ * playback, AI reply, manual play, announcement audio, etc.).
+ * One row per queue-drain → queue-complete cycle from mod_recorder.
+ * The corresponding announcement event (if any) still writes its own
+ * row via on_announcement — different views of the same logical event:
+ * the announcement row says what triggered the TX, the recording row
+ * gives the operator a WAV to click ▶ on. */
+static void write_tx_cdr(const char *path, float duration_s)
+{
+    if (!g_enabled) return;
+
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char date[36], tstr[16];
+    snprintf(date, sizeof(date), "%04d-%02d-%02d",
+             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+    snprintf(tstr, sizeof(tstr), "%02d:%02d:%02d",
+             t->tm_hour, t->tm_min, t->tm_sec);
+
+    FILE *fp = open_daily_csv();
+    if (!fp) return;
+
+    /* 11 cols matching voice/announcement layout. user_name="transmit"
+     * + method="TX" lets the dashboard filter these distinctly. */
+    fprintf(fp, "%ld,%s,%s,0,transmit,TX,%.1f,%d,0,0,",
+            (long)now, date, tstr,
+            (double)duration_s, kerchunk_core_get_emergency());
+    csv_write_field(fp, path ? path : "");
+    fputc('\n', fp);
+    fclose(fp);
+
+    /* TX cycles aren't tallied into today_calls — that counter is
+     * voice-only ("calls" = inbound user keyups). The CDR row is for
+     * the browser/audit view, which surfaces TX rows separately. */
+    publish_cdr_snapshot();
+}
+
 static void on_recording_saved(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
-    if (!g_in_call) return;
+    if (!evt->recording.direction || !evt->recording.path) return;
 
-    /* Only capture RX recordings (not TX announcements) */
-    if (evt->recording.direction &&
-        strcmp(evt->recording.direction, "RX") == 0 &&
-        evt->recording.path) {
-        snprintf(g_call_recording, sizeof(g_call_recording),
-                 "%s", evt->recording.path);
+    if (strcmp(evt->recording.direction, "RX") == 0) {
+        /* RX: attach the WAV path to the in-progress voice row.
+         * write_cdr (fired on COR_DROP) reads g_call_recording. */
+        if (g_in_call)
+            snprintf(g_call_recording, sizeof(g_call_recording),
+                     "%s", evt->recording.path);
+        return;
+    }
+
+    if (strcmp(evt->recording.direction, "TX") == 0) {
+        /* TX: standalone row. Not gated on g_in_call — most TX cycles
+         * (CW ID, weather, parrot, autopatch) happen outside any RX
+         * call. */
+        write_tx_cdr(evt->recording.path, evt->recording.duration);
     }
 }
 
