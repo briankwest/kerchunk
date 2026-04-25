@@ -22,7 +22,7 @@ liblinenoise_la_CFLAGS  = -std=c11 -Wall -O2 \
 
 # ---------- programs ----------
 
-bin_PROGRAMS = kerchunkd kerchunk kerchunk-diag
+bin_PROGRAMS = kerchunkd kerchunk kerchunk-diag kerchunk-reflectd kerchunk-link-probe
 
 # --- kerchunkd (daemon) ---
 
@@ -78,6 +78,30 @@ kerchunk_diag_CFLAGS  = -std=c11 -Wall -O2 \
 			$(PLATFORM_CFLAGS) -D_DEFAULT_SOURCE \
 			$(PORTAUDIO_CFLAGS)
 kerchunk_diag_LDADD   = $(PORTAUDIO_LIBS) -lm
+
+# --- kerchunk-reflectd + kerchunk-link-probe (Phase 1: protocol skeleton) ---
+# See PLAN-LINK.md. Both binaries link mongoose for I/O and openssl for
+# HMAC. No SRTP / TLS / Opus yet — those land in subsequent phases.
+
+kerchunk_reflectd_SOURCES = src/reflectd/main.c vendor/mongoose.c
+kerchunk_reflectd_CFLAGS  = -std=c11 -Wall -O2 \
+			    $(PLATFORM_CFLAGS) -D_DEFAULT_SOURCE \
+			    -Ivendor -Iinclude \
+			    -DMG_TLS=MG_TLS_OPENSSL \
+			    -DMG_ENABLE_LINES=0 \
+			    -Wno-pedantic \
+			    $(OPENSSL_CFLAGS)
+kerchunk_reflectd_LDADD   = $(OPENSSL_LIBS) $(PTHREAD_LIBS)
+
+kerchunk_link_probe_SOURCES = src/reflectd/link_probe.c vendor/mongoose.c
+kerchunk_link_probe_CFLAGS  = -std=c11 -Wall -O2 \
+			      $(PLATFORM_CFLAGS) -D_DEFAULT_SOURCE \
+			      -Ivendor -Iinclude \
+			      -DMG_TLS=MG_TLS_OPENSSL \
+			      -DMG_ENABLE_LINES=0 \
+			      -Wno-pedantic \
+			      $(OPENSSL_CFLAGS)
+kerchunk_link_probe_LDADD   = $(OPENSSL_LIBS) $(PTHREAD_LIBS)
 
 # ---------- modules (libtool modules) ----------
 
