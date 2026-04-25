@@ -83,7 +83,10 @@ kerchunk_diag_LDADD   = $(PORTAUDIO_LIBS) -lm
 # See PLAN-LINK.md. Both binaries link mongoose for I/O and openssl for
 # HMAC. No SRTP / TLS / Opus yet — those land in subsequent phases.
 
-kerchunk_reflectd_SOURCES = src/reflectd/main.c vendor/mongoose.c
+kerchunk_reflectd_SOURCES = src/reflectd/main.c \
+			    src/reflectd/config.c \
+			    src/kerchunk_config.c \
+			    vendor/mongoose.c
 kerchunk_reflectd_CFLAGS  = -std=c11 -Wall -O2 \
 			    $(PLATFORM_CFLAGS) -D_DEFAULT_SOURCE \
 			    -Ivendor -Iinclude \
