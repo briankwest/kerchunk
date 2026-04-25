@@ -1,12 +1,17 @@
-# COR/COS + DTMF: Current State and Re-Architecture Proposal
+# COR/COS + DTMF — design notes
 
-Draft — do not commit. Uncommitted working doc for review.
+How carrier-detect (COR/COS bit) and DTMF decoding are wired into the
+audio thread, and why they're shaped the way they are. The original
+"current state vs proposal" framing has been collapsed: the proposal
+landed (see `kerchunk_audio_tick`, `kerchunk_txactivity`,
+`[txactivity]` config, the fused TX-end detector, and the audio-tick
+test suites). What follows describes the resulting design.
 
 ---
 
-## 1. What we have today
+## 1. Physical signal path
 
-### 1.1 Physical signal path
+### 1.1 Hardware
 
 ```
    Radio AF out ──────────────────→ RIM-Lite USB audio ──────→ PortAudio ──→ cap_ring
@@ -163,7 +168,12 @@ And our DTMF pipeline is *also* trying to reason about the same "is user present
 
 ---
 
-## 4. Proposed re-architecture
+## 4. The re-architecture
+
+(Implemented; the wiring described here is what `kerchunk_audio_tick`
++ `kerchunk_txactivity` actually do today. §11 has the concrete
+shapes.)
+
 
 ### 4.1 Core idea
 
@@ -294,108 +304,6 @@ The decoder currently binary-decides detected/not. It could also report per-digi
 ### 5.6 Test harness proposal
 
 We should be able to feed RX WAV files captured from real transmissions into the decoder offline (no kerchunkd, no threads) and measure hit rate. Put the harness in `libplcode/tools/decode_dtmf_wav` — eat a WAV, print detected digits with timestamps and confidences.
-
-This is also the tool we'd use to regression-test any decoder changes.
-
----
-
-## 6. Migration plan
-
-**Phase 0 — diagnostic (1 hour)**
-Build `decode_dtmf_wav` harness. Run it against the recordings in `/var/lib/kerchunk/recordings/*RX*.wav` that we know collapsed `*101#` to `*1#`. This tells us empirically: can libplcode *ever* get it right from the captured audio, or is the decoder the bottleneck?
-
-**Phase 1 — TX-activity detector in parallel (4 hours)**
-Implement `kerchunk_txactivity.c`. Wire it up. Fire `TX_BEGIN`/`TX_END` *in parallel with existing* `COR_ASSERT`/`COR_DROP`. Log both so we can correlate. No module changes yet.
-
-**Phase 2 — migrate consumers one module at a time (1 day)**
-Swap subscriptions from `COR_*` to `TX_*` in each of the twelve modules. Leave cor_drop_hold at its current 1000 ms as fallback. Delete the three redundant filter layers (cor_drop_hold, cor_debounce on open repeater, cor_gate_ms already gone).
-
-**Phase 3 — libplcode tuning (half day)**
-Based on phase 0 results: single-block hysteresis, lower min_off_frames, relaxed twist. Version bump libplcode. Add config knobs in kerchunk.
-
-**Phase 4 — cleanup (2 hours)**
-Delete the old `KERCHEVT_COR_*` events entirely (they've been aliased during phase 2-3). Consolidate docs and example config.
-
----
-
-## 7. Open questions / things to decide before implementing
-
-1. Do we really want to *remove* the COS-only behavior, or keep it as an opt-in (`[txactivity] trust_cos_bit = only`) for radios where it's honest?
-2. Should the TX activity detector live in the audio thread, the main thread, or a new thread of its own? Leaning: main thread, ticked at 20 ms, pulling audio_rms/dtmf_active from atomic snapshots the audio thread writes.
-3. Do we keep software_relay's `relay_active` / `g_relay_drain` concept, or fold that into the new TX activity state?
-4. Should the decoder changes (#5.1-5.4) be libplcode defaults or kerchunk-specific opts? If libplcode is a general-purpose library we don't want to destabilize its other users.
-5. What's the test plan? The `decode_dtmf_wav` harness is phase 0, but we'll also want an end-to-end reproducibility test — maybe a canned WAV + canned HID trace that we replay through kerchunkd.
-
----
-
-## 8. Summary of the point
-
-We've been patching a worn-out shirt. The real problem is the shirt's design: one noisy binary signal is being asked to represent a fuzzy concept ("is the user transmitting"), and twelve modules + three filter layers + one DSP are all trying to compensate for that signal's dishonesty in their own way. Replace that single-signal source-of-truth with a small sensor-fusion component, rename the events to what they actually mean, and the whole stack simplifies.
-
----
-
-## 9. Phase 0 results (update)
-
-Built + ran libplcode's existing `decode_dtmf_wav` tool against three
-real RX recordings captured on the live system:
-
-| Recording | What user pressed | Live decoder | Offline decoder | Agree? |
-|---|---|---|---|---|
-| Retevis attempt 1 | `*101#` | `*1#` (`*` / `1` / `#` at 0.9 / 3.8 / 6.0 s) | `*1#` (same timing) | ✓ |
-| Retevis attempt 2 | `*101#` | `*0#` (`*` / `0` / `#` at 0.3 / 1.4 / 2.4 s) | `*0#` (same timing) | ✓ |
-| Different radio | `*93#` | `*93#` (`*` / `9` / `3` / `#` at 1.1 / 2.4 / 3.3 / 4.0 s) | `*93#` (same timing) | ✓ |
-
-**Offline and live decoders produce identical output for the same
-audio.** libplcode is correctly identifying every DTMF tone present
-in the captured audio — it is NOT the bottleneck.
-
-**The Retevis RT97L is dropping tones from its audio output.** When
-the user presses `*101#`, only one of the three middle digits (`1`,
-`0`, `1`) physically makes it to the audio stream. The 2-3 second
-gap visible between `*` and the next detected digit is the window
-where multiple button presses happen but only one gets through.
-
-No amount of decoder tuning or pipeline fixing can recover digits
-the radio never captured. §5's libplcode tuning suggestions are
-therefore **withdrawn** — they'd help marginal-SNR cases but do
-nothing for missing-tone cases, which is what we actually have.
-
-## 10. Revised recommendation
-
-Phase 0 changes what Phase 1-3 are *worth*:
-
-| Phase | Was | Now |
-|---|---|---|
-| 0 (diagnostic) | proposed | **done** — radio is the bottleneck |
-| 1 (TX-activity detector) | fixes DTMF reliability | **hygiene-only** — still worth doing for latency + clarity, but won't improve `*101#` |
-| 2 (migrate consumers) | needed for Phase 1 rename | **simplified** — keep existing event names, just change how they're derived |
-| 3 (libplcode tuning) | possible fix | **dropped** — decoder is already correct |
-| 4 (cleanup) | follows 2 | same, smaller scope |
-
-### Simplified Phase 1
-
-The original plan proposed renaming `KERCHEVT_COR_*` → `KERCHEVT_TX_*`
-and migrating twelve module subscriptions. Given Phase 0 findings,
-a smaller change captures the architectural value:
-
-- **Keep event names as-is** (`KERCHEVT_COR_ASSERT` / `KERCHEVT_COR_DROP`).
-  No module changes.
-- **Change how main.c derives them** from a single HID bit + 1 s hold
-  to the fused signal described in §4 (cos_bit OR audio_rms OR
-  dtmf_active, with a short end-silence window).
-- **Remove `cor_drop_hold`** from `[repeater]` — obsolete once
-  fused, since the DTMF-induced COS drops are absorbed by
-  `dtmf_active = true` rather than by a time-based mask.
-- **New config** `[txactivity]` section with the fused-detector
-  knobs.
-
-This gets us the latency win (~700 ms earlier command dispatch on
-unkey), the architectural clarity, and lets us retire one filter
-layer — without churning every module subscriber.
-
-### What this re-architecture does NOT fix
-
-- DTMF reliability on radios that mute audio mid-tone. That's a
   hardware limitation. Mitigations remain:
   - Use a radio that doesn't mute DTMF (most non-Chinese HTs)
   - Restrict DTMF commands to two-tone patterns the radio can pass
