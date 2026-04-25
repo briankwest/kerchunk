@@ -20,7 +20,7 @@ jobs:
             autoconf automake libtool autoconf-archive \
             portaudio19-dev libcurl4-openssl-dev \
             libssl-dev librtlsdr-dev libasound2-dev \
-            libcjson-dev \
+            libcjson-dev libspeex-dev \
             libfst-dev g++
 
       # All sibling libs track main here so kerchunk CI catches any
