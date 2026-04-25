@@ -337,7 +337,7 @@ endif
 # ---------- tests ----------
 
 check_PROGRAMS = test_kerchunk test_web_acl
-TESTS = test_kerchunk test_web_acl
+TESTS = test_kerchunk test_web_acl tests/test_link.sh
 
 test_web_acl_SOURCES = tests/test_web_acl.c
 test_web_acl_CFLAGS = -std=c99 -D_POSIX_C_SOURCE=200809L -Wall -Wextra
@@ -467,6 +467,7 @@ uninstall-local:
 EXTRA_DIST = \
 	m4/ax_pthread.m4 \
 	m4/ax_check_compile_flag.m4 \
+	tests/test_link.sh \
 	kerchunk.conf.example \
 	users.conf.example \
 	system_prompt.md.example \
