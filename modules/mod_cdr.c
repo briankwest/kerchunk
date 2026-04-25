@@ -96,6 +96,33 @@ static const char *method_str(const char *m)
     return (m && m[0]) ? m : "unknown";
 }
 
+/* Write a single CSV field with RFC 4180 quoting. Wraps in "..." if
+ * the value contains a comma, double quote, CR, or LF; embedded
+ * quotes are doubled per the spec. Operator-influenced strings
+ * (user_name, recording path, announcement source/description) need
+ * this — natural language descriptions routinely contain commas
+ * (e.g. TTS-spelled callsigns, weather narratives). */
+static void csv_write_field(FILE *fp, const char *s)
+{
+    if (!s) s = "";
+    int needs_quote = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p == ',' || *p == '"' || *p == '\n' || *p == '\r') {
+            needs_quote = 1; break;
+        }
+    }
+    if (!needs_quote) {
+        fputs(s, fp);
+        return;
+    }
+    fputc('"', fp);
+    for (const char *p = s; *p; p++) {
+        if (*p == '"') fputc('"', fp);   /* RFC 4180: double embedded quote */
+        fputc(*p, fp);
+    }
+    fputc('"', fp);
+}
+
 /* ── Write a CDR record ── */
 
 static void write_cdr(void)
@@ -122,16 +149,18 @@ static void write_cdr(void)
         while ((int64_t)avg_rms * avg_rms < avg) avg_rms++;
     }
 
-    fprintf(fp, "%ld,%s,%s,%d,%s,%s,%.1f,%d,%d,%d,%s\n",
-            (long)now, date, tstr,
-            g_call_user_id,
-            g_call_user_name[0] ? g_call_user_name : "unknown",
-            method_str(g_call_method),
-            duration,
-            g_call_emergency,
-            (int)avg_rms,
-            (int)g_sq_peak_rms,
-            g_call_recording);
+    /* Numeric fields written direct, text fields via csv_write_field
+     * so any embedded commas/quotes get RFC 4180-quoted. */
+    fprintf(fp, "%ld,%s,%s,%d,",
+            (long)now, date, tstr, g_call_user_id);
+    csv_write_field(fp, g_call_user_name[0] ? g_call_user_name : "unknown");
+    fputc(',', fp);
+    csv_write_field(fp, method_str(g_call_method));
+    fprintf(fp, ",%.1f,%d,%d,%d,",
+            duration, g_call_emergency,
+            (int)avg_rms, (int)g_sq_peak_rms);
+    csv_write_field(fp, g_call_recording);
+    fputc('\n', fp);
     fclose(fp);
 
     g_today_calls++;
@@ -317,10 +346,16 @@ static void on_announcement(const kerchevt_t *evt, void *ud)
     FILE *fp = open_daily_csv();
     if (!fp) return;
 
-    fprintf(fp, "%ld,%s,%s,0,system,%s,0.0,0,%s\n",
-            (long)now, date, tstr,
-            evt->announcement.source,
-            evt->announcement.description ? evt->announcement.description : "");
+    /* Match the 11-column voice-row layout so any reader sees a
+     * single consistent shape. Description goes in the "recording"
+     * column slot — announcements have no recording, and natural
+     * language is exactly the field that benefits from CSV quoting. */
+    fprintf(fp, "%ld,%s,%s,0,system,", (long)now, date, tstr);
+    csv_write_field(fp, evt->announcement.source);
+    fputs(",0.0,0,0,0,", fp);
+    csv_write_field(fp,
+        evt->announcement.description ? evt->announcement.description : "");
+    fputc('\n', fp);
     fclose(fp);
 
     /* Announcements (CW ID, weather, time, ASR/AI, parrot, VM

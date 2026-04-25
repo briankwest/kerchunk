@@ -1981,6 +1981,336 @@ static void handle_admin_api_sounds(struct mg_connection *c)
     mg_http_reply(c, 200, API_HEADERS, "%s", buf);
 }
 
+/* ── CDR browser endpoints — see PLAN-CDR-UI.md
+ *
+ * Three read-only views over what mod_cdr already writes to disk:
+ *   GET /admin/api/cdr/days      → list of YYYY-MM-DD that have a CSV
+ *   GET /admin/api/cdr?date=…    → that day's records as JSON
+ *   GET /admin/api/recording?path=…  → stream a WAV from recordings/
+ *
+ * Recording streaming uses the same realpath-containment pattern as
+ * cmd_play to keep the operator-supplied path bound to the configured
+ * recordings directory. */
+
+static const char *cdr_dir(void)
+{
+    const kerchunk_config_t *cfg = kerchunk_core_get_config();
+    const char *d = cfg ? kerchunk_config_get(cfg, "cdr", "directory") : NULL;
+    return (d && d[0]) ? d : "/var/lib/kerchunk/cdr";
+}
+
+static const char *recordings_dir(void)
+{
+    const kerchunk_config_t *cfg = kerchunk_core_get_config();
+    const char *d = cfg ? kerchunk_config_get(cfg, "recording", "directory") : NULL;
+    return (d && d[0]) ? d : "/var/lib/kerchunk/recordings";
+}
+
+/* RFC 4180 CSV row split. Walks `line` in place, populates `cols`
+ * with pointers to NUL-terminated field starts. Handles "..." quoted
+ * fields with "" escapes. Returns the number of columns parsed
+ * (capped at max_cols). The line buffer is destructively modified. */
+static int csv_split_row(char *line, char **cols, int max_cols)
+{
+    int n = 0;
+    char *p = line;
+    while (*p && n < max_cols) {
+        if (*p == '"') {
+            /* Quoted field — copy/unescape into place, NUL-terminate
+             * at the closing quote. */
+            p++;
+            cols[n++] = p;
+            char *w = p;
+            while (*p) {
+                if (*p == '"' && p[1] == '"') {
+                    *w++ = '"';
+                    p += 2;
+                } else if (*p == '"') {
+                    *w = '\0';
+                    p++;
+                    break;
+                } else {
+                    if (w != p) *w = *p;
+                    w++; p++;
+                }
+            }
+            /* Consume trailing field separator if present. */
+            if (*p == ',') { *p = '\0'; p++; }
+            else if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+        } else {
+            cols[n++] = p;
+            while (*p && *p != ',' && *p != '\n' && *p != '\r') p++;
+            if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+            if (*p == ',') { *p = '\0'; p++; }
+        }
+    }
+    return n;
+}
+
+/* Validate a YYYY-MM-DD date string (10 chars, digits + dashes).
+ * Defense-in-depth even though we sandbox to the cdr_dir. */
+static int valid_date_str(const char *s)
+{
+    if (!s) return 0;
+    size_t n = strlen(s);
+    if (n != 10) return 0;
+    for (size_t i = 0; i < 10; i++) {
+        if (i == 4 || i == 7) { if (s[i] != '-') return 0; }
+        else                  { if (s[i] < '0' || s[i] > '9') return 0; }
+    }
+    return 1;
+}
+
+static void handle_admin_api_cdr_days(struct mg_connection *c)
+{
+    const char *dir = cdr_dir();
+    DIR *d = opendir(dir);
+
+    /* Collect matching filenames, sort, emit. ~365 entries / year so
+     * a 1024-cap is comfortable for years of operation. */
+    char names[1024][16];   /* "YYYY-MM-DD\0" = 11 bytes */
+    int count = 0;
+
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) && count < 1024) {
+            /* Match exactly YYYY-MM-DD.csv (14 chars). */
+            if (strlen(e->d_name) != 14) continue;
+            if (strcmp(e->d_name + 10, ".csv") != 0) continue;
+            char tmp[16];
+            snprintf(tmp, sizeof(tmp), "%.10s", e->d_name);
+            if (!valid_date_str(tmp)) continue;
+            snprintf(names[count++], sizeof(names[0]), "%s", tmp);
+        }
+        closedir(d);
+    }
+
+    /* Sort ascending so oldest first. */
+    for (int i = 1; i < count; i++) {
+        char tmp[16]; snprintf(tmp, sizeof(tmp), "%s", names[i]);
+        int j = i - 1;
+        while (j >= 0 && strcmp(names[j], tmp) > 0) {
+            snprintf(names[j+1], sizeof(names[0]), "%s", names[j]);
+            j--;
+        }
+        snprintf(names[j+1], sizeof(names[0]), "%s", tmp);
+    }
+
+    /* Today as YYYY-MM-DD (local time, matching CSV filename convention). */
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char today[16];
+    snprintf(today, sizeof(today), "%04d-%02d-%02d",
+             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+
+    char buf[24576];
+    size_t len = (size_t)snprintf(buf, sizeof(buf), "{\"days\":[");
+    for (int i = 0; i < count; i++) {
+        int n = snprintf(buf + len, sizeof(buf) - len,
+                         "%s\"%s\"", i ? "," : "", names[i]);
+        if (n <= 0 || (size_t)(len + n) >= sizeof(buf) - 64) break;
+        len += (size_t)n;
+    }
+    len += (size_t)snprintf(buf + len, sizeof(buf) - len,
+                            "],\"today\":\"%s\"}", today);
+    mg_http_reply(c, 200, API_HEADERS, "%s", buf);
+}
+
+static void handle_admin_api_cdr(struct mg_connection *c,
+                                  struct mg_http_message *hm)
+{
+    /* Parse ?date=YYYY-MM-DD from the query string. */
+    char date[16] = "";
+    struct mg_str q = hm->query;
+    if (q.len > 0) {
+        struct mg_str dv;
+        if (mg_http_get_var(&q, "date", date, sizeof(date)) <= 0)
+            date[0] = '\0';
+        (void)dv;
+    }
+    if (!valid_date_str(date)) {
+        mg_http_reply(c, 400, API_HEADERS,
+                      "{\"error\":\"date must be YYYY-MM-DD\"}");
+        return;
+    }
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s.csv", cdr_dir(), date);
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        /* No file → empty result, not 404 — simpler frontend handling. */
+        mg_http_reply(c, 200, API_HEADERS,
+                      "{\"date\":\"%s\",\"count\":0,\"records\":[]}",
+                      date);
+        return;
+    }
+
+    /* Build response into a heap buffer to handle large days. */
+    size_t cap  = 65536;
+    size_t blen = 0;
+    char  *body = malloc(cap);
+    if (!body) {
+        fclose(fp);
+        mg_http_reply(c, 500, API_HEADERS, "{\"error\":\"oom\"}");
+        return;
+    }
+
+    blen += (size_t)snprintf(body + blen, cap - blen,
+                              "{\"date\":\"%s\",\"records\":[", date);
+
+    char line[2048];
+    int first = 1;
+    int rows  = 0;
+    int header_skipped = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        if (!header_skipped) { header_skipped = 1; continue; }
+
+        /* CSV cols: timestamp,date,time,user_id,user_name,method,
+         * duration_s,emergency,avg_rms,peak_rms,recording.
+         * RFC 4180-compliant — handles quoted fields with embedded
+         * commas, newlines, and "" escapes. */
+        char *cols[12] = {0};
+        int   ncol     = csv_split_row(line, cols, 12);
+        if (ncol < 11) continue;  /* malformed / partial — drop */
+
+        /* Reject rows where supposedly-numeric fields aren't.
+         * Catches legacy 9-col announcement rows whose unquoted
+         * descriptions spilled commas into adjacent slots before
+         * the writer was hardened with RFC 4180 quoting — those
+         * rows show string text where avg_rms / peak_rms should be
+         * integers. */
+        int row_ok = 1;
+        for (const char *p = cols[8]; *p; p++) {
+            if ((*p < '0' || *p > '9') && *p != '-') { row_ok = 0; break; }
+        }
+        if (row_ok) for (const char *p = cols[9]; *p; p++) {
+            if ((*p < '0' || *p > '9') && *p != '-') { row_ok = 0; break; }
+        }
+        if (!row_ok) continue;
+
+        /* JSON-escape user_name and recording (the only operator-
+         * influenced strings here). */
+        char e_name[96]; size_t en = 0;
+        for (const char *s = cols[4]; *s && en < sizeof(e_name) - 6; s++) {
+            switch (*s) {
+            case '"':  e_name[en++] = '\\'; e_name[en++] = '"';  break;
+            case '\\': e_name[en++] = '\\'; e_name[en++] = '\\'; break;
+            default:   e_name[en++] = *s;                         break;
+            }
+        }
+        e_name[en] = '\0';
+
+        char e_rec[1024]; size_t er = 0;
+        for (const char *s = cols[10]; *s && er < sizeof(e_rec) - 6; s++) {
+            switch (*s) {
+            case '"':  e_rec[er++] = '\\'; e_rec[er++] = '"';  break;
+            case '\\': e_rec[er++] = '\\'; e_rec[er++] = '\\'; break;
+            default:   e_rec[er++] = *s;                        break;
+            }
+        }
+        e_rec[er] = '\0';
+
+        /* Grow buffer if needed (each row ~250 bytes, leave 4KB slack). */
+        if (cap - blen < 4096) {
+            size_t newcap = cap * 2;
+            char  *nb     = realloc(body, newcap);
+            if (!nb) break;
+            body = nb;
+            cap  = newcap;
+        }
+
+        int n = snprintf(body + blen, cap - blen,
+            "%s{\"ts\":%s,\"time\":\"%s\",\"user_id\":%s,"
+            "\"user_name\":\"%s\",\"method\":\"%s\","
+            "\"duration_s\":%s,\"emergency\":%s,"
+            "\"avg_rms\":%s,\"peak_rms\":%s,\"recording\":\"%s\"}",
+            first ? "" : ",",
+            cols[0], cols[2], cols[3],
+            e_name, cols[5],
+            cols[6], (cols[7][0] == '1') ? "true" : "false",
+            cols[8], cols[9], e_rec);
+        if (n <= 0 || (size_t)(blen + n) >= cap) break;
+        blen += (size_t)n;
+        first = 0;
+        rows++;
+    }
+    fclose(fp);
+
+    blen += (size_t)snprintf(body + blen, cap - blen, "],\"count\":%d}", rows);
+    mg_http_reply(c, 200, API_HEADERS, "%s", body);
+    free(body);
+}
+
+static void handle_admin_api_recording(struct mg_connection *c,
+                                        struct mg_http_message *hm)
+{
+    char rel[512];
+    if (mg_http_get_var(&hm->query, "path", rel, sizeof(rel)) <= 0) {
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"missing path\"}");
+        return;
+    }
+    if (!rel[0]) {
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\"empty path\"}");
+        return;
+    }
+
+    /* .wav extension required — we only stream what we record. */
+    size_t rl = strlen(rel);
+    if (rl < 4 || strcmp(rel + rl - 4, ".wav") != 0) {
+        mg_http_reply(c, 400, API_HEADERS, "{\"error\":\".wav only\"}");
+        return;
+    }
+
+    /* Resolve real paths and require containment. The path the dashboard
+     * sends arrives from the CSV's "recording" column (recorded by
+     * mod_recorder), which is always a relative path under recordings_dir
+     * — but treat as untrusted. */
+    const char *rdir = recordings_dir();
+    char rdir_real[PATH_MAX];
+    if (!realpath(rdir, rdir_real)) {
+        mg_http_reply(c, 500, API_HEADERS,
+                      "{\"error\":\"recordings_dir unresolved\"}");
+        return;
+    }
+    size_t rd_len = strlen(rdir_real);
+
+    char candidate[PATH_MAX];
+    if (rel[0] == '/')
+        snprintf(candidate, sizeof(candidate), "%s", rel);
+    else
+        snprintf(candidate, sizeof(candidate), "%s/%s", rdir_real, rel);
+
+    char real[PATH_MAX];
+    if (!realpath(candidate, real)) {
+        mg_http_reply(c, 404, API_HEADERS, "{\"error\":\"not found\"}");
+        return;
+    }
+    if (strncmp(real, rdir_real, rd_len) != 0 || real[rd_len] != '/') {
+        mg_http_reply(c, 403, API_HEADERS,
+                      "{\"error\":\"path outside recordings_dir\"}");
+        return;
+    }
+
+    /* Optional ?download=1 → suggest a filename to the browser. */
+    char dl[8] = "";
+    int  is_dl = (mg_http_get_var(&hm->query, "download", dl, sizeof(dl)) > 0);
+    const char *base = strrchr(real, '/');
+    base = base ? base + 1 : real;
+
+    /* mg_http_serve_file infers Content-Type from .wav (audio/wav)
+     * via its built-in MIME table. We only need to add Disposition
+     * when the user clicked the download button. */
+    char extra[256] = "";
+    if (is_dl)
+        snprintf(extra, sizeof(extra),
+                 "Content-Disposition: attachment; filename=\"%s\"\r\n",
+                 base);
+
+    struct mg_http_serve_opts opts = { .extra_headers = extra };
+    mg_http_serve_file(c, hm, real, &opts);
+}
+
 /* ── Admin status handler — appends sensitive fields to standard status ── */
 
 static void handle_admin_api_status(struct mg_connection *c,
@@ -2083,6 +2413,27 @@ static void handle_admin_api(struct mg_connection *c,
     if (mg_match(hm->method, mg_str("GET"), NULL) &&
         mg_match(hm->uri, mg_str("/admin/api/sounds"), NULL)) {
         handle_admin_api_sounds(c);
+        return;
+    }
+
+    /* /admin/api/cdr/days — list of YYYY-MM-DD with a CSV on disk */
+    if (mg_match(hm->method, mg_str("GET"), NULL) &&
+        mg_match(hm->uri, mg_str("/admin/api/cdr/days"), NULL)) {
+        handle_admin_api_cdr_days(c);
+        return;
+    }
+
+    /* /admin/api/cdr?date=YYYY-MM-DD — that day's records */
+    if (mg_match(hm->method, mg_str("GET"), NULL) &&
+        mg_match(hm->uri, mg_str("/admin/api/cdr"), NULL)) {
+        handle_admin_api_cdr(c, hm);
+        return;
+    }
+
+    /* /admin/api/recording?path=… — stream a WAV from recordings_dir */
+    if (mg_match(hm->method, mg_str("GET"), NULL) &&
+        mg_match(hm->uri, mg_str("/admin/api/recording"), NULL)) {
+        handle_admin_api_recording(c, hm);
         return;
     }
 
