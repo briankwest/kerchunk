@@ -142,8 +142,9 @@ button {
 .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
 .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-row { display: flex; gap: 8px; margin-top: 4px; }
-.btn-row button:first-child { flex: 2; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.btn-row button:first-child { flex: 1 1 100%; }
+.btn-row button:not(:first-child) { flex: 1 1 calc(33% - 8px); }
 
 .info-grid {
   display: grid;
@@ -432,14 +433,7 @@ button {
     </nav>
   </header>
 
-  <div class="section">
-    <h2>Google Maps API Key</h2>
-    <div class="field">
-      <label for="apiKey">API Key</label>
-      <input type="password" id="apiKey" placeholder="Enter Google Maps API key">
-    </div>
-    <div class="help-text">Required for map and geocoding. Saved in your browser.</div>
-  </div>
+  <input type="hidden" id="apiKey">
 
   <div class="section">
     <h2>Transmitter Location</h2>
@@ -1892,7 +1886,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Settings Persistence (localStorage)
 // ============================================================
 const PERSIST_FIELDS = [
-  'apiKey', 'address',
+  'address',
   'gmrsChannel',
   'txPower', 'txGain', 'txHeight', 'rxSens', 'systemLoss', 'environment',
   'maxRange', 'resolution',
@@ -2123,7 +2117,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const key = $('apiKey').value.trim();
     if (!key) {
-      setStatus('Enter your Google Maps API key above to enable the coverage map.', true);
+      setStatus('No Google Maps API key configured. Set google_maps_api_key in kerchunk.conf.', true);
       return;
     }
 
