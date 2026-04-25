@@ -103,6 +103,19 @@ static void append_samples(int16_t **buf, size_t *len, size_t *cap,
     *len += to_copy;
 }
 
+/* Copy s into out, replacing CR/LF/TAB with '_' so a single record can
+ * never split into two log lines. who comes from sanitize_name today, but
+ * defense-in-depth means future callers can't smuggle a fake entry. */
+static void scrub_log_field(const char *s, char *out, size_t max)
+{
+    size_t j = 0;
+    for (size_t i = 0; s && s[i] && j < max - 1; i++) {
+        unsigned char c = (unsigned char)s[i];
+        out[j++] = (c == '\n' || c == '\r' || c == '\t') ? '_' : (char)c;
+    }
+    out[j] = '\0';
+}
+
 static void activity_log(const char *direction, const char *who,
                          float duration, const char *wav_path)
 {
@@ -112,13 +125,18 @@ static void activity_log(const char *direction, const char *who,
     FILE *fp = fopen(log_path, "a");
     if (!fp) return;
 
+    char safe_dir[16], safe_who[128], safe_path[512];
+    scrub_log_field(direction, safe_dir,  sizeof(safe_dir));
+    scrub_log_field(who,       safe_who,  sizeof(safe_who));
+    scrub_log_field(wav_path,  safe_path, sizeof(safe_path));
+
     time_t now = time(NULL);
     struct tm tbuf;
     struct tm *t = localtime_r(&now, &tbuf);
     fprintf(fp, "%04d-%02d-%02d %02d:%02d:%02d %s %s %.1fs %s\n",
             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
             t->tm_hour, t->tm_min, t->tm_sec,
-            direction, who, duration, wav_path);
+            safe_dir, safe_who, duration, safe_path);
     fclose(fp);
 }
 

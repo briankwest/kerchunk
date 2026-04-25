@@ -1412,9 +1412,10 @@ static void handle_api_config_put(struct mg_connection *c,
         return;
     }
 
-    /* Find "values" object in body and iterate key:value pairs */
-    const char *vstart = strstr(hm->body.buf, "\"values\"");
-    if (!vstart) {
+    /* Iterate "values" object via mongoose's JSON parser (handles
+     * escapes, nested quotes, whitespace correctly). */
+    struct mg_str values = mg_json_get_tok(hm->body, "$.values");
+    if (values.buf == NULL || values.len == 0) {
         free(section);
         mg_http_reply(c, 400, API_HEADERS,
                       "{\"error\":\"Missing values\"}");
@@ -1422,41 +1423,22 @@ static void handle_api_config_put(struct mg_connection *c,
     }
 
     kerchunk_core_lock_config();
-    vstart = strchr(vstart, '{');
-    if (vstart) {
-        vstart++; /* skip { */
-        char key[64], val[256];
-        while (*vstart && *vstart != '}') {
-            while (*vstart && (*vstart == ' ' || *vstart == ',' ||
-                               *vstart == '\n' || *vstart == '\r' ||
-                               *vstart == '\t'))
-                vstart++;
-            if (*vstart == '"') {
-                vstart++;
-                int ki = 0;
-                while (*vstart && *vstart != '"' && ki < 63)
-                    key[ki++] = *vstart++;
-                key[ki] = '\0';
-                if (*vstart == '"') vstart++;
-                while (*vstart && *vstart != ':') vstart++;
-                if (*vstart == ':') vstart++;
-                while (*vstart == ' ') vstart++;
-                if (*vstart == '"') {
-                    vstart++;
-                    int vi = 0;
-                    while (*vstart && *vstart != '"' && vi < 255)
-                        val[vi++] = *vstart++;
-                    val[vi] = '\0';
-                    if (*vstart == '"') vstart++;
+    size_t ofs = 0;
+    struct mg_str ktok, vtok;
+    while ((ofs = mg_json_next(values, ofs, &ktok, &vtok)) > 0) {
+        /* Strings only (skip non-string values silently). Tokens include
+         * the surrounding quotes; mg_json_unescape wants the inner span. */
+        if (ktok.len < 2 || ktok.buf[0]              != '"') continue;
+        if (vtok.len < 2 || vtok.buf[0]              != '"') continue;
 
-                    if (is_sensitive(key) && strcmp(val, "********") == 0)
-                        continue;
-                    kerchunk_config_set(cfg, section, key, val);
-                }
-            } else {
-                break;
-            }
-        }
+        char key[64], val[256];
+        if (!mg_json_unescape(mg_str_n(ktok.buf + 1, ktok.len - 2),
+                              key, sizeof(key))) continue;
+        if (!mg_json_unescape(mg_str_n(vtok.buf + 1, vtok.len - 2),
+                              val, sizeof(val))) continue;
+
+        if (is_sensitive(key) && strcmp(val, "********") == 0) continue;
+        kerchunk_config_set(cfg, section, key, val);
     }
 
     kerchunk_config_save(cfg);
@@ -1598,9 +1580,12 @@ static void handle_api_bulletin_put(struct mg_connection *c,
     }
 
     /* Atomic write via tmpfile + rename so a concurrent GET never sees a
-     * half-written file. */
-    char tmp_path[300];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", g_bulletin_path);
+     * half-written file. PID-suffix the tmp name so concurrent PUTs don't
+     * fight over a shared tempfile, and a crash mid-write doesn't leave a
+     * permanent .tmp under a predictable name. */
+    char tmp_path[320];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.%d.tmp",
+             g_bulletin_path, (int)getpid());
     FILE *fp = fopen(tmp_path, "w");
     if (!fp) {
         g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD,
@@ -2189,27 +2174,12 @@ static void handle_admin_api_cdr(struct mg_connection *c,
         }
         if (!row_ok) continue;
 
-        /* JSON-escape user_name and recording (the only operator-
-         * influenced strings here). */
-        char e_name[96]; size_t en = 0;
-        for (const char *s = cols[4]; *s && en < sizeof(e_name) - 6; s++) {
-            switch (*s) {
-            case '"':  e_name[en++] = '\\'; e_name[en++] = '"';  break;
-            case '\\': e_name[en++] = '\\'; e_name[en++] = '\\'; break;
-            default:   e_name[en++] = *s;                         break;
-            }
-        }
-        e_name[en] = '\0';
-
-        char e_rec[1024]; size_t er = 0;
-        for (const char *s = cols[10]; *s && er < sizeof(e_rec) - 6; s++) {
-            switch (*s) {
-            case '"':  e_rec[er++] = '\\'; e_rec[er++] = '"';  break;
-            case '\\': e_rec[er++] = '\\'; e_rec[er++] = '\\'; break;
-            default:   e_rec[er++] = *s;                        break;
-            }
-        }
-        e_rec[er] = '\0';
+        /* JSON-escape every string field. json_escape_str handles
+         * control chars (which would otherwise produce invalid JSON). */
+        char e_name[96], e_method[32], e_rec[1024];
+        json_escape_str(cols[4],  e_name,   sizeof(e_name));
+        json_escape_str(cols[5],  e_method, sizeof(e_method));
+        json_escape_str(cols[10], e_rec,    sizeof(e_rec));
 
         /* Grow buffer if needed (each row ~250 bytes, leave 4KB slack). */
         if (cap - blen < 4096) {
@@ -2227,7 +2197,7 @@ static void handle_admin_api_cdr(struct mg_connection *c,
             "\"avg_rms\":%s,\"peak_rms\":%s,\"recording\":\"%s\"}",
             first ? "" : ",",
             cols[0], cols[2], cols[3],
-            e_name, cols[5],
+            e_name, e_method,
             cols[6], (cols[7][0] == '1') ? "true" : "false",
             cols[8], cols[9], e_rec);
         if (n <= 0 || (size_t)(blen + n) >= cap) break;
