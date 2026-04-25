@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
+<title>Kerchunk — Link</title>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9;
+        --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+        --yellow: #d29922; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px;
+       max-width: 1400px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+header h1 { font-size: 20px; }
+header nav { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; width: 100%; }
+header nav .btn { text-decoration: none; white-space: nowrap; flex: 1; text-align: center;
+                  padding: 5px 10px; }
+header .sub { color: var(--dim); font-size: 14px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+        padding: 14px; margin-bottom: 12px; }
+.card h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px;
+           margin-bottom: 10px; }
+.btn { padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+       color: var(--text); border-radius: 5px; cursor: pointer; font-size: 12px;
+       text-decoration: none; display: inline-block; }
+.btn:hover  { border-color: var(--accent); color: var(--accent); }
+.btn-primary { border-color: var(--accent); color: var(--accent); }
+.btn-warn   { border-color: var(--yellow); color: var(--yellow); }
+
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+.row { display: flex; justify-content: space-between; padding: 4px 0;
+       font-size: 13px; border-bottom: 1px dashed var(--border); }
+.row:last-child { border: none; }
+.row .k { color: var(--dim); }
+.row .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.state { display: inline-block; padding: 3px 10px; border-radius: 12px;
+         font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+         border: 1px solid currentColor; }
+.state.connected    { color: var(--green);  }
+.state.connecting   { color: var(--yellow); }
+.state.reconnecting { color: var(--yellow); }
+.state.stopped      { color: var(--red);    }
+.state.disabled     { color: var(--dim);    }
+
+.toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.toolbar input[type=number] { width: 90px; padding: 5px 8px; background: var(--bg);
+                               color: var(--text); border: 1px solid var(--border);
+                               border-radius: 4px; font-size: 13px; }
+.status { font-size: 12px; color: var(--dim); margin-left: auto; }
+.status.ok  { color: var(--green); }
+.status.err { color: var(--red); }
+.talker { font-size: 18px; font-weight: 700; color: var(--accent); }
+.talker.idle { color: var(--dim); font-style: italic; font-weight: 400; }
+
+@media (max-width: 600px) {
+  body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  header { gap: 8px; margin-bottom: 10px; }
+  header h1 { font-size: 16px; }
+  header nav .btn { min-height: 36px; display: flex;
+                    align-items: center; justify-content: center; }
+  .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Link</h1>
+  <span class="sub">Repeater linking via kerchunk-reflectd</span>
+  <nav>
+    <a href="/admin/" class="btn">Admin</a>
+    <a href="/admin/users.html" class="btn">Users</a>
+    <a href="/admin/cdr.html" class="btn">CDR</a>
+    <a href="/admin/config.html" class="btn">Config</a>
+    <a href="/admin/coverage.html" class="btn">Coverage</a>
+    <a href="/admin/ptt.html" class="btn">PTT</a>
+    <a href="/admin/bulletin.html" class="btn">Bulletin</a>
+    <a href="/admin/link.html" class="btn" style="border-color:var(--accent);color:var(--accent)">Link</a>
+  </nav>
+</header>
+
+<div class="grid">
+
+  <div class="card">
+    <h2>Connection</h2>
+    <div class="row">
+      <span class="k">State</span>
+      <span class="v"><span class="state" id="state">—</span></span>
+    </div>
+    <div class="row">
+      <span class="k">Node ID</span>
+      <span class="v" id="node_id">—</span>
+    </div>
+    <div class="row">
+      <span class="k">Reflector</span>
+      <span class="v" id="reflector_ws" style="font-size:11px">—</span>
+    </div>
+    <div class="row">
+      <span class="k">Reconnect attempt</span>
+      <span class="v" id="reconnect_attempt">—</span>
+    </div>
+    <div class="row">
+      <span class="k">Last error</span>
+      <span class="v" id="last_error" style="font-size:11px">—</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Talkgroup</h2>
+    <div class="row">
+      <span class="k">Current TG</span>
+      <span class="v" id="tg">—</span>
+    </div>
+    <div class="row">
+      <span class="k">Talker</span>
+      <span class="talker idle" id="talker">(idle)</span>
+    </div>
+    <div class="toolbar" style="margin-top:14px">
+      <input type="number" id="tg-input" placeholder="TG #" min="1" max="65535">
+      <button class="btn btn-primary" onclick="setTg()">Switch TG</button>
+      <button class="btn" onclick="reconnect()">Reconnect</button>
+      <button class="btn btn-warn" onclick="clearAlarm()">Clear alarm</button>
+      <span class="status" id="cmd-status"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Counters</h2>
+    <div class="row">
+      <span class="k">Packets sent → reflector</span>
+      <span class="v" id="pkts_sent">0</span>
+    </div>
+    <div class="row">
+      <span class="k">Packets recv ← reflector</span>
+      <span class="v" id="pkts_recv">0</span>
+    </div>
+    <div class="row">
+      <span class="k">SRTP auth failures</span>
+      <span class="v" id="srtp_auth_fail">0</span>
+    </div>
+    <div class="row">
+      <span class="k">Opus decode errors</span>
+      <span class="v" id="decode_err">0</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>About</h2>
+    <p style="font-size:12px;color:var(--dim);line-height:1.5">
+      mod_link bridges this repeater to a central reflector running
+      <code>kerchunk-reflectd</code>. Local RX audio is encoded as Opus
+      (24 kHz, 32 kbps, FEC) and sent over SRTP/UDP. Incoming reflector
+      audio is decoded, fed to the local playback path, and the radio is
+      keyed via the link tail timer.
+    </p>
+    <p style="font-size:12px;color:var(--dim);line-height:1.5;margin-top:8px">
+      DTMF <code>*73&lt;n&gt;#</code> switches talkgroup at runtime
+      (e.g. <code>*731#</code> for TG 1).
+    </p>
+  </div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function postCmd(cmdline) {
+    $('cmd-status').className = 'status';
+    $('cmd-status').textContent = 'Sending…';
+    try {
+        const res = await fetch('/admin/api/cmd', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cmd: cmdline })
+        });
+        const j = await res.json();
+        if (res.ok && j.ok !== false) {
+            $('cmd-status').className = 'status ok';
+            $('cmd-status').textContent = j.action || 'OK';
+        } else {
+            $('cmd-status').className = 'status err';
+            $('cmd-status').textContent = j.error || 'failed';
+        }
+    } catch (e) {
+        $('cmd-status').className = 'status err';
+        $('cmd-status').textContent = e.message;
+    }
+}
+
+function setTg() {
+    const v = $('tg-input').value.trim();
+    if (!v) return;
+    postCmd('link tg ' + v);
+}
+function reconnect()   { postCmd('link reconnect'); }
+function clearAlarm()  { postCmd('link clear-alarm'); }
+
+function applySnapshot(d) {
+    const stateEl = $('state');
+    stateEl.textContent = d.state || '—';
+    stateEl.className = 'state ' + (d.state || 'disabled');
+
+    if (d.node_id)        $('node_id').textContent = d.node_id;
+    if (d.reflector_ws)   $('reflector_ws').textContent = d.reflector_ws;
+    $('reconnect_attempt').textContent = d.reconnect_attempt ?? 0;
+    $('last_error').textContent        = d.last_error || '(none)';
+    $('tg').textContent                = d.tg || '—';
+
+    const t = $('talker');
+    if (d.current_talker) {
+        t.textContent = d.current_talker;
+        t.className   = 'talker';
+    } else {
+        t.textContent = '(idle)';
+        t.className   = 'talker idle';
+    }
+    if (d.counters) {
+        $('pkts_sent').textContent      = d.counters.sent ?? 0;
+        $('pkts_recv').textContent      = d.counters.recv ?? 0;
+        $('srtp_auth_fail').textContent = d.counters.srtp_auth_fail ?? 0;
+        $('decode_err').textContent     = d.counters.decode_err ?? 0;
+    }
+}
+
+/* Pull initial via the CLI dispatch — gives node_id + reflector_ws which
+ * the periodic SSE snapshot doesn't include. */
+async function loadInitial() {
+    try {
+        const res = await fetch('/admin/api/cmd', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cmd: 'link status' })
+        });
+        const j = await res.json();
+        applySnapshot({
+            state: j.state, node_id: j.node_id, reflector_ws: j.reflector_ws,
+            tg: j.tg, current_talker: j.current_talker,
+            reconnect_attempt: j.reconnect_attempt, last_error: j.last_error,
+            counters: { sent: j.pkts_sent, recv: j.pkts_recv,
+                        srtp_auth_fail: j.srtp_auth_fail,
+                        decode_err: j.decode_err }
+        });
+    } catch (_) {}
+}
+
+/* Subscribe to SSE for live updates. mod_link republishes the snapshot
+ * every 5s so counters stay fresh in the UI. */
+function subscribeSSE() {
+    const es = new EventSource('/admin/api/events');
+    es.onmessage = (ev) => {
+        try {
+            const m = JSON.parse(ev.data);
+            if (m.type === 'link' && m.data) applySnapshot(m.data);
+        } catch (_) {}
+    };
+    es.onerror = () => setTimeout(subscribeSSE, 2000);
+}
+
+loadInitial();
+subscribeSSE();
+</script>
+</body>
+</html>

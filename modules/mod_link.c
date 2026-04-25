@@ -121,6 +121,13 @@ static int g_decode_err;
 static int     g_link_ptt_held;
 static int64_t g_link_last_recv_ms;
 
+/* Cross-thread request flags. CLI / DTMF on the main thread sets one
+ * of these; the bg thread polls and acts. mongoose mg_ws_send is not
+ * thread-safe so we can't fire WS messages directly from CLI. */
+static volatile int g_req_set_tg;     /* 0 = none, else target TG number */
+static volatile int g_req_reconnect;
+static volatile int g_req_clear_alarm;
+
 /* Local RX state (used to decide whether to encode samples to send). */
 static volatile int g_local_rx_active;
 
@@ -670,12 +677,46 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
 static void *bg_main(void *ud)
 {
     (void)ud;
-    int64_t next_send_ms = 0;
+    int64_t next_send_ms     = 0;
+    int64_t next_snapshot_ms = 0;
 
     while (g_run) {
         mg_mgr_poll(&g_mgr, 10);
 
         int64_t now = now_ms();
+
+        /* Pending CLI / DTMF requests. */
+        if (g_req_clear_alarm) {
+            g_req_clear_alarm = 0;
+            if (g_state == LST_STOPPED) {
+                g_last_error[0] = '\0';
+                g_reconnect_attempt = 0;
+                g_next_reconnect_ms = 0;
+                set_state(LST_RECONNECTING);
+            }
+        }
+        if (g_req_reconnect && g_ws) {
+            g_req_reconnect = 0;
+            g_ws->is_closing = 1;
+        } else if (g_req_reconnect) {
+            g_req_reconnect = 0;
+            g_next_reconnect_ms = 0;   /* trigger immediate reconnect */
+        }
+        if (g_req_set_tg && g_ws && g_state == LST_CONNECTED) {
+            int tg = g_req_set_tg;
+            g_req_set_tg = 0;
+            char buf[64];
+            snprintf(buf, sizeof(buf),
+                     "{\"type\":\"%s\",\"tg\":%d}", LINK_MSG_SET_TG, tg);
+            send_ws_json(buf);
+        }
+
+        /* Periodic snapshot — keeps live counters fresh on the SSE bus
+         * even when the state machine is quiet. */
+        if (now >= next_snapshot_ms) {
+            publish_snapshot();
+            next_snapshot_ms = now + 5000;
+        }
 
         /* Connect / reconnect logic. Gated on g_enabled so the thread
          * sits idle until configure() supplies a usable [link] section
@@ -723,6 +764,90 @@ static void on_cor_assert(const kerchevt_t *evt, void *ud)
 
 static void on_cor_drop(const kerchevt_t *evt, void *ud)
 { (void)evt; (void)ud; g_local_rx_active = 0; }
+
+/* ── CLI commands ─────────────────────────────────────────────────── */
+
+static int cli_link_status(kerchunk_resp_t *r)
+{
+    resp_str(r, "state",          state_name(g_state));
+    resp_str(r, "node_id",        g_node_id);
+    resp_str(r, "reflector_ws",   g_reflector_ws);
+    resp_int(r, "tg",             g_current_tg);
+    resp_str(r, "current_talker", g_current_talker[0] ? g_current_talker : "");
+    resp_int(r, "reconnect_attempt", g_reconnect_attempt);
+    resp_str(r, "last_error",     g_last_error);
+    resp_int(r, "pkts_sent",      g_pkts_sent);
+    resp_int(r, "pkts_recv",      g_pkts_recv);
+    resp_int(r, "srtp_auth_fail", g_srtp_auth_fail);
+    resp_int(r, "decode_err",     g_decode_err);
+    return 0;
+}
+
+static int cli_link(int argc, const char **argv, kerchunk_resp_t *r)
+{
+    /* `link` and `link status` print the snapshot. */
+    if (argc < 2 || !strcmp(argv[1], "status"))
+        return cli_link_status(r);
+
+    if (!strcmp(argv[1], "tg")) {
+        if (argc < 3) {
+            resp_str(r, "error", "usage: link tg <number>");
+            return -1;
+        }
+        int tg = atoi(argv[2]);
+        if (tg <= 0 || tg > 65535) {
+            resp_str(r, "error", "tg must be 1..65535");
+            return -1;
+        }
+        g_req_set_tg = tg;       /* bg thread picks this up */
+        resp_bool(r, "ok", 1);
+        resp_str(r, "action", "set_tg requested");
+        resp_int(r, "tg", tg);
+        return 0;
+    }
+
+    if (!strcmp(argv[1], "reconnect")) {
+        g_req_reconnect = 1;
+        resp_bool(r, "ok", 1);
+        resp_str(r, "action", "reconnect requested");
+        return 0;
+    }
+
+    if (!strcmp(argv[1], "clear-alarm")) {
+        g_req_clear_alarm = 1;
+        resp_bool(r, "ok", 1);
+        resp_str(r, "action", "clear-alarm requested");
+        return 0;
+    }
+
+    resp_str(r, "error", "unknown subcommand (try: status, tg <n>, reconnect, clear-alarm)");
+    return -1;
+}
+
+/* ── DTMF *73<n># handler ─────────────────────────────────────────── */
+
+#define LINK_DTMF_EVT_OFFSET 73   /* arbitrary slot in KERCHEVT_CUSTOM space */
+
+static void on_dtmf_set_tg(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    /* arg is the digits AFTER "73" — e.g. "1" for *731# → TG 1. */
+    const char *arg = (const char *)evt->custom.data;
+    if (!arg || !arg[0]) {
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "DTMF *73# with no TG number — ignoring");
+        return;
+    }
+    int tg = atoi(arg);
+    if (tg <= 0 || tg > 65535) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "DTMF *73<%s># — invalid TG", arg);
+        return;
+    }
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "DTMF *73<%d># → request TG switch", tg);
+    g_req_set_tg = tg;
+}
 
 /* ── Lifecycle ────────────────────────────────────────────────────── */
 
@@ -809,7 +934,18 @@ static int load_(kerchunk_core_t *core)
 
     core->subscribe(KERCHEVT_COR_ASSERT, on_cor_assert, NULL);
     core->subscribe(KERCHEVT_COR_DROP,   on_cor_drop,   NULL);
+    core->subscribe((kerchevt_type_t)(KERCHEVT_CUSTOM + LINK_DTMF_EVT_OFFSET),
+                    on_dtmf_set_tg, NULL);
     core->audio_tap_register(link_audio_tap, NULL);
+
+    /* Register *73<n># for runtime TG switch (mod_dtmfcmd may load
+     * after us — registration is idempotent and harmless if vtable
+     * isn't wired yet, but in practice load order has dtmfcmd first). */
+    if (core->dtmf_register) {
+        core->dtmf_register("73", LINK_DTMF_EVT_OFFSET,
+                            "Link: switch talkgroup",
+                            "link_set_tg_pattern");
+    }
 
     g_run = 1;
     if (pthread_create(&g_thread, NULL, bg_main, NULL) != 0) {
@@ -833,19 +969,34 @@ static void unload_(void)
         g_core->audio_tap_unregister(link_audio_tap);
         g_core->unsubscribe(KERCHEVT_COR_ASSERT, on_cor_assert);
         g_core->unsubscribe(KERCHEVT_COR_DROP,   on_cor_drop);
+        g_core->unsubscribe(
+            (kerchevt_type_t)(KERCHEVT_CUSTOM + LINK_DTMF_EVT_OFFSET),
+            on_dtmf_set_tg);
+        if (g_core->dtmf_unregister) g_core->dtmf_unregister("73");
     }
     session_cleanup();
     mg_mgr_free(&g_mgr);
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "unloaded");
 }
 
+static const kerchunk_cli_cmd_t cli_cmds[] = {
+    { .name        = "link",
+      .usage       = "link [status|tg <n>|reconnect|clear-alarm]",
+      .description = "Repeater-link status / control",
+      .handler     = cli_link,
+      .category    = "Audio",
+      .subcommands = "status,tg,reconnect,clear-alarm" },
+};
+
 static kerchunk_module_def_t mod_link = {
-    .name        = "mod_link",
-    .version     = "0.1.0",
-    .description = "Bridge to a kerchunk-reflectd network",
-    .load        = load_,
-    .configure   = configure_,
-    .unload      = unload_,
+    .name             = "mod_link",
+    .version          = "0.1.0",
+    .description      = "Bridge to a kerchunk-reflectd network",
+    .load             = load_,
+    .configure        = configure_,
+    .unload           = unload_,
+    .cli_commands     = cli_cmds,
+    .num_cli_commands = 1,
 };
 
 KERCHUNK_MODULE_DEFINE(mod_link);
