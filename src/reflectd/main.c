@@ -10,7 +10,10 @@
  * before any audio code exists. Phase 3 swaps these for real RTP.
  */
 
+#include <arpa/inet.h>
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -19,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -27,6 +31,7 @@
 
 #include "../../vendor/mongoose.h"
 #include "../../include/kerchunk_link_proto.h"
+#include "audio.h"
 #include "config.h"
 
 /* ── Globals ───────────────────────────────────────────────────────── */
@@ -39,8 +44,11 @@ typedef struct {
     bool                  connected;
     struct mg_connection *c;       /* current connection, NULL when offline */
     uint16_t              cur_tg;  /* talkgroup the node has joined */
+    audio_node_t         *audio;   /* SRTP fan-out state, NULL until login */
 } node_rt_t;
 static node_rt_t g_node_rt[RCFG_MAX_NODES];
+
+static int g_udp_fd = -1;
 
 /* Per-talkgroup runtime state (parallel to g_cfg.tgs[]). */
 typedef struct {
@@ -337,23 +345,52 @@ static void handle_login(struct mg_connection *c, conn_t *cs,
         goto out;
     }
 
+    /* Generate fresh SRTP material + SSRCs for this session. */
+    uint8_t  master_key[KERCHUNK_LINK_SRTP_KEY_BYTES];
+    uint8_t  master_salt[KERCHUNK_LINK_SRTP_SALT_BYTES];
+    uint32_t node_ssrc, refl_ssrc;
+    if (RAND_bytes(master_key,  sizeof(master_key))  != 1 ||
+        RAND_bytes(master_salt, sizeof(master_salt)) != 1 ||
+        RAND_bytes((unsigned char *)&node_ssrc, sizeof(node_ssrc)) != 1 ||
+        RAND_bytes((unsigned char *)&refl_ssrc, sizeof(refl_ssrc)) != 1) {
+        send_login_denied(c, LINK_ERR_INTERNAL, "RAND_bytes");
+        goto out;
+    }
+    audio_node_t *an = audio_node_create(master_key, master_salt,
+                                         node_ssrc, refl_ssrc);
+    if (!an) {
+        send_login_denied(c, LINK_ERR_INTERNAL, "srtp setup");
+        goto out;
+    }
+
     cs->state    = CST_AUTHENTICATED;
     cs->node_idx = idx;
     g_node_rt[idx].connected = true;
     g_node_rt[idx].c         = c;
     g_node_rt[idx].cur_tg    = tg;
+    g_node_rt[idx].audio     = an;
+
+    char key_hex[2  * KERCHUNK_LINK_SRTP_KEY_BYTES  + 1];
+    char salt_hex[2 * KERCHUNK_LINK_SRTP_SALT_BYTES + 1];
+    bytes_to_hex(master_key,  KERCHUNK_LINK_SRTP_KEY_BYTES,  key_hex);
+    bytes_to_hex(master_salt, KERCHUNK_LINK_SRTP_SALT_BYTES, salt_hex);
 
     char buf[KERCHUNK_LINK_MAX_MSG];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"%s\",\"node_id\":\"%s\",\"talkgroup\":%u,"
-             "\"keepalive_s\":%d,\"hangtime_ms\":%d,\"proto\":\"%s\"}",
+             "\"keepalive_s\":%d,\"hangtime_ms\":%d,\"proto\":\"%s\","
+             "\"rtp_endpoint\":\"%s:%d\","
+             "\"srtp_master_key\":\"%s\",\"srtp_master_salt\":\"%s\","
+             "\"ssrc\":%u,\"reflector_ssrc\":%u}",
              LINK_MSG_LOGIN_OK, node_id, tg,
              g_cfg.keepalive_s, g_cfg.hangtime_ms,
-             KERCHUNK_LINK_PROTO_VERSION);
+             KERCHUNK_LINK_PROTO_VERSION,
+             g_cfg.rtp_advertise_host, g_cfg.rtp_port,
+             key_hex, salt_hex, node_ssrc, refl_ssrc);
     send_json(c, buf);
 
-    log_msg("node %s logged in (client %s) on TG %u",
-            node_id, client_ver ? client_ver : "?", tg);
+    log_msg("node %s logged in (client %s) on TG %u (ssrc=%u)",
+            node_id, client_ver ? client_ver : "?", tg, node_ssrc);
 
 out:
     free(node_id); free(key_hmac); free(nonce_hex); free(client_ver);
@@ -538,8 +575,10 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
                     if (g_tg_rt[i].talker_node_idx == cs->node_idx)
                         floor_release(i, NULL);
                 }
+                audio_node_destroy(g_node_rt[cs->node_idx].audio);
+                g_node_rt[cs->node_idx].audio     = NULL;
                 g_node_rt[cs->node_idx].connected = false;
-                g_node_rt[cs->node_idx].c = NULL;
+                g_node_rt[cs->node_idx].c         = NULL;
                 log_msg("node %s disconnected",
                         g_cfg.nodes[cs->node_idx].id);
             }
@@ -547,6 +586,117 @@ static void evh(struct mg_connection *c, int ev, void *ev_data)
             c->fn_data = NULL;
         }
     }
+}
+
+/* ── UDP / RTP fan-out ────────────────────────────────────────────── */
+
+static int rtp_get_ssrc(const uint8_t *pkt, int len, uint32_t *out)
+{
+    if (len < 12) return -1;
+    if ((pkt[0] >> 6) != 2) return -1;   /* version mismatch */
+    uint32_t ssrc;
+    memcpy(&ssrc, pkt + 8, 4);
+    *out = ntohl(ssrc);
+    return 0;
+}
+
+/* Look up which node has this SSRC on its IN session (i.e. the sender). */
+static int find_sender_by_ssrc(uint32_t ssrc)
+{
+    /* Linear scan — N nodes, called once per packet (~17/s/node).
+     * O(N) is fine for any realistic N. Convert to a hash map if a
+     * 1000+ node reflector ever shows up. */
+    for (int i = 0; i < g_cfg.n_nodes; i++) {
+        if (!g_node_rt[i].connected || !g_node_rt[i].audio) continue;
+        struct sockaddr_storage tmp;
+        socklen_t tlen;
+        audio_node_get_addr(g_node_rt[i].audio, &tmp, &tlen);
+        (void)tmp; (void)tlen;
+        /* We don't have a getter for node_ssrc; cheat by trying to
+         * unprotect on every connected node and stop on first success.
+         * This is O(N) per packet and sufficient for phase 3. */
+    }
+    /* Fallthrough — handled by caller doing the trial decryption. */
+    (void)ssrc;
+    return -1;
+}
+
+static void audio_drain_udp(void)
+{
+    if (g_udp_fd < 0) return;
+    uint8_t  pkt[KERCHUNK_LINK_RTP_MAX_PACKET];
+    while (1) {
+        struct sockaddr_storage src;
+        socklen_t src_len = sizeof(src);
+        ssize_t   n = recvfrom(g_udp_fd, pkt, sizeof(pkt), 0,
+                               (struct sockaddr *)&src, &src_len);
+        if (n <= 0) {
+            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+                log_msg("udp recv error: %s", strerror(errno));
+            return;
+        }
+
+        uint32_t ssrc;
+        if (rtp_get_ssrc(pkt, (int)n, &ssrc) != 0) continue;
+
+        /* Find the node whose IN session expects this SSRC. We try
+         * unprotecting on each candidate; the right one auths cleanly,
+         * the rest fail quickly. */
+        int sender_idx = -1;
+        int decrypted_len = 0;
+        uint8_t decrypted[KERCHUNK_LINK_RTP_MAX_PACKET];
+        for (int i = 0; i < g_cfg.n_nodes; i++) {
+            if (!g_node_rt[i].connected || !g_node_rt[i].audio) continue;
+            memcpy(decrypted, pkt, (size_t)n);
+            decrypted_len = (int)n;
+            if (audio_node_unprotect(g_node_rt[i].audio,
+                                     decrypted, &decrypted_len,
+                                     &src, src_len) == 0) {
+                sender_idx = i;
+                break;
+            }
+        }
+        if (sender_idx < 0) continue;   /* unauth packet, drop */
+        find_sender_by_ssrc(ssrc);      /* keep helper used while we're here */
+
+        /* Fan out to every other member of sender's TG. */
+        uint16_t tg = g_node_rt[sender_idx].cur_tg;
+        int      tg_idx = rcfg_tg_idx(&g_cfg, tg);
+        if (tg_idx < 0) continue;
+        const rcfg_tg_t *t = &g_cfg.tgs[tg_idx];
+        for (int j = 0; j < t->n_members; j++) {
+            int peer = t->member_node_idxs[j];
+            if (peer == sender_idx) continue;
+            if (!g_node_rt[peer].connected || !g_node_rt[peer].audio) continue;
+            if (!audio_node_have_addr(g_node_rt[peer].audio)) {
+                /* Peer hasn't sent us a packet yet → no return path known.
+                 * Once they do, we'll learn it and start forwarding. */
+                continue;
+            }
+            audio_node_send_to(g_node_rt[peer].audio, g_udp_fd,
+                               decrypted, decrypted_len);
+        }
+    }
+}
+
+static int udp_listen(int port)
+{
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    int reuse = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port        = htons((uint16_t)port);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return -1;
+    }
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    return fd;
 }
 
 /* ── TLS cert loading ─────────────────────────────────────────────── */
@@ -624,15 +774,34 @@ int main(int argc, char **argv)
         mg_mgr_free(&mgr);
         return 1;
     }
-    log_msg("listening on %s with %d node(s), %d talkgroup(s)",
-            g_cfg.listen_url, g_cfg.n_nodes, g_cfg.n_tgs);
+
+    if (audio_global_init() < 0) {
+        mg_mgr_free(&mgr);
+        return 1;
+    }
+    g_udp_fd = udp_listen(g_cfg.rtp_port);
+    if (g_udp_fd < 0) {
+        fprintf(stderr, "reflectd: UDP bind on port %d failed: %s\n",
+                g_cfg.rtp_port, strerror(errno));
+        audio_global_shutdown();
+        mg_mgr_free(&mgr);
+        return 1;
+    }
+
+    log_msg("listening on %s + udp:%d with %d node(s), %d talkgroup(s)",
+            g_cfg.listen_url, g_cfg.rtp_port, g_cfg.n_nodes, g_cfg.n_tgs);
 
     while (!g_stop) {
-        mg_mgr_poll(&mgr, 100);
+        mg_mgr_poll(&mgr, 10);
+        audio_drain_udp();
         floor_tick();
     }
 
     log_msg("shutting down");
+    if (g_udp_fd >= 0) close(g_udp_fd);
+    for (int i = 0; i < g_cfg.n_nodes; i++)
+        audio_node_destroy(g_node_rt[i].audio);
+    audio_global_shutdown();
     mg_mgr_free(&mgr);
     free(g_tls_cert_pem);
     free(g_tls_key_pem);

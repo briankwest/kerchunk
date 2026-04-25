@@ -46,9 +46,13 @@ BETA_PSK=0202020202020202020202020202020202020202020202020202020202020202
 GAMMA_PSK=0303030303030303030303030303030303030303030303030303030303030303
 WRONG_PSK=0000000000000000000000000000000000000000000000000000000000000000
 
+RTP_PORT="${TEST_LINK_RTP_PORT:-19878}"
+
 cat >"$CONF" <<EOF
 [reflector]
 listen_url = ws://127.0.0.1:$PORT/link
+rtp_port   = $RTP_PORT
+rtp_advertise_host = 127.0.0.1
 keepalive_s = 15
 hangtime_ms = 1500
 
@@ -174,6 +178,41 @@ else
     fail "did not see node_busy — a2.err: $(tr '\n' '|' <"$WORK/a2.err") a1.err: $(tr '\n' '|' <"$WORK/a1.err")"
 fi
 wait $ALPHA_PID || true
+
+# ── Phase 3: SRTP/Opus audio round-trip ───────────────────────────
+echo "Phase 3 SRTP/Opus audio round-trip:"
+
+# beta listens for 2.5s; alpha sends 1.5s of synthetic 440 Hz sine via
+# Opus/SRTP/RTP through the reflector. Expect beta to receive and decode
+# at least 20 frames — well below the 25 alpha sends, leaving generous
+# slack for startup latency.
+"$PROBE" -n beta -k "$BETA_PSK" -u "$URL" --audio-recv-ms 2500 -T 5 \
+    >"$WORK/audio_beta.out" 2>"$WORK/audio_beta.err" &
+RECV_PID=$!
+sleep 0.5
+"$PROBE" -n alpha -k "$ALPHA_PSK" -u "$URL" --audio-send-ms 1500 -T 5 \
+    >"$WORK/audio_alpha.out" 2>"$WORK/audio_alpha.err"
+SEND_RC=$?
+wait $RECV_PID || true
+
+# Parse: AUDIO sent=N recv=N authed=N decoded=N OK
+sent=$(awk '/^AUDIO/ {for(i=1;i<=NF;i++) if($i~/^sent=/){split($i,a,"=");print a[2]}}' \
+    "$WORK/audio_alpha.out")
+recv=$(awk '/^AUDIO/ {for(i=1;i<=NF;i++) if($i~/^recv=/){split($i,a,"=");print a[2]}}' \
+    "$WORK/audio_beta.out")
+authed=$(awk '/^AUDIO/ {for(i=1;i<=NF;i++) if($i~/^authed=/){split($i,a,"=");print a[2]}}' \
+    "$WORK/audio_beta.out")
+decoded=$(awk '/^AUDIO/ {for(i=1;i<=NF;i++) if($i~/^decoded=/){split($i,a,"=");print a[2]}}' \
+    "$WORK/audio_beta.out")
+
+if [ "$SEND_RC" -ne 0 ]; then
+    fail "audio sender returned rc=$SEND_RC: $(cat "$WORK/audio_alpha.out") $(cat "$WORK/audio_alpha.err")"
+fi
+if [ -z "$sent"    ] || [ "$sent"    -lt 20 ]; then fail "alpha sent only ${sent:-?} frames"; fi
+if [ -z "$recv"    ] || [ "$recv"    -lt 20 ]; then fail "beta recv only ${recv:-?} frames"; fi
+if [ -z "$authed"  ] || [ "$authed"  -lt 20 ]; then fail "beta authed only ${authed:-?} frames"; fi
+if [ -z "$decoded" ] || [ "$decoded" -lt 20 ]; then fail "beta decoded only ${decoded:-?} frames"; fi
+pass "alpha→reflector→beta: sent=$sent recv=$recv authed=$authed decoded=$decoded"
 
 echo "test_link: all cases passed"
 exit 0

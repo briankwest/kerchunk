@@ -42,6 +42,9 @@ typedef struct {
     char     admin_token[128];
     char     log_file[256];
 
+    int      rtp_port;     /* UDP port for SRTP audio plane */
+    char     rtp_advertise_host[64]; /* what we tell clients in login_ok */
+
     int      keepalive_s;
     int      hangtime_ms;
     int      mute_threshold_pct;

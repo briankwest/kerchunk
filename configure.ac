@@ -51,8 +51,13 @@ PKG_CHECK_MODULES([PLCODE], [plcode])
 # Required: libcurl
 PKG_CHECK_MODULES([CURL], [libcurl])
 
-# Required: OpenSSL (for mod_web/mongoose)
+# Required: OpenSSL (for mod_web/mongoose, kerchunk-reflectd)
 PKG_CHECK_MODULES([OPENSSL], [openssl])
+
+# Required: libopus + libsrtp2 (for kerchunk-reflectd / kerchunk-link-probe).
+# Both are also needed by the in-tree mod_link (added in a later phase).
+PKG_CHECK_MODULES([OPUS], [opus])
+PKG_CHECK_MODULES([SRTP2], [libsrtp2])
 
 # Required: ALSA (for mixer control)
 PKG_CHECK_MODULES([ALSA], [alsa])

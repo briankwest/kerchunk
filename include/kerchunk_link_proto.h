@@ -29,10 +29,30 @@
 #define KERCHUNK_LINK_HMAC_BYTES      32   /* SHA-256 */
 #define KERCHUNK_LINK_PSK_BYTES       32
 
-/* SRTP material as delivered in login_ok (for phase 3+, defined here so
- * both ends agree on lengths from the start). */
+/* SRTP material as delivered in login_ok. AES-128-CTR + HMAC-SHA1-80
+ * (libsrtp profile SRTP_AES128_CM_HMAC_SHA1_80). */
 #define KERCHUNK_LINK_SRTP_KEY_BYTES  16
 #define KERCHUNK_LINK_SRTP_SALT_BYTES 14
+
+/* RTP payload type for Opus (dynamic, only one codec on the wire). */
+#define KERCHUNK_LINK_RTP_PAYLOAD_TYPE 100
+
+/* Opus parameters per PLAN-LINK.md § 4.2 + the 24 kHz decision. */
+#define KERCHUNK_LINK_OPUS_SAMPLE_RATE 24000
+#define KERCHUNK_LINK_OPUS_FRAME_MS    60
+#define KERCHUNK_LINK_OPUS_FRAME_SAMPLES \
+    (KERCHUNK_LINK_OPUS_SAMPLE_RATE * KERCHUNK_LINK_OPUS_FRAME_MS / 1000)
+#define KERCHUNK_LINK_OPUS_BITRATE     32000
+
+/* RTP timestamps for Opus run at 48 kHz per RFC 7587 regardless of the
+ * internal codec sample rate. */
+#define KERCHUNK_LINK_RTP_CLOCK_HZ        48000
+#define KERCHUNK_LINK_RTP_FRAME_TS_TICKS  \
+    (KERCHUNK_LINK_RTP_CLOCK_HZ * KERCHUNK_LINK_OPUS_FRAME_MS / 1000)
+
+/* Maximum RTP packet size we expect on the wire (header + Opus payload +
+ * SRTP auth tag). 12-byte RTP header, ~200 byte Opus, 10-byte tag. */
+#define KERCHUNK_LINK_RTP_MAX_PACKET 1500
 
 /* Maximum control-plane message length. JSON; one message per WS frame
  * (or per line on plain TCP during phase 1). Sized for the largest

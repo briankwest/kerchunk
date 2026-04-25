@@ -199,6 +199,12 @@ static int load_globals(rcfg_t *out, const kerchunk_config_t *cfg)
     const char *log = kerchunk_config_get(cfg, "reflector", "log_file");
     if (log) snprintf(out->log_file, sizeof(out->log_file), "%s", log);
 
+    out->rtp_port           = kerchunk_config_get_int(
+        cfg, "reflector", "rtp_port", KERCHUNK_LINK_DEFAULT_RTP_PORT);
+    const char *adv = kerchunk_config_get(cfg, "reflector", "rtp_advertise_host");
+    snprintf(out->rtp_advertise_host, sizeof(out->rtp_advertise_host),
+             "%s", adv ? adv : "127.0.0.1");
+
     out->keepalive_s        = kerchunk_config_get_int(
         cfg, "reflector", "keepalive_s", KERCHUNK_LINK_DEFAULT_KEEPALIVE_S);
     out->hangtime_ms        = kerchunk_config_get_int(

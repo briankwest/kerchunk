@@ -9,17 +9,24 @@
  * Phase 5 retires this in favor of mod_link integration tests.
  */
 
+#include <arpa/inet.h>
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <opus/opus.h>
+#include <srtp2/srtp.h>
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 
@@ -78,6 +85,28 @@ static struct {
     int           talker_seen;
     int           floor_denied_seen;
     int           tg_denied_seen;
+
+    /* Phase 3: audio modes */
+    int           audio_send_ms;      /* >0: synthesize + send this much audio */
+    int           audio_recv_ms;      /* >0: receive for this long, then exit */
+    char          rtp_endpoint[80];   /* "host:port" from login_ok */
+    uint8_t       master_key[KERCHUNK_LINK_SRTP_KEY_BYTES];
+    uint8_t       master_salt[KERCHUNK_LINK_SRTP_SALT_BYTES];
+    uint32_t      node_ssrc;
+    uint32_t      refl_ssrc;
+    int           udp_fd;
+    srtp_t        srtp_in;
+    srtp_t        srtp_out;
+    OpusEncoder  *opus_enc;
+    OpusDecoder  *opus_dec;
+    int64_t       audio_started_ms;
+    int           pkts_sent;
+    int           pkts_recv_total;
+    int           pkts_recv_authed;
+    int           frames_decoded;
+    uint16_t      out_seq;
+    uint32_t      out_ts;
+
     char          fail_reason[256];
 } g;
 
@@ -158,6 +187,176 @@ static void send_first_ping(struct mg_connection *c)
     send_json(c, buf);
 }
 
+/* ── Phase 3 audio plane ──────────────────────────────────────────── */
+
+static int parse_endpoint(const char *s, char *host, size_t hlen, int *port)
+{
+    const char *colon = strrchr(s, ':');
+    if (!colon) return -1;
+    size_t hl = (size_t)(colon - s);
+    if (hl >= hlen) return -1;
+    memcpy(host, s, hl);
+    host[hl] = '\0';
+    *port = atoi(colon + 1);
+    return *port > 0 ? 0 : -1;
+}
+
+static int audio_init(void)
+{
+    if (srtp_init() != srtp_err_status_ok) {
+        fail(NULL, "srtp_init failed"); return -1;
+    }
+
+    /* Combined master key||salt for libsrtp policy. */
+    static uint8_t master[KERCHUNK_LINK_SRTP_KEY_BYTES +
+                          KERCHUNK_LINK_SRTP_SALT_BYTES];
+    memcpy(master,                              g.master_key,
+           KERCHUNK_LINK_SRTP_KEY_BYTES);
+    memcpy(master + KERCHUNK_LINK_SRTP_KEY_BYTES, g.master_salt,
+           KERCHUNK_LINK_SRTP_SALT_BYTES);
+
+    /* IN: decrypts packets from reflector. SSRC = refl_ssrc. */
+    srtp_policy_t in_pol;
+    memset(&in_pol, 0, sizeof(in_pol));
+    srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&in_pol.rtp);
+    srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&in_pol.rtcp);
+    in_pol.ssrc.type    = ssrc_specific;
+    in_pol.ssrc.value   = g.refl_ssrc;
+    in_pol.key          = master;
+    in_pol.window_size  = 1024;
+    if (srtp_create(&g.srtp_in, &in_pol) != srtp_err_status_ok) {
+        fail(NULL, "srtp_create(in) failed"); return -1;
+    }
+
+    /* OUT: encrypts packets to reflector. SSRC = node_ssrc. */
+    srtp_policy_t out_pol;
+    memset(&out_pol, 0, sizeof(out_pol));
+    srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&out_pol.rtp);
+    srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&out_pol.rtcp);
+    out_pol.ssrc.type     = ssrc_specific;
+    out_pol.ssrc.value    = g.node_ssrc;
+    out_pol.key           = master;
+    out_pol.window_size   = 1024;
+    out_pol.allow_repeat_tx = 1;
+    if (srtp_create(&g.srtp_out, &out_pol) != srtp_err_status_ok) {
+        fail(NULL, "srtp_create(out) failed"); return -1;
+    }
+
+    int err = 0;
+    g.opus_enc = opus_encoder_create(KERCHUNK_LINK_OPUS_SAMPLE_RATE, 1,
+                                     OPUS_APPLICATION_VOIP, &err);
+    if (!g.opus_enc) { fail(NULL, "opus_encoder_create %d", err); return -1; }
+    opus_encoder_ctl(g.opus_enc, OPUS_SET_BITRATE(KERCHUNK_LINK_OPUS_BITRATE));
+    opus_encoder_ctl(g.opus_enc, OPUS_SET_INBAND_FEC(1));
+    opus_encoder_ctl(g.opus_enc, OPUS_SET_PACKET_LOSS_PERC(10));
+
+    g.opus_dec = opus_decoder_create(KERCHUNK_LINK_OPUS_SAMPLE_RATE, 1, &err);
+    if (!g.opus_dec) { fail(NULL, "opus_decoder_create %d", err); return -1; }
+
+    /* Bind ephemeral UDP socket. */
+    g.udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (g.udp_fd < 0) { fail(NULL, "socket: %s", strerror(errno)); return -1; }
+    struct sockaddr_in any;
+    memset(&any, 0, sizeof(any));
+    any.sin_family = AF_INET;
+    any.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(g.udp_fd, (struct sockaddr *)&any, sizeof(any)) != 0) {
+        fail(NULL, "bind: %s", strerror(errno)); return -1;
+    }
+    int flags = fcntl(g.udp_fd, F_GETFL, 0);
+    fcntl(g.udp_fd, F_SETFL, flags | O_NONBLOCK);
+    return 0;
+}
+
+static int audio_send_one_frame(void)
+{
+    /* Generate one 60ms frame of 440Hz sine (24 kHz mono int16). */
+    int16_t pcm[KERCHUNK_LINK_OPUS_FRAME_SAMPLES];
+    static int phase = 0;
+    for (int i = 0; i < KERCHUNK_LINK_OPUS_FRAME_SAMPLES; i++) {
+        double t = (double)(phase + i) / KERCHUNK_LINK_OPUS_SAMPLE_RATE;
+        pcm[i] = (int16_t)(8000.0 * sin(2.0 * M_PI * 440.0 * t));
+    }
+    phase += KERCHUNK_LINK_OPUS_FRAME_SAMPLES;
+
+    uint8_t opus_buf[400];
+    int olen = opus_encode(g.opus_enc, pcm,
+                           KERCHUNK_LINK_OPUS_FRAME_SAMPLES,
+                           opus_buf, sizeof(opus_buf));
+    if (olen < 0) return -1;
+
+    /* Build RTP header. */
+    uint8_t rtp[KERCHUNK_LINK_RTP_MAX_PACKET];
+    rtp[0] = 0x80;                                /* V=2 */
+    rtp[1] = KERCHUNK_LINK_RTP_PAYLOAD_TYPE & 0x7f;
+    uint16_t seq_n = htons(g.out_seq++);
+    memcpy(rtp + 2, &seq_n, 2);
+    uint32_t ts_n = htonl(g.out_ts);
+    g.out_ts += KERCHUNK_LINK_RTP_FRAME_TS_TICKS;
+    memcpy(rtp + 4, &ts_n, 4);
+    uint32_t ssrc_n = htonl(g.node_ssrc);
+    memcpy(rtp + 8, &ssrc_n, 4);
+    memcpy(rtp + 12, opus_buf, (size_t)olen);
+    int rtp_len = 12 + olen;
+
+    if (srtp_protect(g.srtp_out, rtp, &rtp_len) != srtp_err_status_ok)
+        return -1;
+
+    char host[64]; int port = 0;
+    if (parse_endpoint(g.rtp_endpoint, host, sizeof(host), &port) != 0)
+        return -1;
+    struct sockaddr_in dst;
+    memset(&dst, 0, sizeof(dst));
+    dst.sin_family = AF_INET;
+    dst.sin_port   = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &dst.sin_addr) != 1) return -1;
+
+    if (sendto(g.udp_fd, rtp, (size_t)rtp_len, 0,
+               (struct sockaddr *)&dst, sizeof(dst)) != rtp_len) return -1;
+    g.pkts_sent++;
+    return 0;
+}
+
+static void audio_drain_recv(void)
+{
+    uint8_t pkt[KERCHUNK_LINK_RTP_MAX_PACKET];
+    int16_t pcm[KERCHUNK_LINK_OPUS_FRAME_SAMPLES];
+    while (1) {
+        ssize_t n = recv(g.udp_fd, pkt, sizeof(pkt), 0);
+        if (n <= 0) {
+            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+                fprintf(stderr, "recv: %s\n", strerror(errno));
+            return;
+        }
+        g.pkts_recv_total++;
+        int len = (int)n;
+        if (srtp_unprotect(g.srtp_in, pkt, &len) != srtp_err_status_ok)
+            continue;
+        g.pkts_recv_authed++;
+        if (len <= 12) continue;
+        int dlen = opus_decode(g.opus_dec, pkt + 12, len - 12,
+                               pcm, KERCHUNK_LINK_OPUS_FRAME_SAMPLES, 0);
+        if (dlen > 0) g.frames_decoded++;
+    }
+}
+
+static void on_login_ok_parse_audio(struct mg_str body)
+{
+    char *ep   = mg_json_get_str(body, "$.rtp_endpoint");
+    char *kh   = mg_json_get_str(body, "$.srtp_master_key");
+    char *sh   = mg_json_get_str(body, "$.srtp_master_salt");
+    long  ns   = mg_json_get_long(body, "$.ssrc",            0);
+    long  rs   = mg_json_get_long(body, "$.reflector_ssrc",  0);
+    if (ep) snprintf(g.rtp_endpoint, sizeof(g.rtp_endpoint), "%s", ep);
+    if (kh && strlen(kh) == 2 * KERCHUNK_LINK_SRTP_KEY_BYTES)
+        hex_to_bytes(kh, g.master_key, KERCHUNK_LINK_SRTP_KEY_BYTES);
+    if (sh && strlen(sh) == 2 * KERCHUNK_LINK_SRTP_SALT_BYTES)
+        hex_to_bytes(sh, g.master_salt, KERCHUNK_LINK_SRTP_SALT_BYTES);
+    g.node_ssrc = (uint32_t)ns;
+    g.refl_ssrc = (uint32_t)rs;
+    free(ep); free(kh); free(sh);
+}
+
 static void on_login_ok(struct mg_connection *c)
 {
     if (g.switch_tg > 0) {
@@ -171,6 +370,13 @@ static void on_login_ok(struct mg_connection *c)
         snprintf(buf, sizeof(buf), "{\"type\":\"simulate_talk_start\"}");
         send_json(c, buf);
         g.state = PST_TALKING;
+    } else if (g.audio_send_ms || g.audio_recv_ms) {
+        /* Stay in PINGING-but-quiet — main loop drives audio. Send one
+         * bootstrap frame so the reflector learns our UDP source addr;
+         * without it, recv-only nodes never get forwarded packets. */
+        g.state = PST_PINGING;
+        g.audio_started_ms = now_ms();
+        audio_send_one_frame();
     } else {
         send_first_ping(c);
     }
@@ -218,6 +424,10 @@ static void handle_message(struct mg_connection *c, const char *line, size_t len
         on_hello(c, body);
     } else if (strcmp(type, LINK_MSG_LOGIN_OK) == 0 &&
                g.state == PST_AWAITING_LOGIN_OK) {
+        on_login_ok_parse_audio(body);
+        if ((g.audio_send_ms || g.audio_recv_ms) && audio_init() < 0) {
+            free(type); return;
+        }
         on_login_ok(c);
     } else if (strcmp(type, LINK_MSG_TG_OK) == 0 &&
                g.state == PST_AWAITING_TG_OK) {
@@ -329,11 +539,15 @@ int main(int argc, char **argv)
     int timeout_s  = 5;
 
     static struct option longopts[] = {
-        {"tg",      required_argument, NULL, 1000},
-        {"talk",    no_argument,       NULL, 1001},
-        {"hold-ms", required_argument, NULL, 1002},
+        {"tg",            required_argument, NULL, 1000},
+        {"talk",          no_argument,       NULL, 1001},
+        {"hold-ms",       required_argument, NULL, 1002},
+        {"audio-send-ms", required_argument, NULL, 1003},
+        {"audio-recv-ms", required_argument, NULL, 1004},
         {0,0,0,0}
     };
+
+    g.udp_fd = -1;
 
     int opt;
     while ((opt = getopt_long(argc, argv, "n:k:u:c:T:h", longopts, NULL)) != -1) {
@@ -346,6 +560,8 @@ int main(int argc, char **argv)
         case 1000: g.switch_tg = atoi(optarg); break;
         case 1001: g.talk_then_exit = 1; break;
         case 1002: g.hold_ms = atoi(optarg); g.talk_then_exit = 1; break;
+        case 1003: g.audio_send_ms = atoi(optarg); g.pings_target = 0; break;
+        case 1004: g.audio_recv_ms = atoi(optarg); g.pings_target = 0; break;
         case 'h': default: usage(argv[0]); return opt == 'h' ? 0 : 2;
         }
     }
@@ -368,9 +584,27 @@ int main(int argc, char **argv)
 
     time_t  deadline       = time(NULL) + timeout_s;
     int64_t next_refresh_ms = 0;
+    int64_t next_audio_send = 0;
     while (g.state != PST_DONE && g.state != PST_FAILED &&
            time(NULL) < deadline) {
-        mg_mgr_poll(&mgr, 50);
+        mg_mgr_poll(&mgr, 10);
+
+        /* Audio: drain receives every loop; pace sends at 60ms. */
+        if (g.udp_fd >= 0 && g.audio_started_ms > 0) {
+            audio_drain_recv();
+            int64_t now = now_ms();
+            if (g.audio_send_ms > 0 &&
+                now - g.audio_started_ms < g.audio_send_ms &&
+                now >= next_audio_send) {
+                audio_send_one_frame();
+                next_audio_send = now + KERCHUNK_LINK_OPUS_FRAME_MS;
+            }
+            int64_t expected_done_ms =
+                g.audio_send_ms > g.audio_recv_ms
+                    ? g.audio_send_ms : g.audio_recv_ms;
+            if (now - g.audio_started_ms >= expected_done_ms + 200)
+                g.state = PST_DONE;
+        }
         /* Refresh the floor lease every 500ms while holding so the
          * reflector's hangtime (1500ms) doesn't expire under us. Real
          * mod_link refreshes implicitly via RTP cadence. */
@@ -406,7 +640,13 @@ int main(int argc, char **argv)
     mg_mgr_free(&mgr);
 
     if (g.state == PST_DONE) {
-        printf("OK\n");
+        if (g.audio_send_ms || g.audio_recv_ms) {
+            printf("AUDIO sent=%d recv=%d authed=%d decoded=%d OK\n",
+                   g.pkts_sent, g.pkts_recv_total,
+                   g.pkts_recv_authed, g.frames_decoded);
+        } else {
+            printf("OK\n");
+        }
         return 0;
     }
     fprintf(stderr, "FAIL — %s\n", g.fail_reason);
