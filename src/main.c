@@ -1776,9 +1776,20 @@ int main(int argc, char **argv)
         }
 
         /* Fused TX-activity tick (cos OR dtmf, adaptive end-silence).
-         * Logic in src/kerchunk_txactivity.c, unit-tested separately. */
-        int cos_raw = tx_trust_cos ? kerchunk_hid_read_cor() : 0;
-        int dtmf_active = atomic_load(&g_tx_dtmf_active);
+         * Logic in src/kerchunk_txactivity.c, unit-tested separately.
+         *
+         * Gate the inputs on PTT: when the radio is transmitting (any
+         * source — queue audio, mod_link bridge, mod_freeswitch, etc.)
+         * the COS bit and DTMF decoder both feed off audio that we
+         * KNOW isn't a real local user keying up. Self-TX feedback,
+         * intermod, and the radio's RX-mute-during-TX behavior all
+         * conspire to produce phantom COS pulses. Without this gate
+         * a node in BRIDGING mode produces spurious "TX preempted
+         * queue: N items flushed (source=link)" cycles that chop
+         * the bridged audio. */
+        int ptt_held = kerchunk_core_get_ptt();
+        int cos_raw = (tx_trust_cos && !ptt_held) ? kerchunk_hid_read_cor() : 0;
+        int dtmf_active = ptt_held ? 0 : atomic_load(&g_tx_dtmf_active);
         int active_silence_before = kerchunk_txactivity_active_silence_ticks(&tx);
         kerchunk_txact_event_t txev =
             kerchunk_txactivity_tick(&tx, cos_raw, dtmf_active);
