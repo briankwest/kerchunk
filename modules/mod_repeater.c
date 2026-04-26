@@ -18,13 +18,25 @@
 
 #define LOG_MOD "repeater"
 
-/* Repeater states */
+/* Repeater states.
+ *
+ * BRIDGING is "we're playing audio that arrived from the network link"
+ * — distinct from RECEIVING (local radio's own RX). Lets subscribers
+ * (mod_recorder, mod_cdr, mod_caller) opt out of duplicating what the
+ * reflector already records server-side, while modules that DO want
+ * to react to remote audio (mod_courtesy → end-of-transmission tone)
+ * subscribe to KERCHEVT_LINK_RX_DROP directly.
+ *
+ * If both fire (local user keys up while link audio is playing) COR
+ * wins — RECEIVING takes precedence. The FSM tracks BRIDGING so it can
+ * restore it cleanly if the local key drops before the link tail. */
 enum {
     RPT_IDLE,
     RPT_RECEIVING,
     RPT_TAIL_WAIT,
     RPT_HANG_WAIT,
     RPT_RX_TIMEOUT,
+    RPT_BRIDGING,
 };
 
 /* RX FSM state-name lookup is centralized — kerchunk_rx_state_name()
@@ -264,6 +276,27 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
     }
 }
 
+static void on_link_rx_assert(const kerchevt_t *evt, void *ud)
+{
+    (void)evt; (void)ud;
+    /* Only enter BRIDGING if we're idle. If a local RX or TAIL_WAIT
+     * is in progress, the local session takes precedence — the link
+     * audio still plays out (mod_link asserts PTT independently),
+     * we just don't disturb the FSM display. */
+    if (g_state == RPT_IDLE)
+        change_state(RPT_BRIDGING);
+}
+
+static void on_link_rx_drop(const kerchevt_t *evt, void *ud)
+{
+    (void)evt; (void)ud;
+    /* Symmetric: only return to IDLE if we were the BRIDGING owner.
+     * If a local RX layered on top during the bridge, leave the FSM
+     * to local on_cor_drop. */
+    if (g_state == RPT_BRIDGING)
+        change_state(RPT_IDLE);
+}
+
 static void on_caller_identified(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
@@ -292,6 +325,8 @@ static int repeater_load(kerchunk_core_t *core)
     g_state = RPT_IDLE;
     core->subscribe(KERCHEVT_COR_ASSERT,       on_cor_assert, NULL);
     core->subscribe(KERCHEVT_COR_DROP,          on_cor_drop, NULL);
+    core->subscribe(KERCHEVT_LINK_RX_ASSERT,    on_link_rx_assert, NULL);
+    core->subscribe(KERCHEVT_LINK_RX_DROP,      on_link_rx_drop, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
     core->subscribe(KERCHEVT_CALLER_CLEARED,    on_caller_cleared, NULL);
     return 0;
@@ -337,6 +372,8 @@ static void repeater_unload(void)
 {
     g_core->unsubscribe(KERCHEVT_COR_ASSERT,       on_cor_assert);
     g_core->unsubscribe(KERCHEVT_COR_DROP,          on_cor_drop);
+    g_core->unsubscribe(KERCHEVT_LINK_RX_ASSERT,    on_link_rx_assert);
+    g_core->unsubscribe(KERCHEVT_LINK_RX_DROP,      on_link_rx_drop);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
     g_core->unsubscribe(KERCHEVT_CALLER_CLEARED,    on_caller_cleared);
 

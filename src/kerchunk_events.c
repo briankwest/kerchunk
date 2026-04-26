@@ -39,6 +39,7 @@ const char *kerchunk_rx_state_name(int s)
     case 2: return "TAIL_WAIT";
     case 3: return "HANG_WAIT";
     case 4: return "RX_TIMEOUT";
+    case 5: return "BRIDGING";
     default: return "UNKNOWN";
     }
 }
@@ -65,6 +66,8 @@ static const evt_name_row_t g_evt_names[] = {
     { KERCHEVT_VCOR_DROP,         "vcor_drop"         },
     { KERCHEVT_PTT_ASSERT,        "ptt_assert"        },
     { KERCHEVT_PTT_DROP,          "ptt_drop"          },
+    { KERCHEVT_LINK_RX_ASSERT,    "link_rx_assert"    },
+    { KERCHEVT_LINK_RX_DROP,      "link_rx_drop"      },
     { KERCHEVT_RX_STATE_CHANGE,   "rx_state_change"   },
     { KERCHEVT_TX_STATE_CHANGE,   "tx_state_change"   },
     { KERCHEVT_TAIL_START,        "tail_start"        },

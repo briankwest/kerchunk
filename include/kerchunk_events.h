@@ -24,6 +24,12 @@ typedef enum {
     KERCHEVT_VCOR_DROP,
     KERCHEVT_PTT_ASSERT,
     KERCHEVT_PTT_DROP,
+    KERCHEVT_LINK_RX_ASSERT,    /* mod_link is now playing remote audio
+                                 * out the local TX (BRIDGING). Distinct
+                                 * from COR_ASSERT so subscribers like
+                                 * mod_recorder/mod_cdr don't duplicate
+                                 * the reflector's server-side recording. */
+    KERCHEVT_LINK_RX_DROP,
 
     /* Repeater state events */
     KERCHEVT_RX_STATE_CHANGE,   /* mod_repeater FSM (IDLE / RECEIVING

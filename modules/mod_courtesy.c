@@ -54,6 +54,15 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
     queue_tone(g_caller_id ? "cor_drop, caller" : "cor_drop");
 }
 
+static void on_link_rx_drop(const kerchevt_t *evt, void *ud)
+{
+    (void)evt; (void)ud;
+    /* Remote audio finished playing through the local TX. Same UX
+     * affordance as a local unkey — confirms end-of-transmission to
+     * the listener. */
+    queue_tone("link_rx_drop");
+}
+
 static void on_queue_complete(const kerchevt_t *evt, void *ud)
 {
     (void)ud;
@@ -89,6 +98,7 @@ static int courtesy_load(kerchunk_core_t *core)
 {
     g_core = core;
     core->subscribe(KERCHEVT_COR_DROP, on_cor_drop, NULL);
+    core->subscribe(KERCHEVT_LINK_RX_DROP, on_link_rx_drop, NULL);
     core->subscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
     core->subscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared, NULL);
@@ -115,6 +125,7 @@ static int courtesy_configure(const kerchunk_config_t *cfg)
 static void courtesy_unload(void)
 {
     g_core->unsubscribe(KERCHEVT_COR_DROP, on_cor_drop);
+    g_core->unsubscribe(KERCHEVT_LINK_RX_DROP, on_link_rx_drop);
     g_core->unsubscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
     g_core->unsubscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared);

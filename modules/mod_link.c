@@ -315,14 +315,36 @@ static void set_error(const char *fmt, ...)
     g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "%s", g_last_error);
 }
 
+/* PTT + link-RX state machine helpers. The PTT side is what makes the
+ * radio key up; LINK_RX_ASSERT/DROP is the SIGNAL that mod_repeater
+ * (and any other interested module) listens for so the dashboard
+ * shows BRIDGING and the courtesy tone fires after remote audio.
+ *
+ * Always fire the event in lockstep with the request/release_ptt
+ * pair so the two never drift. */
+static void link_rx_assert(void)
+{
+    if (g_link_ptt_held) return;
+    g_core->request_ptt("link");
+    g_link_ptt_held = 1;
+    kerchevt_t e = { .type = KERCHEVT_LINK_RX_ASSERT };
+    kerchevt_fire(&e);
+}
+
+static void link_rx_drop(void)
+{
+    if (!g_link_ptt_held) return;
+    g_core->release_ptt("link");
+    g_link_ptt_held = 0;
+    kerchevt_t e = { .type = KERCHEVT_LINK_RX_DROP };
+    kerchevt_fire(&e);
+}
+
 /* ── Session teardown ─────────────────────────────────────────────── */
 
 static void session_cleanup(void)
 {
-    if (g_link_ptt_held) {
-        g_core->release_ptt("link");
-        g_link_ptt_held = 0;
-    }
+    link_rx_drop();
     if (g_session_active) {
         srtp_dealloc(g_srtp_in);
         srtp_dealloc(g_srtp_out);
@@ -623,10 +645,7 @@ static void play_decoded_frame(const int16_t *pcm24k, int n)
     }
 
     /* Auto-PTT while audio is flowing; release after link_tail_ms quiet. */
-    if (!g_link_ptt_held) {
-        g_core->request_ptt("link");
-        g_link_ptt_held = 1;
-    }
+    link_rx_assert();
     g_link_last_recv_ms = now_ms();
 }
 
@@ -676,10 +695,8 @@ static void drain_udp_recv(void)
 
     /* PTT tail-down. */
     if (g_link_ptt_held &&
-        now_ms() - g_link_last_recv_ms > g_link_tail_ms) {
-        g_core->release_ptt("link");
-        g_link_ptt_held = 0;
-    }
+        now_ms() - g_link_last_recv_ms > g_link_tail_ms)
+        link_rx_drop();
 }
 
 /* ── WS protocol handlers ─────────────────────────────────────────── */
