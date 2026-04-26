@@ -152,6 +152,37 @@ static int      g_recv_received;   /* in current 10s window */
 static int64_t  g_quality_window_start_ms;
 #define QUALITY_REPORT_MS 10000
 
+/* Jitter buffer (LINK-PROTOCOL.md § 4.4 step 4).
+ *
+ * Smooths arrival jitter and bounds the in-flight audio so a
+ * misbehaving sender can't overrun the local TX queue. Without this,
+ * mod_link decoded every arriving packet straight to kerchunk_queue —
+ * one stuck talker filled the 256-item central queue in ~15s and
+ * caused PA underflows.
+ *
+ * Slot ring keyed by RTP seq mod JB_SLOTS. Playout pops one slot
+ * every KERCHUNK_LINK_OPUS_FRAME_MS (60ms) of wall clock,
+ * regardless of how packets actually arrived. Missing slots get
+ * an opus_decode(NULL) PLC frame; 5 consecutive misses → drain
+ * the JB and release PTT (per spec §4.4 step 5). Late arrivals
+ * (seq < cursor) are dropped. Insert into an occupied slot
+ * (we didn't pop in time) increments overflow and overwrites. */
+#define JB_SLOTS 5      /* 5 × 60ms = 300ms ring; effective 250ms cap */
+#define JB_PLC_MAX 5    /* consecutive empty pops → drain + release */
+typedef struct {
+    int      in_use;
+    uint16_t seq;
+    int      plen;
+    uint8_t  payload[256];   /* >> 32 kbps × 60ms ≈ 240 B */
+} jb_slot_t;
+static jb_slot_t g_jb[JB_SLOTS];
+static int       g_jb_initialized;
+static uint16_t  g_jb_cursor;        /* next seq to pop */
+static int64_t   g_jb_next_play_ms;  /* wall time of next pop */
+static int       g_jb_consec_miss;   /* consecutive empty pops */
+static int       g_jb_late;          /* arrived after cursor */
+static int       g_jb_overflow;      /* slot overwrite — drain too slow */
+
 /* Adaptive bitrate (LINK-PROTOCOL.md § 4.1.4). Reflector can suggest a target
  * bitrate via the target_bitrate message; we update the encoder. */
 static int g_current_bitrate;
@@ -315,6 +346,91 @@ static void set_error(const char *fmt, ...)
     g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "%s", g_last_error);
 }
 
+static void jb_reset(void)
+{
+    for (int i = 0; i < JB_SLOTS; i++) g_jb[i].in_use = 0;
+    g_jb_initialized = 0;
+    g_jb_cursor = 0;
+    g_jb_next_play_ms = 0;
+    g_jb_consec_miss = 0;
+}
+
+static int jb_depth_slots(void)
+{
+    int n = 0;
+    for (int i = 0; i < JB_SLOTS; i++) if (g_jb[i].in_use) n++;
+    return n;
+}
+
+static void jb_insert(uint16_t seq, const uint8_t *payload, int plen)
+{
+    if (plen <= 0 || plen > (int)sizeof(g_jb[0].payload)) return;
+
+    if (!g_jb_initialized) {
+        g_jb_cursor       = seq;
+        g_jb_next_play_ms = now_ms() + g_jb_target_ms;
+        g_jb_initialized  = 1;
+    }
+    int16_t delta = (int16_t)(seq - g_jb_cursor);
+    if (delta < 0 && delta > -200) {
+        g_jb_late++;
+        return;
+    }
+    if (delta > 200 || delta < -200) {
+        /* Sender swap or wildly out-of-range — restart at this seq. */
+        jb_reset();
+        g_jb_cursor       = seq;
+        g_jb_next_play_ms = now_ms() + g_jb_target_ms;
+        g_jb_initialized  = 1;
+    }
+    int idx = seq % JB_SLOTS;
+    jb_slot_t *s = &g_jb[idx];
+    if (s->in_use && s->seq != seq) g_jb_overflow++;
+    s->in_use = 1;
+    s->seq    = seq;
+    s->plen   = plen;
+    memcpy(s->payload, payload, (size_t)plen);
+}
+
+static void play_decoded_frame(const int16_t *pcm24k, int n);  /* fwd decl */
+static void link_rx_drop(void);                                 /* fwd decl */
+
+static void jb_playout_tick(void)
+{
+    if (!g_jb_initialized || !g_session_active || g_muted) return;
+    int16_t pcm[KERCHUNK_LINK_OPUS_FRAME_SAMPLES];
+    int64_t now = now_ms();
+    int budget = 10;   /* cap per call so a wall-clock jump doesn't loop forever */
+    while (budget-- > 0 && now >= g_jb_next_play_ms) {
+        int idx = g_jb_cursor % JB_SLOTS;
+        jb_slot_t *s = &g_jb[idx];
+        int dlen;
+        if (s->in_use && s->seq == g_jb_cursor) {
+            dlen = opus_decode(g_dec, s->payload, s->plen,
+                               pcm, KERCHUNK_LINK_OPUS_FRAME_SAMPLES, 0);
+            s->in_use = 0;
+            g_jb_consec_miss = 0;
+        } else {
+            /* Missing slot — PLC frame so the audio path stays lit. */
+            dlen = opus_decode(g_dec, NULL, 0,
+                               pcm, KERCHUNK_LINK_OPUS_FRAME_SAMPLES, 1);
+            g_jb_consec_miss++;
+        }
+        g_jb_cursor++;
+        g_jb_next_play_ms += KERCHUNK_LINK_OPUS_FRAME_MS;
+        if (dlen > 0) play_decoded_frame(pcm, dlen);
+        else if (dlen < 0) g_decode_err++;
+
+        /* Ghost-stream guard: 5 consecutive missing → assume sender
+         * stopped, drain JB and release PTT. */
+        if (g_jb_consec_miss >= JB_PLC_MAX) {
+            jb_reset();
+            link_rx_drop();
+            return;
+        }
+    }
+}
+
 /* PTT + link-RX state machine helpers. The PTT side is what makes the
  * radio key up; LINK_RX_ASSERT/DROP is the SIGNAL that mod_repeater
  * (and any other interested module) listens for so the dashboard
@@ -345,6 +461,7 @@ static void link_rx_drop(void)
 static void session_cleanup(void)
 {
     link_rx_drop();
+    jb_reset();
     if (g_session_active) {
         srtp_dealloc(g_srtp_in);
         srtp_dealloc(g_srtp_out);
@@ -605,7 +722,7 @@ static void send_quality_report(void)
      * enough to make the percentage trustworthy. */
     if (total < 30) return;
 
-    int jb_depth_ms = 0;
+    int jb_depth_ms = jb_depth_slots() * KERCHUNK_LINK_OPUS_FRAME_MS;
     char buf[256];
     snprintf(buf, sizeof(buf),
         "{\"type\":\"%s\",\"loss_pct\":%d.%d,\"jitter_ms\":0,"
@@ -653,7 +770,6 @@ static void drain_udp_recv(void)
 {
     if (g_udp_fd < 0 || !g_session_active) return;
     uint8_t pkt[KERCHUNK_LINK_RTP_MAX_PACKET];
-    int16_t pcm[KERCHUNK_LINK_OPUS_FRAME_SAMPLES];
     while (1) {
         ssize_t n = recv(g_udp_fd, pkt, sizeof(pkt), 0);
         if (n <= 0) {
@@ -687,13 +803,20 @@ static void drain_udp_recv(void)
         memcpy(&seq, pkt + 2, 2);
         seq = ntohs(seq);
         quality_track_seq(seq);
-        int dlen = opus_decode(g_dec, pkt + 12, len - 12,
-                               pcm, KERCHUNK_LINK_OPUS_FRAME_SAMPLES, 0);
-        if (dlen <= 0) { g_decode_err++; continue; }
-        play_decoded_frame(pcm, dlen);
+        /* Hand to the JB. Decoder runs on the playout side at
+         * 60ms cadence so a flooding sender can't burn local CPU
+         * or fill the central queue. */
+        jb_insert(seq, pkt + 12, len - 12);
+        g_link_last_recv_ms = now_ms();
     }
 
-    /* PTT tail-down. */
+    /* Drive the JB playout. Pops any frames whose 60ms playout time
+     * has arrived since last call. */
+    jb_playout_tick();
+
+    /* PTT tail-down — the JB ghost-stream guard usually beats this,
+     * but keep the wall-clock backstop in case something jams the
+     * cursor (no inbound, no PLC for some reason). */
     if (g_link_ptt_held &&
         now_ms() - g_link_last_recv_ms > g_link_tail_ms)
         link_rx_drop();
