@@ -562,7 +562,9 @@ directory = /var/lib/kerchunk/cdr  ; Output directory
 ; wyoming_host = 127.0.0.1      ; Wyoming ASR server host
 ; wyoming_port = 10200           ; Wyoming server port (same as TTS if combined)
 ; language = en                  ; Language code (or empty for auto-detect)
-; max_capture = 30               ; Max seconds to capture per transmission
+; max_capture = 30               ; Max capture per transmission (suffix
+                                  ; ok: 30 / 30s / 5m. Hard cap 5m to
+                                  ; match FCC Part 95 GMRS limit.)
 ;                                ; (bare integer — seconds, no suffix accepted)
 ; min_duration = 500ms           ; Min duration to transcribe (skip kerchunks)
 ; normalize_far_dir =            ; Path to NeMo FAR grammar files (optional).

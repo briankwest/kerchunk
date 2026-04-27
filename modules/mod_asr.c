@@ -38,7 +38,12 @@
 #include <time.h>
 
 #define LOG_MOD "asr"
-#define MAX_CAPTURE_S     60   /* hard cap: 60 seconds */
+/* Hard cap on per-transmission capture. 300s aligns with the FCC
+ * Part 95 GMRS 5-minute transmission limit; longer than that and
+ * something else is wrong (stuck PTT, runaway equipment) and the
+ * transcript would be useless anyway. Three buffers of this size
+ * (cap, stream, tx) at 48kHz × 2B = ~86MB, fine on any Pi class. */
+#define MAX_CAPTURE_S     300
 #define MAX_TRANSCRIPTS   50   /* rolling buffer of recent transcripts */
 
 static kerchunk_core_t *g_core;
@@ -571,8 +576,18 @@ static int asr_configure(const kerchunk_config_t *cfg)
     else
         g_mode = ASR_MODE_BATCH;
 
-    g_max_capture_s = kerchunk_config_get_int(cfg, "asr", "max_capture", 30);
-    if (g_max_capture_s > MAX_CAPTURE_S) g_max_capture_s = MAX_CAPTURE_S;
+    /* Accept duration suffix (5m, 30s, plain integer = seconds). The
+     * old kerchunk_config_get_int parser silently atoi'd "5m" to 5 →
+     * 5-second captures when the operator meant 5 minutes. */
+    int requested_s = kerchunk_config_get_duration_s(cfg, "asr",
+                                                     "max_capture", 30);
+    g_max_capture_s = requested_s;
+    if (g_max_capture_s > MAX_CAPTURE_S) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+            "max_capture=%ds clamped to hard cap %ds",
+            requested_s, MAX_CAPTURE_S);
+        g_max_capture_s = MAX_CAPTURE_S;
+    }
     if (g_max_capture_s < 1) g_max_capture_s = 1;
 
     g_min_duration_ms = kerchunk_config_get_duration_ms(cfg, "asr", "min_duration", 500);
