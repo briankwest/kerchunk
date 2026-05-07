@@ -8,6 +8,7 @@
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
+#include "kerchunk_queue.h"   /* kerchunk_queue_add_tone_src — source tag */
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -35,11 +36,16 @@ static int g_queue_courtesy = 0;  /* Also play after queue playback */
 static int g_caller_id = 0;
 static uint64_t g_last_courtesy_us;  /* timestamp of last courtesy queue */
 
+/* Tag the courtesy tone's queue item with source "courtesy" so other
+ * modules (notably mod_recorder) can recognise and skip it. Without
+ * this tag the recorder would catch every courtesy tone as its own
+ * spurious TX recording right after a real transmission. */
 static void queue_tone(const char *reason)
 {
     if (!g_enabled) return;
-    g_core->queue_silence(50, KERCHUNK_PRI_NORMAL);
-    g_core->queue_tone(g_default_freq, g_default_dur, g_default_amp, KERCHUNK_PRI_NORMAL);
+    kerchunk_queue_add_silence_src(50, KERCHUNK_PRI_NORMAL, "courtesy");
+    kerchunk_queue_add_tone_src(g_default_freq, g_default_dur, g_default_amp,
+                                KERCHUNK_PRI_NORMAL, "courtesy");
     g_last_courtesy_us = courtesy_now_us();
     g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD, "courtesy tone queued (%s)", reason);
 
@@ -61,6 +67,19 @@ static void on_link_rx_drop(const kerchevt_t *evt, void *ud)
      * affordance as a local unkey — confirms end-of-transmission to
      * the listener. */
     queue_tone("link_rx_drop");
+}
+
+static void on_vcor_drop(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    /* Virtual COR drop — PoC client unkey, web PTT release, phone
+     * hangup. mod_poc passes its audio with QUEUE_FLAG_NO_TAIL so
+     * the queue_complete path won't fire courtesy; we have to do
+     * it explicitly here. */
+    char reason[64];
+    snprintf(reason, sizeof(reason), "vcor_drop:%s",
+             (evt->vcor.source && evt->vcor.source[0]) ? evt->vcor.source : "?");
+    queue_tone(reason);
 }
 
 static void on_queue_complete(const kerchevt_t *evt, void *ud)
@@ -99,6 +118,7 @@ static int courtesy_load(kerchunk_core_t *core)
     g_core = core;
     core->subscribe(KERCHEVT_COR_DROP, on_cor_drop, NULL);
     core->subscribe(KERCHEVT_LINK_RX_DROP, on_link_rx_drop, NULL);
+    core->subscribe(KERCHEVT_VCOR_DROP, on_vcor_drop, NULL);
     core->subscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
     core->subscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared, NULL);
@@ -126,6 +146,7 @@ static void courtesy_unload(void)
 {
     g_core->unsubscribe(KERCHEVT_COR_DROP, on_cor_drop);
     g_core->unsubscribe(KERCHEVT_LINK_RX_DROP, on_link_rx_drop);
+    g_core->unsubscribe(KERCHEVT_VCOR_DROP, on_vcor_drop);
     g_core->unsubscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
     g_core->unsubscribe(KERCHEVT_CALLER_CLEARED, on_caller_cleared);

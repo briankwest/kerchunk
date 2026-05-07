@@ -1,9 +1,14 @@
 /*
- * mod_poc.c — PoC radio server bridge
+ * mod_poc.c — PoC server bridge
  *
- * Runs a poc_server_t inside kerchunk, allowing PoC radios (Retevis L71,
- * TYT, etc.) to connect directly. Maps kerchunk users and groups to PoC
- * protocol equivalents. Bridges audio between the PoC network and RF.
+ * Runs a poc_server_t inside kerchunk, accepting PoC clients (e.g. the
+ * iOS PT-framework app under ~/ptt-ios) and bridging audio between
+ * the PoC network and RF.
+ *
+ * Audio profile is fixed by libpoc 1.1: Opus super-wideband, 24 kHz,
+ * 480-sample frames (20 ms), 32 kbps, inband FEC. The kerchunk audio
+ * thread runs at 48 kHz, so this module resamples 48k↔24k via
+ * kerchunk_resample_into() in both directions.
  *
  * Config section [poc]:
  *   enabled           = yes
@@ -26,6 +31,7 @@
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
 #include "kerchunk_queue.h"
+#include "kerchunk_wav.h"        /* kerchunk_resample_into */
 #include <libpoc/poc.h>
 #include <libpoc/poc_server.h>
 
@@ -59,29 +65,26 @@ static int      g_poc_ptt_active;     /* a PoC client is transmitting */
 static uint32_t g_poc_ptt_speaker;    /* who holds the floor */
 static int      g_audio_frame_count;  /* frames received this PTT session */
 
-/* ── Resampling ────────────────────────────────────────────────── */
+/* ── Audio rate constants ──────────────────────────────────────────
+ *
+ * libpoc encodes Opus at 24 kHz, 480 samples per 20 ms frame. The
+ * kerchunk audio thread fires audio events at the engine rate
+ * (48 kHz, 960 samples per 20 ms tick — the typical case). */
+#define POC_RATE          24000
+#define POC_FRAME_SAMPLES 480     /* 20 ms @ 24 kHz */
+#define KERCHUNK_RATE     48000
+#define KERCHUNK_FRAME_SAMPLES 960 /* 20 ms @ 48 kHz */
 
-static void downsample_48_to_8(const int16_t *in, int in_count,
-                               int16_t *out, int out_count)
-{
-    for (int i = 0; i < out_count && i * 6 < in_count; i++)
-        out[i] = in[i * 6];
-}
+/* PoC user IDs are kerchunk user IDs + this offset, to keep them
+ * clear of the virtual_user_id (default 999) used for RF→PoC bridging.
+ * The reverse translation lives in poc_uid_to_kerchunk(); use it any
+ * time we cross the libpoc → kerchunk boundary. */
+#define POC_USER_ID_OFFSET 1000
 
-static void upsample_8_to_48(const int16_t *in, int in_count,
-                              int16_t *out, int out_count)
+static inline int poc_uid_to_kerchunk(uint32_t poc_uid)
 {
-    for (int i = 0; i < out_count; i++) {
-        int src_idx = i / 6;
-        int frac = i % 6;
-        if (src_idx + 1 < in_count) {
-            int32_t a = in[src_idx];
-            int32_t b = in[src_idx + 1];
-            out[i] = (int16_t)(a + (b - a) * frac / 6);
-        } else {
-            out[i] = in[in_count - 1];
-        }
-    }
+    return (poc_uid > POC_USER_ID_OFFSET)
+           ? (int)(poc_uid - POC_USER_ID_OFFSET) : (int)poc_uid;
 }
 
 /* ── libpoc log bridge ─────────────────────────────────────────── */
@@ -142,9 +145,17 @@ static bool poc_on_ptt_request(poc_server_t *srv, uint32_t uid,
     g_poc_ptt_speaker = uid;
     g_audio_frame_count = 0;
 
-    /* Fire virtual COR so ASR/recorder treat this like RF */
+    /* Hold kerchunk PTT for the whole PoC PTT session. Without this
+     * the queue's auto-PTT cycles per frame and chops the RF audio
+     * into 20 ms bursts when the iOS jitter is even slightly bumpy. */
+    g_core->request_ptt("poc");
+
+    /* Fire virtual COR so ASR/recorder treat this like RF.
+     * Translate to the kerchunk user_id so consumers (mod_recorder
+     * for filenames, ASR for transcript attribution, etc.) can
+     * call kerchunk_user_lookup_by_id() and find the right user. */
     kerchevt_t vc = { .type = KERCHEVT_VCOR_ASSERT,
-        .vcor = { .source = "poc", .user_id = (int)uid } };
+        .vcor = { .source = "poc", .user_id = poc_uid_to_kerchunk(uid) } };
     kerchevt_fire(&vc);
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
@@ -162,8 +173,11 @@ static void poc_on_ptt_end(poc_server_t *srv, uint32_t uid,
         g_poc_ptt_active = 0;
         g_poc_ptt_speaker = 0;
 
+        /* Symmetric with request_ptt() in poc_on_ptt_request. */
+        g_core->release_ptt("poc");
+
         kerchevt_t vc = { .type = KERCHEVT_VCOR_DROP,
-            .vcor = { .source = "poc", .user_id = (int)uid } };
+            .vcor = { .source = "poc", .user_id = poc_uid_to_kerchunk(uid) } };
         kerchevt_fire(&vc);
     }
 }
@@ -189,11 +203,13 @@ static void poc_on_audio(poc_server_t *srv, uint32_t speaker_id,
         return;
     }
 
-    /* Upsample 8kHz → 48kHz */
-    int16_t upsampled[960];
-    upsample_8_to_48(pcm, n_samples, upsampled, 960);
+    /* Resample 24 kHz → 48 kHz (Opus decoded → kerchunk audio rate). */
+    int16_t upsampled[KERCHUNK_FRAME_SAMPLES];
+    size_t up_n = kerchunk_resample_into(upsampled, KERCHUNK_FRAME_SAMPLES,
+                                         pcm, (size_t)n_samples,
+                                         POC_RATE, KERCHUNK_RATE);
 
-    kerchunk_queue_add_buffer_src(upsampled, 960, g_priority,
+    kerchunk_queue_add_buffer_src(upsampled, (int)up_n, g_priority,
                                   QUEUE_FLAG_NO_TAIL, "poc");
 }
 
@@ -269,16 +285,16 @@ static void on_audio_frame(const kerchevt_t *evt, void *ud)
         return;
 
     const int16_t *samples = evt->audio.samples;
-    int count = (int)evt->audio.n;
+    size_t count = evt->audio.n;
 
-    /* Downsample 48kHz → 8kHz */
-    int16_t pcm8k[160];
-    int out_count = count / 6;
-    if (out_count > 160) out_count = 160;
-    downsample_48_to_8(samples, count, pcm8k, out_count);
+    /* Resample 48 kHz → 24 kHz (kerchunk audio → Opus encoder rate). */
+    int16_t pcm24k[POC_FRAME_SAMPLES];
+    size_t out_n = kerchunk_resample_into(pcm24k, POC_FRAME_SAMPLES,
+                                          samples, count,
+                                          KERCHUNK_RATE, POC_RATE);
 
     poc_server_inject_audio(g_srv, g_rf_bridge_group,
-                            g_virtual_user_id, pcm8k, out_count);
+                            g_virtual_user_id, pcm24k, (int)out_n);
 }
 
 static void on_shutdown(const kerchevt_t *evt, void *ud)
@@ -336,13 +352,14 @@ static void sync_users(void)
             .account  = username,
             .name     = fullname ? fullname : username,
             .password = poc_pw,
-            .user_id  = (uint32_t)(user_id + 1000),
+            .user_id  = (uint32_t)(user_id + POC_USER_ID_OFFSET),
         });
         added++;
 
         g_core->log(KERCHUNK_LOG_DEBUG, LOG_MOD,
                     "added PoC user: %s '%s' (id %d)", username,
-                    fullname ? fullname : username, user_id + 1000);
+                    fullname ? fullname : username,
+                    user_id + POC_USER_ID_OFFSET);
     }
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "%d PoC users configured", added);
 }

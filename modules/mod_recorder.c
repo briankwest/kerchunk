@@ -13,6 +13,7 @@
 #include "kerchunk.h"
 #include "kerchunk_module.h"
 #include "kerchunk_log.h"
+#include "kerchunk_queue.h"   /* kerchunk_queue_drain_source — skip courtesy */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,23 @@ static int16_t *g_tx_buf;
 static size_t   g_tx_len;
 static size_t   g_tx_cap;
 static char     g_tx_start_time[32];
+/* Latest VCOR speaker — set on KERCHEVT_VCOR_ASSERT (PoC PTT, web PTT,
+ * phone). Used to label TX recordings with the actual user instead
+ * of the generic "transmit" placeholder. Cleared after the recording
+ * is saved in tx_stop().
+ *
+ * g_tx_vcor_active is held high between VCOR_ASSERT and VCOR_DROP. While
+ * it's high, mod_recorder ignores QUEUE_COMPLETE — the recording spans
+ * the whole virtual-COR session, even if the audio queue briefly empties
+ * between bursts (which it does when iOS's send cadence is bumpy).
+ *
+ * g_tx_drain_to_complete is set in on_vcor_drop to mark "stop on the
+ * next QUEUE_COMPLETE", letting trailing buffered audio finish playing
+ * before we save. */
+static int      g_tx_vcor_user_id;
+static char     g_tx_vcor_source[16];
+static int      g_tx_vcor_active;
+static int      g_tx_drain_to_complete;
 
 /* ---- helpers ---- */
 
@@ -312,11 +330,34 @@ static void tx_stop(void)
     g_tx_active = 0;
     g_core->playback_tap_unregister(tx_playback_tap);
 
-    save_recording("TX", g_tx_start_time, "transmit", g_tx_buf, g_tx_len);
+    /* If a virtual COR was active during this TX (PoC client, web PTT,
+     * phone bridge), use the speaker's username — otherwise fall back
+     * to the source tag, or to the generic "transmit" placeholder. */
+    const char *who = "transmit";
+    char fallback[32];
+    if (g_tx_vcor_user_id > 0) {
+        const kerchunk_user_t *u = g_core->user_lookup_by_id(g_tx_vcor_user_id);
+        if (u && u->username[0]) {
+            who = u->username;
+        } else if (g_tx_vcor_source[0]) {
+            snprintf(fallback, sizeof(fallback), "%s_%d",
+                     g_tx_vcor_source, g_tx_vcor_user_id);
+            who = fallback;
+        }
+    } else if (g_tx_vcor_source[0]) {
+        who = g_tx_vcor_source;
+    }
+
+    save_recording("TX", g_tx_start_time, who, g_tx_buf, g_tx_len);
     free(g_tx_buf);
     g_tx_buf = NULL;
     g_tx_len = 0;
     g_tx_cap = 0;
+    /* Reset VCOR attribution so the next TX (which may be a local PTT
+     * with no virtual COR) gets the "transmit" fallback instead of
+     * inheriting the previous speaker. */
+    g_tx_vcor_user_id = 0;
+    g_tx_vcor_source[0] = '\0';
     publish_recorder_snapshot();
 }
 
@@ -342,10 +383,38 @@ static void on_caller_identified(const kerchevt_t *evt, void *ud)
     g_rx_caller_id = evt->caller.user_id;
 }
 
+static void on_vcor_assert(const kerchevt_t *evt, void *ud)
+{
+    (void)ud;
+    g_tx_vcor_user_id = evt->vcor.user_id;
+    if (evt->vcor.source)
+        snprintf(g_tx_vcor_source, sizeof(g_tx_vcor_source), "%s",
+                 evt->vcor.source);
+    else
+        g_tx_vcor_source[0] = '\0';
+    g_tx_vcor_active = 1;
+    g_tx_drain_to_complete = 0;
+}
+
+static void on_vcor_drop(const kerchevt_t *evt, void *ud)
+{
+    (void)evt; (void)ud;
+    /* Mark "stop on next queue_complete" so any frames buffered in
+     * the queue at drop time still get captured into the recording. */
+    g_tx_vcor_active = 0;
+    g_tx_drain_to_complete = 1;
+}
+
 static void on_queue_drain(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
     if (!g_enabled) return;
+
+    /* Skip courtesy tones — they fire right after a real TX ends and
+     * would otherwise create a tiny spurious recording. */
+    const char *src = kerchunk_queue_drain_source();
+    if (src && strcmp(src, "courtesy") == 0)
+        return;
 
     /* Start TX recording when queue actually starts draining audio.
      * This avoids empty recordings from manual PTT with no audio. */
@@ -357,7 +426,15 @@ static void on_queue_complete(const kerchevt_t *evt, void *ud)
 {
     (void)evt; (void)ud;
     if (!g_enabled) return;
+
+    /* While VCOR is asserted (PoC/web/phone), the audio queue may
+     * empty briefly between speaker bursts; we keep the recording
+     * open so the entire transmission lands in one file. */
+    if (g_tx_vcor_active)
+        return;
+
     tx_stop();
+    g_tx_drain_to_complete = 0;
 }
 
 /* ---- module lifecycle ---- */
@@ -368,6 +445,8 @@ static int recorder_load(kerchunk_core_t *core)
     core->subscribe(KERCHEVT_COR_ASSERT, on_cor_assert, NULL);
     core->subscribe(KERCHEVT_COR_DROP,   on_cor_drop, NULL);
     core->subscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified, NULL);
+    core->subscribe(KERCHEVT_VCOR_ASSERT,    on_vcor_assert, NULL);
+    core->subscribe(KERCHEVT_VCOR_DROP,      on_vcor_drop, NULL);
     core->subscribe(KERCHEVT_QUEUE_DRAIN,    on_queue_drain, NULL);
     core->subscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete, NULL);
     return 0;
@@ -408,6 +487,8 @@ static void recorder_unload(void)
     g_core->unsubscribe(KERCHEVT_COR_ASSERT, on_cor_assert);
     g_core->unsubscribe(KERCHEVT_COR_DROP,   on_cor_drop);
     g_core->unsubscribe(KERCHEVT_CALLER_IDENTIFIED, on_caller_identified);
+    g_core->unsubscribe(KERCHEVT_VCOR_ASSERT,    on_vcor_assert);
+    g_core->unsubscribe(KERCHEVT_VCOR_DROP,      on_vcor_drop);
     g_core->unsubscribe(KERCHEVT_QUEUE_DRAIN,    on_queue_drain);
     g_core->unsubscribe(KERCHEVT_QUEUE_COMPLETE, on_queue_complete);
 }
