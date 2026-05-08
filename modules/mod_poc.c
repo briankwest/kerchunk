@@ -32,18 +32,34 @@
 #include "kerchunk_log.h"
 #include "kerchunk_queue.h"
 #include "kerchunk_wav.h"        /* kerchunk_resample_into */
+#include "mod_poc_apns.h"
 #include <libpoc/poc.h>
 #include <libpoc/poc_server.h>
 
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
 #define LOG_MOD "poc"
 
-static kerchunk_core_t *g_core;
+/* Logging trampoline used by mod_poc_apns.c. */
+void poc_apns_log(int level, const char *fmt, ...)
+{
+    extern kerchunk_core_t *g_core;
+    if (!g_core) return;
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    g_core->log(level, "poc_apns", "%s", buf);
+}
+
+kerchunk_core_t        *g_core;     /* extern'd by poc_apns_log */
 static poc_server_t    *g_srv;
 static int              g_poll_timer = -1;
+static apns_ctx_t      *g_apns;
 
 /* ── Config ────────────────────────────────────────────────────── */
 
@@ -139,6 +155,13 @@ static bool poc_on_ptt_request(poc_server_t *srv, uint32_t uid,
         g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                     "PTT denied for user %u — RF channel busy", uid);
         return false;
+    }
+
+    /* Wake any iOS PT clients in the group (excluding the speaker). */
+    if (g_apns) {
+        char talker[64];
+        snprintf(talker, sizeof(talker), "User %u", uid);
+        apns_push_all(g_apns, talker, gid, uid);
     }
 
     g_poc_ptt_active = 1;
@@ -246,6 +269,20 @@ static void poc_on_group_enter(poc_server_t *srv, uint32_t uid,
                 "user %u joined group %u", uid, gid);
 }
 
+static void poc_on_push_token(poc_server_t *srv, uint32_t uid,
+                              const uint8_t *token, int token_len,
+                              const char *bundle_id, void *ud)
+{
+    (void)srv; (void)ud;
+    if (g_apns)
+        apns_register_token(g_apns, uid, token, token_len, bundle_id);
+    else
+        g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                    "user %u registered push token but APNs is disabled "
+                    "(%d B, bundle=%s)",
+                    uid, token_len, bundle_id ? bundle_id : "?");
+}
+
 static void poc_on_group_leave(poc_server_t *srv, uint32_t uid,
                                uint32_t gid, void *ud)
 {
@@ -265,6 +302,11 @@ static void on_cor_assert(const kerchevt_t *evt, void *ud)
     g_rf_rx_active = 1;
     poc_server_start_ptt_for(g_srv, g_rf_bridge_group,
                              g_virtual_user_id, "Repeater");
+
+    /* Wake any iOS PT clients so their audio session activates before
+     * the first Opus frame arrives. */
+    if (g_apns)
+        apns_push_all(g_apns, "Repeater", g_rf_bridge_group, 0);
 }
 
 static void on_cor_drop(const kerchevt_t *evt, void *ud)
@@ -489,7 +531,24 @@ static int cli_poc(int argc, const char **argv, kerchunk_resp_t *resp)
         return rc;
     }
 
-    resp_text_raw(resp, "Usage: poc [status|clients|kick|broadcast|msg]");
+    if (strcmp(argv[1], "apns") == 0) {
+        resp_bool(resp, "enabled", g_apns != NULL);
+        resp_int(resp, "tokens", apns_token_count(g_apns));
+        resp_int(resp, "sent", apns_pushes_sent(g_apns));
+        resp_int(resp, "failed", apns_pushes_failed(g_apns));
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "APNs: %s, %d token(s) cached, sent=%d failed=%d",
+                 g_apns ? "enabled" : "disabled",
+                 apns_token_count(g_apns),
+                 apns_pushes_sent(g_apns),
+                 apns_pushes_failed(g_apns));
+        resp_text_raw(resp, buf);
+        resp_finish(resp);
+        return 0;
+    }
+
+    resp_text_raw(resp, "Usage: poc [status|clients|kick|broadcast|msg|apns]");
     resp_finish(resp);
     return -1;
 }
@@ -508,11 +567,11 @@ static const kerchunk_ui_field_t bcast_fields[] = {
 };
 
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "poc", "poc [status|clients|kick|broadcast|msg]",
+    { "poc", "poc [status|clients|kick|broadcast|msg|apns]",
       "PoC server management", cli_poc,
       .category = "PoC", .ui_label = "Status",
       .ui_type = CLI_UI_BUTTON, .ui_command = "poc status",
-      .subcommands = "status,clients,kick,broadcast,msg" },
+      .subcommands = "status,clients,kick,broadcast,msg,apns" },
     { "poc clients", "poc clients",
       "List connected PoC clients", cli_poc,
       .category = "PoC", .ui_label = "Clients",
@@ -532,6 +591,10 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
       .category = "PoC", .ui_label = "Message",
       .ui_type = CLI_UI_FORM, .ui_command = "poc msg",
       .ui_fields = msg_fields, .num_ui_fields = 2 },
+    { "poc apns", "poc apns",
+      "APNs push status (iOS PT wake-up)", cli_poc,
+      .category = "PoC", .ui_label = "APNs",
+      .ui_type = CLI_UI_BUTTON, .ui_command = "poc apns" },
 };
 
 /* ── Module lifecycle ──────────────────────────────────────────── */
@@ -585,6 +648,32 @@ static int mod_configure(const kerchunk_config_t *cfg)
     if (key) snprintf(g_tls_key, sizeof(g_tls_key), "%s", key);
     else g_tls_key[0] = '\0';
 
+    /* APNs (iOS PT wake-up) — destroy any previous instance, then
+     * recreate if enabled. */
+    if (g_apns) {
+        apns_destroy(g_apns);
+        g_apns = NULL;
+    }
+    if (g_core->config_get_int("poc", "apns_enabled", 0)) {
+        apns_config_t acfg = { .enabled = 1 };
+        const char *env  = g_core->config_get("poc", "apns_env");
+        const char *kp   = g_core->config_get("poc", "apns_key_path");
+        const char *kid  = g_core->config_get("poc", "apns_key_id");
+        const char *team = g_core->config_get("poc", "apns_team_id");
+        const char *topic = g_core->config_get("poc", "apns_topic");
+        snprintf(acfg.env,      sizeof(acfg.env),      "%s", env ? env : "sandbox");
+        snprintf(acfg.key_path, sizeof(acfg.key_path), "%s", kp  ? kp  : "");
+        snprintf(acfg.key_id,   sizeof(acfg.key_id),   "%s", kid ? kid : "");
+        snprintf(acfg.team_id,  sizeof(acfg.team_id),  "%s", team ? team : "");
+        snprintf(acfg.topic,    sizeof(acfg.topic),    "%s", topic ? topic : "");
+        acfg.jwt_lifetime_s = g_core->config_get_int("poc", "apns_jwt_lifetime_s", 3000);
+        acfg.timeout_ms     = g_core->config_get_int("poc", "apns_timeout_ms", 5000);
+        g_apns = apns_create(&acfg);
+        if (!g_apns)
+            g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                        "APNs disabled — apns_create failed");
+    }
+
     /* Tear down existing server on reconfigure (e.g. SIGHUP reload) */
     if (g_poll_timer >= 0) {
         g_core->timer_cancel(g_poll_timer);
@@ -620,6 +709,7 @@ static int mod_configure(const kerchunk_config_t *cfg)
         .on_sos               = poc_on_sos,
         .on_group_enter       = poc_on_group_enter,
         .on_group_leave       = poc_on_group_leave,
+        .on_push_token        = poc_on_push_token,
     };
 
     g_srv = poc_server_create(&scfg, &cb);
@@ -663,6 +753,11 @@ static void mod_unload(void)
     if (g_srv) {
         poc_server_destroy(g_srv);
         g_srv = NULL;
+    }
+
+    if (g_apns) {
+        apns_destroy(g_apns);
+        g_apns = NULL;
     }
 
     g_core->unsubscribe(KERCHEVT_COR_ASSERT,    on_cor_assert);

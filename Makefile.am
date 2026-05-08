@@ -336,10 +336,13 @@ endif
 
 if HAVE_LIBPOC
 kerchunkmod_LTLIBRARIES += modules/mod_poc.la
-modules_mod_poc_la_SOURCES       = modules/mod_poc.c
-modules_mod_poc_la_CFLAGS        = $(MOD_CFLAGS) $(LIBPOC_CFLAGS)
+modules_mod_poc_la_SOURCES       = modules/mod_poc.c \
+                                   modules/mod_poc_apns.c \
+                                   modules/mod_poc_apns.h
+modules_mod_poc_la_CFLAGS        = $(MOD_CFLAGS) $(LIBPOC_CFLAGS) \
+                                   $(CURL_CFLAGS) $(OPENSSL_CFLAGS)
 modules_mod_poc_la_LDFLAGS       = $(MOD_LDFLAGS)
-modules_mod_poc_la_LIBADD        = $(LIBPOC_LIBS)
+modules_mod_poc_la_LIBADD        = $(LIBPOC_LIBS) $(CURL_LIBS) $(OPENSSL_LIBS)
 endif
 
 # --- AI module (conditional on libcjson) ---
