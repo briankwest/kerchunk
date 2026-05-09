@@ -140,6 +140,11 @@ static void poc_on_disconnect(poc_server_t *srv, uint32_t uid,
         g_poc_ptt_active = 0;
         g_poc_ptt_speaker = 0;
     }
+
+    /* TCP gone but the APNs cache outlives the connection — mark
+     * the entry dormant so it still gets pushes (the wake path)
+     * on the next PTT. Reconnect re-binds via apns_register_token. */
+    if (g_apns) apns_mark_dormant(g_apns, uid);
 }
 
 static bool poc_on_ptt_request(poc_server_t *srv, uint32_t uid,
@@ -532,15 +537,20 @@ static int cli_poc(int argc, const char **argv, kerchunk_resp_t *resp)
     }
 
     if (strcmp(argv[1], "apns") == 0) {
+        int total   = apns_token_count(g_apns);
+        int active  = apns_active_token_count(g_apns);
+        int dormant = apns_dormant_token_count(g_apns);
         resp_bool(resp, "enabled", g_apns != NULL);
-        resp_int(resp, "tokens", apns_token_count(g_apns));
+        resp_int(resp, "tokens", total);
+        resp_int(resp, "active", active);
+        resp_int(resp, "dormant", dormant);
         resp_int(resp, "sent", apns_pushes_sent(g_apns));
         resp_int(resp, "failed", apns_pushes_failed(g_apns));
-        char buf[160];
+        char buf[200];
         snprintf(buf, sizeof(buf),
-                 "APNs: %s, %d token(s) cached, sent=%d failed=%d",
+                 "APNs: %s, %d token(s) (%d active, %d dormant), sent=%d failed=%d",
                  g_apns ? "enabled" : "disabled",
-                 apns_token_count(g_apns),
+                 total, active, dormant,
                  apns_pushes_sent(g_apns),
                  apns_pushes_failed(g_apns));
         resp_text_raw(resp, buf);

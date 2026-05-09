@@ -41,6 +41,8 @@ typedef struct {
     int      token_len;
     char     bundle_id[128];
     int64_t  registered_ms;
+    int64_t  last_seen_ms;       /* updated on register/disconnect/push */
+    int      connected;          /* 1 = TCP up, 0 = dormant (APNs-only) */
 } token_entry_t;
 
 typedef struct {
@@ -246,17 +248,23 @@ void apns_register_token(apns_ctx_t *ctx, uint32_t user_id,
 {
     if (!ctx || !token || token_len <= 0 || token_len > 64) return;
 
+    int64_t now = mono_ms();
     pthread_mutex_lock(&ctx->tokens_mu);
     for (int i = 0; i < ctx->token_count; i++) {
         if (ctx->tokens[i].uid == user_id) {
+            int was_dormant = !ctx->tokens[i].connected;
             memcpy(ctx->tokens[i].token, token, (size_t)token_len);
             ctx->tokens[i].token_len = token_len;
             snprintf(ctx->tokens[i].bundle_id, sizeof(ctx->tokens[i].bundle_id),
                      "%s", bundle_id ? bundle_id : "");
-            ctx->tokens[i].registered_ms = mono_ms();
+            ctx->tokens[i].registered_ms = now;
+            ctx->tokens[i].last_seen_ms  = now;
+            ctx->tokens[i].connected     = 1;
             pthread_mutex_unlock(&ctx->tokens_mu);
             poc_apns_log(KERCHUNK_LOG_INFO,
-                         "token refreshed for user %u (bundle=%s, %d B)",
+                         was_dormant
+                         ? "uid %u rebound from dormant — token refreshed (bundle=%s, %d B)"
+                         : "uid %u token refreshed (bundle=%s, %d B)",
                          user_id, bundle_id ? bundle_id : "?", token_len);
             return;
         }
@@ -273,11 +281,36 @@ void apns_register_token(apns_ctx_t *ctx, uint32_t user_id,
     e->token_len = token_len;
     snprintf(e->bundle_id, sizeof(e->bundle_id), "%s",
              bundle_id ? bundle_id : "");
-    e->registered_ms = mono_ms();
+    e->registered_ms = now;
+    e->last_seen_ms  = now;
+    e->connected     = 1;
     pthread_mutex_unlock(&ctx->tokens_mu);
     poc_apns_log(KERCHUNK_LOG_INFO,
-                 "token registered for user %u (bundle=%s, %d B)",
+                 "uid %u token registered (bundle=%s, %d B)",
                  user_id, bundle_id ? bundle_id : "?", token_len);
+}
+
+void apns_mark_dormant(apns_ctx_t *ctx, uint32_t user_id)
+{
+    if (!ctx) return;
+    pthread_mutex_lock(&ctx->tokens_mu);
+    for (int i = 0; i < ctx->token_count; i++) {
+        if (ctx->tokens[i].uid != user_id) continue;
+        if (!ctx->tokens[i].connected) {
+            pthread_mutex_unlock(&ctx->tokens_mu);
+            return;  /* already dormant */
+        }
+        ctx->tokens[i].connected    = 0;
+        ctx->tokens[i].last_seen_ms = mono_ms();
+        pthread_mutex_unlock(&ctx->tokens_mu);
+        poc_apns_log(KERCHUNK_LOG_INFO,
+                     "uid %u TCP gone, marking dormant "
+                     "(push token retained for APNs wake)",
+                     user_id);
+        return;
+    }
+    pthread_mutex_unlock(&ctx->tokens_mu);
+    /* No entry — client never registered a token; nothing to do. */
 }
 
 /* Drop the cached token for `uid` if its hex form matches `tok_hex`.
@@ -606,6 +639,28 @@ int apns_token_count(apns_ctx_t *ctx)
     if (!ctx) return 0;
     pthread_mutex_lock(&ctx->tokens_mu);
     int n = ctx->token_count;
+    pthread_mutex_unlock(&ctx->tokens_mu);
+    return n;
+}
+
+int apns_active_token_count(apns_ctx_t *ctx)
+{
+    if (!ctx) return 0;
+    int n = 0;
+    pthread_mutex_lock(&ctx->tokens_mu);
+    for (int i = 0; i < ctx->token_count; i++)
+        if (ctx->tokens[i].connected) n++;
+    pthread_mutex_unlock(&ctx->tokens_mu);
+    return n;
+}
+
+int apns_dormant_token_count(apns_ctx_t *ctx)
+{
+    if (!ctx) return 0;
+    int n = 0;
+    pthread_mutex_lock(&ctx->tokens_mu);
+    for (int i = 0; i < ctx->token_count; i++)
+        if (!ctx->tokens[i].connected) n++;
     pthread_mutex_unlock(&ctx->tokens_mu);
     return n;
 }
