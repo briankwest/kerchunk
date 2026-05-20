@@ -63,7 +63,7 @@ module_path = /usr/lib/kerchunk   ; Directory containing .so module files
 ; mod_ai must load AFTER mod_asr and mod_tts so its configure() can
 ; resolve those hooks. mod_freeswitch has no dependency order
 ; constraint — add it anywhere after mod_repeater.
-load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_asr,mod_nws,mod_stats,mod_sysstats,mod_webhook,mod_scrambler,mod_sdr,mod_web,mod_pocsag,mod_flex,mod_aprs,mod_poc
+load = mod_repeater,mod_cwid,mod_courtesy,mod_caller,mod_dtmfcmd,mod_otp,mod_voicemail,mod_gpio,mod_logger,mod_weather,mod_time,mod_recorder,mod_tones,mod_emergency,mod_parrot,mod_cdr,mod_tts,mod_asr,mod_nws,mod_stats,mod_sysstats,mod_webhook,mod_scrambler,mod_sdr,mod_web,mod_pocsag,mod_flex,mod_aprs,mod_poc,mod_zello
 ;
 ; Ham / AI variant — add to the line above if you want them:
 ;   ,mod_freeswitch,mod_ai
@@ -812,6 +812,43 @@ group = 2
 ; poc_to_rf = on                 ; Forward PoC client audio to RF TX
 ; priority = 3                   ; TX queue priority for PoC→RF audio
 ; virtual_user_id = 999          ; Sender ID for RF audio in PoC network
+
+; ----------------------------------------------------------------------------
+; Zello channel bridge (mod_zello) — connects to a Zello channel and
+; bridges audio in/out of the repeater. Built against the libzello
+; client (https://github.com/briankwest/libzello). RF→Zello and
+; Zello→RF directions can be enabled independently.
+;
+; Friends & Family (zello.io) requires a developer JWT — generate one
+; at developers.zello.com under your app's keys. Tokens are ~500 bytes
+; so a file path is usually more practical than inline. Zello Work
+; (zellowork.io/ws/<network>) does not need a JWT.
+;
+; libzello also requires the platform_type/version fields to be sent
+; on logon — these are baked in. listen_only mode skips most of that
+; and works with the JWT alone.
+;
+; Audio profile: Opus 16 kHz mono, 60 ms frames. Resampled 48k↔16k
+; against the kerchunk audio thread automatically.
+;
+; CLI: zello status, zello connect, zello disconnect, zello say <text>
+; ----------------------------------------------------------------------------
+[zello]
+; enabled = off                          ; on | off
+; server_url = wss://zello.io/ws         ; F&F default; for Work use
+;                                        ; wss://zellowork.io/ws/<network>
+; username = kerchunkd                   ; Consumer Zello account name
+; password =                             ; Consumer Zello account password
+; channel = mychannel                    ; Channel to join on logon
+; auth_token =                           ; F&F: JWT inline (large)
+; auth_token_file = /etc/kerchunk/zello.jwt  ; F&F: JWT from a file (preferred)
+; listen_only = off                      ; RX only (no start_stream)
+; rf_to_zello = on                       ; Forward RF RX audio to Zello
+; zello_to_rf = on                       ; Forward Zello audio to RF TX
+; priority = 3                           ; TX queue priority for Zello→RF audio
+; virtual_user_id = 998                  ; user_id stamped on VCOR events
+;                                        ; for inbound Zello audio (mod_poc uses
+;                                        ; 999 — keep these distinct)
 
 ; ----------------------------------------------------------------------------
 ; AI voice assistant (mod_ai) — LLM-driven on-air assistant

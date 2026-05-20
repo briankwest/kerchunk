@@ -71,7 +71,7 @@ typedef const kerchunk_module_def_t *(*kerchunk_module_init_fn)(void);
     extern const kerchunk_module_def_t *kerchunk_module_init(void)
 
 /* Maximum loadable modules */
-#define KERCHUNK_MAX_MODULES 32
+#define KERCHUNK_MAX_MODULES 64
 
 /* Module loader API */
 int  kerchunk_modules_init(const char *module_path);

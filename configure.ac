@@ -97,6 +97,13 @@ if test "x$have_libpoc" = "xyes"; then
   AC_DEFINE([HAVE_LIBPOC], [1], [Have libpoc])
 fi
 
+# Optional: libzello (Zello Channel API client for mod_zello)
+PKG_CHECK_MODULES([LIBZELLO], [libzello], [have_libzello=yes], [have_libzello=no])
+AM_CONDITIONAL([HAVE_LIBZELLO], [test "x$have_libzello" = "xyes"])
+if test "x$have_libzello" = "xyes"; then
+  AC_DEFINE([HAVE_LIBZELLO], [1], [Have libzello])
+fi
+
 # Optional: libwyoming (Wyoming protocol for Piper TTS)
 PKG_CHECK_MODULES([LIBWYOMING], [libwyoming], [have_libwyoming=yes], [have_libwyoming=no])
 if test "x$have_libwyoming" = "xyes"; then
@@ -130,6 +137,7 @@ AC_MSG_NOTICE([kerchunk $PACKAGE_VERSION configuration:])
 AC_MSG_NOTICE([  librtlsdr:        $have_rtlsdr])
 AC_MSG_NOTICE([  libaprs:          $have_libaprs])
 AC_MSG_NOTICE([  libpoc:           $have_libpoc])
+AC_MSG_NOTICE([  libzello:         $have_libzello])
 AC_MSG_NOTICE([  libpocsag:        $have_libpocsag])
 AC_MSG_NOTICE([  libflex:          $have_libflex])
 AC_MSG_NOTICE([  libwyoming:       $have_libwyoming])

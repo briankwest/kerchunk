@@ -345,6 +345,14 @@ modules_mod_poc_la_LDFLAGS       = $(MOD_LDFLAGS)
 modules_mod_poc_la_LIBADD        = $(LIBPOC_LIBS) $(CURL_LIBS) $(OPENSSL_LIBS)
 endif
 
+if HAVE_LIBZELLO
+kerchunkmod_LTLIBRARIES += modules/mod_zello.la
+modules_mod_zello_la_SOURCES     = modules/mod_zello.c
+modules_mod_zello_la_CFLAGS      = $(MOD_CFLAGS) $(LIBZELLO_CFLAGS)
+modules_mod_zello_la_LDFLAGS     = $(MOD_LDFLAGS)
+modules_mod_zello_la_LIBADD      = $(LIBZELLO_LIBS)
+endif
+
 # --- AI module (conditional on libcjson) ---
 
 if HAVE_CJSON
