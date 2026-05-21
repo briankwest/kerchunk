@@ -78,7 +78,15 @@ typedef struct {
         struct { uint16_t code; int normal; int active; }  dcs;
         struct { char digit; int duration_ms; }            dtmf;
         struct { int active; }                             cor;
-        struct { const char *source; int user_id; }       vcor;
+        /* source : bridge tag ("poc", "zello", "web", "freeswitch", ...)
+         * user_id: kerchunk user DB id when the speaker maps to a local
+         *          user, otherwise the bridge's virtual_user_id.
+         * username: optional remote-side identifier (e.g. Zello account
+         *          "briankwest77") for sources whose speakers aren't
+         *          kerchunk users. Consumers prefer this over the
+         *          virtual_user_id when present. May be NULL. */
+        struct { const char *source; int user_id;
+                 const char *username; }                   vcor;
         struct { int old_state; int new_state; }           state;
         struct { int user_id; int method; }                caller;
         struct { int item_id; uint32_t duration_ms; }        queue;

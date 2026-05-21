@@ -61,6 +61,7 @@ static char     g_tx_start_time[32];
  * before we save. */
 static int      g_tx_vcor_user_id;
 static char     g_tx_vcor_source[16];
+static char     g_tx_vcor_username[64]; /* remote-side name from bridge */
 static int      g_tx_vcor_active;
 static int      g_tx_drain_to_complete;
 
@@ -331,11 +332,21 @@ static void tx_stop(void)
     g_core->playback_tap_unregister(tx_playback_tap);
 
     /* If a virtual COR was active during this TX (PoC client, web PTT,
-     * phone bridge), use the speaker's username — otherwise fall back
-     * to the source tag, or to the generic "transmit" placeholder. */
+     * phone bridge, Zello bridge), pick the most specific attribution
+     * available: first the bridge-supplied username (Zello speaker name,
+     * etc.), then a kerchunk user record looked up by user_id, then
+     * "<source>_<user_id>", and finally the bare source tag. */
     const char *who = "transmit";
-    char fallback[32];
-    if (g_tx_vcor_user_id > 0) {
+    char fallback[80];
+    if (g_tx_vcor_username[0]) {
+        if (g_tx_vcor_source[0]) {
+            snprintf(fallback, sizeof(fallback), "%s_%s",
+                     g_tx_vcor_source, g_tx_vcor_username);
+            who = fallback;
+        } else {
+            who = g_tx_vcor_username;
+        }
+    } else if (g_tx_vcor_user_id > 0) {
         const kerchunk_user_t *u = g_core->user_lookup_by_id(g_tx_vcor_user_id);
         if (u && u->username[0]) {
             who = u->username;
@@ -358,6 +369,7 @@ static void tx_stop(void)
      * inheriting the previous speaker. */
     g_tx_vcor_user_id = 0;
     g_tx_vcor_source[0] = '\0';
+    g_tx_vcor_username[0] = '\0';
     publish_recorder_snapshot();
 }
 
@@ -392,6 +404,11 @@ static void on_vcor_assert(const kerchevt_t *evt, void *ud)
                  evt->vcor.source);
     else
         g_tx_vcor_source[0] = '\0';
+    if (evt->vcor.username)
+        snprintf(g_tx_vcor_username, sizeof(g_tx_vcor_username), "%s",
+                 evt->vcor.username);
+    else
+        g_tx_vcor_username[0] = '\0';
     g_tx_vcor_active = 1;
     g_tx_drain_to_complete = 0;
 }

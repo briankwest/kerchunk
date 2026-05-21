@@ -34,16 +34,34 @@
 #include <libzello/zello_client.h>
 #include <libzello/zello.h>
 
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define LOG_MOD "zello"
 
 static kerchunk_core_t *g_core;
 static zello_client_t  *g_cli;
-static int              g_poll_timer = -1;
+
+/* libzello service thread.
+ *
+ * Earlier revisions polled libzello from a 10 ms timer on the kerchunk
+ * main thread. That starved the main loop: zello_client_poll() blocks
+ * inside poll() for up to the requested timeout, and the main thread
+ * also drives HID/COR reads at a 20 ms tick. The result was missed COR
+ * transitions and audio-queue under-runs on long Zello transmissions.
+ *
+ * Now the service runs on its own thread so it can sit in poll() as
+ * long as it wants without touching the host's tick budget. The audio
+ * thread's send_pcm() goes through libzello's lock-free SPSC ring, so
+ * it never blocks waiting for this thread; control callbacks fire
+ * here, on the service thread. */
+static pthread_t        g_zello_thread;
+static volatile int     g_zello_thread_running;
+static int              g_zello_thread_started;
 
 /* ── Config ────────────────────────────────────────────────────── */
 
@@ -61,8 +79,9 @@ static int   g_virtual_user_id;
 
 /* ── State ─────────────────────────────────────────────────────── */
 
-static int g_rf_rx_active;          /* RF COR is asserted; we're TX'ing to Zello */
-static int g_zello_rx_active;       /* a remote Zello user is talking */
+static int  g_rf_rx_active;          /* RF COR is asserted; we're TX'ing to Zello */
+static int  g_zello_rx_active;       /* a remote Zello user is talking */
+static char g_zello_rx_username[64]; /* current remote speaker (from libzello on_stream_start) */
 
 /* ── Audio rates ───────────────────────────────────────────────── */
 
@@ -109,8 +128,10 @@ static void on_zello_disconnected(zello_client_t *c, int code,
         g_zello_rx_active = 0;
         g_core->release_ptt("zello");
         kerchevt_t vc = { .type = KERCHEVT_VCOR_DROP,
-            .vcor = { .source = "zello", .user_id = g_virtual_user_id } };
+            .vcor = { .source = "zello", .user_id = g_virtual_user_id,
+                      .username = g_zello_rx_username[0] ? g_zello_rx_username : NULL } };
         kerchevt_fire(&vc);
+        g_zello_rx_username[0] = '\0';
     }
 }
 
@@ -140,11 +161,22 @@ static void on_zello_stream_start(zello_client_t *c, uint32_t sid,
     g_zello_rx_active = 1;
     g_core->request_ptt("zello");
 
+    /* Stash the speaker's Zello username so mod_recorder etc. can
+     * attribute the recording to the actual remote operator instead of
+     * the bridge's virtual_user_id. Lives until the matching
+     * VCOR_DROP fires (or the WS drops mid-stream). */
+    if (from && *from)
+        snprintf(g_zello_rx_username, sizeof(g_zello_rx_username), "%s", from);
+    else
+        g_zello_rx_username[0] = '\0';
+
     /* Virtual COR — feeds mod_recorder / mod_courtesy / mod_asr / mod_cdr
-     * the same way RF COR does. virtual_user_id maps to a user record in
-     * the kerchunk DB so recorders/transcripts can attribute correctly. */
+     * the same way RF COR does. user_id stays the configured virtual id
+     * (Zello speakers aren't kerchunk users); username carries the
+     * remote operator's Zello account name. */
     kerchevt_t vc = { .type = KERCHEVT_VCOR_ASSERT,
-        .vcor = { .source = "zello", .user_id = g_virtual_user_id } };
+        .vcor = { .source = "zello", .user_id = g_virtual_user_id,
+                  .username = g_zello_rx_username[0] ? g_zello_rx_username : NULL } };
     kerchevt_fire(&vc);
 }
 
@@ -179,8 +211,10 @@ static void on_zello_stream_stop(zello_client_t *c, uint32_t sid, void *ud)
         g_zello_rx_active = 0;
         g_core->release_ptt("zello");
         kerchevt_t vc = { .type = KERCHEVT_VCOR_DROP,
-            .vcor = { .source = "zello", .user_id = g_virtual_user_id } };
+            .vcor = { .source = "zello", .user_id = g_virtual_user_id,
+                      .username = g_zello_rx_username[0] ? g_zello_rx_username : NULL } };
         kerchevt_fire(&vc);
+        g_zello_rx_username[0] = '\0';
     }
 }
 
@@ -251,12 +285,20 @@ static void on_config_reload(const kerchevt_t *evt, void *ud)
     /* Full reload happens via configure(); the core invokes it for us. */
 }
 
-/* ── Poll timer ────────────────────────────────────────────────── */
+/* ── libzello service thread ───────────────────────────────────── */
 
-static void poll_timer_cb(void *ud)
+static void *zello_service_thread(void *arg)
 {
-    (void)ud;
-    if (g_cli) zello_client_poll(g_cli, 0);
+    (void)arg;
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "service thread started");
+    while (g_zello_thread_running) {
+        if (g_cli)
+            zello_client_poll(g_cli, 100);   /* up to 100 ms in poll() */
+        else
+            usleep(10000);                   /* config in flight; back off */
+    }
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD, "service thread exiting");
+    return NULL;
 }
 
 /* ── Helpers ───────────────────────────────────────────────────── */
@@ -414,9 +456,15 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
  * loading a new token). */
 static void teardown_client(void)
 {
-    if (g_poll_timer >= 0) {
-        g_core->timer_cancel(g_poll_timer);
-        g_poll_timer = -1;
+    /* Stop the service thread BEFORE destroying the client so the
+     * thread can't fire one last zello_client_poll() against a freed
+     * handle. zello_client_stop() closes the WS, which causes any
+     * blocking poll() inside the service thread to return promptly. */
+    if (g_zello_thread_started) {
+        g_zello_thread_running = 0;
+        if (g_cli) zello_client_stop(g_cli);
+        pthread_join(g_zello_thread, NULL);
+        g_zello_thread_started = 0;
     }
     if (g_cli) {
         zello_client_destroy(g_cli);
@@ -536,7 +584,16 @@ static int mod_configure(const kerchunk_config_t *cfg)
                     "zello_client_start returned %d — will retry via reconnect", rc);
     }
 
-    g_poll_timer = g_core->timer_create(10, 1, poll_timer_cb, NULL);
+    /* Dedicated service thread, NOT a kerchunk timer — see comment
+     * next to g_zello_thread for why. */
+    g_zello_thread_running = 1;
+    if (pthread_create(&g_zello_thread, NULL, zello_service_thread, NULL) != 0) {
+        g_core->log(KERCHUNK_LOG_ERROR, LOG_MOD, "pthread_create failed");
+        g_zello_thread_running = 0;
+        teardown_client();
+        return -1;
+    }
+    g_zello_thread_started = 1;
 
     g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
                 "client started: server=%s channel=%s user=%s%s",

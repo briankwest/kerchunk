@@ -40,11 +40,25 @@ int kerchevt_to_json(const kerchevt_t *evt, char *buf, size_t max)
             "{\"type\":\"cor_drop\",\"ts\":%llu}", ts);
 
     case KERCHEVT_VCOR_ASSERT:
+        if (evt->vcor.username && evt->vcor.username[0]) {
+            return snprintf(buf, max,
+                "{\"type\":\"vcor_assert\",\"source\":\"%s\",\"user_id\":%d,"
+                "\"username\":\"%s\",\"ts\":%llu}",
+                evt->vcor.source ? evt->vcor.source : "", evt->vcor.user_id,
+                evt->vcor.username, ts);
+        }
         return snprintf(buf, max,
             "{\"type\":\"vcor_assert\",\"source\":\"%s\",\"user_id\":%d,\"ts\":%llu}",
             evt->vcor.source ? evt->vcor.source : "", evt->vcor.user_id, ts);
 
     case KERCHEVT_VCOR_DROP:
+        if (evt->vcor.username && evt->vcor.username[0]) {
+            return snprintf(buf, max,
+                "{\"type\":\"vcor_drop\",\"source\":\"%s\",\"user_id\":%d,"
+                "\"username\":\"%s\",\"ts\":%llu}",
+                evt->vcor.source ? evt->vcor.source : "", evt->vcor.user_id,
+                evt->vcor.username, ts);
+        }
         return snprintf(buf, max,
             "{\"type\":\"vcor_drop\",\"source\":\"%s\",\"user_id\":%d,\"ts\":%llu}",
             evt->vcor.source ? evt->vcor.source : "", evt->vcor.user_id, ts);
