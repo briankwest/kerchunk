@@ -119,6 +119,8 @@ kerchunkd supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (
 | **Web PTT (transmit)** | **N** | Y | Y | GMRS: no remote/internet TX |
 | **Voice scrambler** | **N** | **N** | **Y** | Part 90 only — prohibited on GMRS (FCC 95.333) and Amateur (FCC 97.113(a)(4)) |
 | **AutoPatch (FreeSWITCH)** | **N** | Y | Y | GMRS: interconnection ambiguous |
+| **PoC radio bridge (mod_poc)** | **N** | Y | Y | Full-duplex audio to PoC clients via libpoc. GMRS: interconnection ambiguous |
+| **Zello channel bridge (mod_zello)** | **N** | Y | Y | Full-duplex audio to a Zello channel via libzello. GMRS: interconnection ambiguous |
 | POCSAG paging | Y | Y | Y | Brief data transmission |
 | FLEX paging | Y | Y | Y | Brief data transmission |
 | APRS position/telemetry | Y | Y | Y | Brief data transmission, COR gated |
@@ -478,7 +480,7 @@ sudo make install
 Build outputs:
 - `kerchunkd` — the daemon
 - `kerchunk` — interactive CLI
-- `modules/*.so` — up to 30 loadable modules (optional ones skipped if deps are missing)
+- `modules/*.so` — up to 33 loadable modules (optional ones skipped if deps are missing)
 - `test_kerchunk` — test suite
 
 ### Linux Setup
