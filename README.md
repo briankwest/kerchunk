@@ -211,7 +211,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  └──────────┘  └──────────┘  └──────────┘                     │
 │                                                               │
 │  ┌──────────────────────────────────────────────────────────┐ │
-│  │                  Loaded Modules (31)                     │ │
+│  │                  Loaded Modules (33)                     │ │
 │  │                                                          │ │
 │  │  mod_repeater   RX state machine (IDLE/RECV/TAIL/HANG)   │ │
 │  │  mod_cwid       Morse CW ID + voice ID via TTS           │ │
