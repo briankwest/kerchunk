@@ -1791,8 +1791,13 @@ int main(int argc, char **argv)
         int cos_raw = (tx_trust_cos && !ptt_held) ? kerchunk_hid_read_cor() : 0;
         int dtmf_active = ptt_held ? 0 : atomic_load(&g_tx_dtmf_active);
         int active_silence_before = kerchunk_txactivity_active_silence_ticks(&tx);
+        int cos_flap_before = tx.cos_flapped_session;
         kerchunk_txact_event_t txev =
             kerchunk_txactivity_tick(&tx, cos_raw, dtmf_active);
+        if (!cos_flap_before && tx.cos_flapped_session)
+            KERCHUNK_LOG_I(LOG_MOD,
+                "TX: COS flap detected mid-keyup — radio's CTCSS/DCS decoder "
+                "is losing lock; staying in TX_END patient mode");
 
         if (txev == KERCHUNK_TXACT_BEGIN) {
             KERCHUNK_LOG_I(LOG_MOD,

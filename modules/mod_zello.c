@@ -34,11 +34,13 @@
 #include <libzello/zello_client.h>
 #include <libzello/zello.h>
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #define LOG_MOD "zello"
@@ -82,6 +84,14 @@ static int   g_virtual_user_id;
 static int  g_rf_rx_active;          /* RF COR is asserted; we're TX'ing to Zello */
 static int  g_zello_rx_active;       /* a remote Zello user is talking */
 static char g_zello_rx_username[64]; /* current remote speaker (from libzello on_stream_start) */
+
+/* TX dump: when ZELLO_TX_DUMP_DIR is set in the environment, the post-
+ * resample 16 kHz mono PCM samples we feed libzello are appended to a
+ * per-stream WAV file there. Lets us audit "is mod_zello pushing the
+ * right audio into libzello?" without involving Zello servers. */
+static FILE     *g_tx_dump_fp;
+static uint32_t  g_tx_dump_samples;
+static char      g_tx_dump_path[256];
 
 /* ── Audio rates ───────────────────────────────────────────────── */
 
@@ -233,6 +243,64 @@ static void on_zello_error(zello_client_t *c, const char *code, void *ud)
                 code ? code : "?");
 }
 
+/* ── TX-dump helpers (debug; controlled by ZELLO_TX_DUMP_DIR env) ── */
+
+static void tx_dump_open(void)
+{
+    const char *dir = getenv("ZELLO_TX_DUMP_DIR");
+    if (!dir || !*dir) return;
+    time_t   now = time(NULL);
+    struct tm tm; localtime_r(&now, &tm);
+    snprintf(g_tx_dump_path, sizeof(g_tx_dump_path),
+             "%s/zello_tx_%04d%02d%02d_%02d%02d%02d.wav",
+             dir, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+             tm.tm_hour, tm.tm_min, tm.tm_sec);
+    g_tx_dump_fp = fopen(g_tx_dump_path, "wb");
+    if (!g_tx_dump_fp) {
+        g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                    "tx_dump_open: fopen %s failed", g_tx_dump_path);
+        return;
+    }
+    /* Placeholder RIFF/WAVE header (16 kHz, mono, 16-bit). Sizes get
+     * patched in tx_dump_close. */
+    uint8_t hdr[44] = {
+        'R','I','F','F', 0,0,0,0,
+        'W','A','V','E','f','m','t',' ',
+        16,0,0,0, 1,0, 1,0,
+        0x80,0x3E,0,0,         /* sample_rate    = 16000 */
+        0x00,0x7D,0,0,         /* byte_rate      = 32000 */
+        2,0, 16,0,
+        'd','a','t','a', 0,0,0,0,
+    };
+    fwrite(hdr, 1, sizeof(hdr), g_tx_dump_fp);
+    g_tx_dump_samples = 0;
+}
+
+static void tx_dump_write(const int16_t *pcm, size_t n)
+{
+    if (!g_tx_dump_fp) return;
+    fwrite(pcm, sizeof(int16_t), n, g_tx_dump_fp);
+    g_tx_dump_samples += (uint32_t)n;
+}
+
+static void tx_dump_close(void)
+{
+    if (!g_tx_dump_fp) return;
+    uint32_t data_size = g_tx_dump_samples * 2;
+    uint32_t riff_size = 36 + data_size;
+    fseek(g_tx_dump_fp, 4, SEEK_SET);
+    fwrite(&riff_size, 4, 1, g_tx_dump_fp);
+    fseek(g_tx_dump_fp, 40, SEEK_SET);
+    fwrite(&data_size, 4, 1, g_tx_dump_fp);
+    fclose(g_tx_dump_fp);
+    g_core->log(KERCHUNK_LOG_INFO, LOG_MOD,
+                "tx_dump_close: wrote %s (%u samples, %.2fs)",
+                g_tx_dump_path, g_tx_dump_samples,
+                (double)g_tx_dump_samples / ZELLO_RATE);
+    g_tx_dump_fp = NULL;
+    g_tx_dump_samples = 0;
+}
+
 /* ── kerchunk event handlers ───────────────────────────────────── */
 
 static void on_cor_assert(const kerchevt_t *evt, void *ud)
@@ -241,11 +309,15 @@ static void on_cor_assert(const kerchevt_t *evt, void *ud)
     if (!g_rf_to_zello || !g_cli) return;
     if (zello_client_state(g_cli) != ZELLO_STATE_ONLINE) return;
 
-    g_rf_rx_active = 1;
     if (zello_client_start_tx(g_cli) != ZELLO_OK) {
         g_core->log(KERCHUNK_LOG_WARN, LOG_MOD, "start_tx failed");
-        g_rf_rx_active = 0;
+        return;
     }
+    /* Open the dump file FIRST, then enable the audio-thread path. The
+     * audio thread reads g_rf_rx_active before pushing; ordering this
+     * way guarantees the first frame it sees has a place to land. */
+    tx_dump_open();
+    g_rf_rx_active = 1;
 }
 
 static void on_cor_drop(const kerchevt_t *evt, void *ud)
@@ -254,6 +326,7 @@ static void on_cor_drop(const kerchevt_t *evt, void *ud)
     if (!g_rf_rx_active || !g_cli) return;
     g_rf_rx_active = 0;
     zello_client_stop_tx(g_cli);
+    tx_dump_close();
 }
 
 static void on_audio_frame(const kerchevt_t *evt, void *ud)
@@ -266,6 +339,7 @@ static void on_audio_frame(const kerchevt_t *evt, void *ud)
     size_t out_n = kerchunk_resample_into(pcm16k, sizeof(pcm16k)/sizeof(pcm16k[0]),
                                            evt->audio.samples, evt->audio.n,
                                            KERCHUNK_RATE, ZELLO_RATE);
+    tx_dump_write(pcm16k, out_n);
     zello_client_send_pcm(g_cli, pcm16k, out_n);
 }
 
@@ -393,6 +467,123 @@ static int cli_zello(int argc, const char **argv, kerchunk_resp_t *resp)
         return 0;
     }
 
+    /* `zello wav <path>` — stream a 16-bit mono WAV file straight into
+     * the Zello channel, bypassing the RF capture / audio-thread path.
+     * Same flow as zello_cli's wav command. Use this to A/B-test
+     * whether the bug is in mod_zello's RF→Zello audio (the wav case
+     * will sound clean) or in libzello/Zello (the wav case will also
+     * sound bad). Only allowed when no RF transmit is currently
+     * active, otherwise the two streams would interleave. */
+    if (strcmp(argv[1], "wav") == 0) {
+        if (argc < 3) {
+            resp_text_raw(resp, "Usage: zello wav <path>");
+            resp_finish(resp);
+            return -1;
+        }
+        if (!g_cli) {
+            resp_text_raw(resp, "zello not configured");
+            resp_finish(resp);
+            return -1;
+        }
+        if (zello_client_state(g_cli) != ZELLO_STATE_ONLINE) {
+            resp_text_raw(resp, "zello not online");
+            resp_finish(resp);
+            return -1;
+        }
+        if (g_rf_rx_active) {
+            resp_text_raw(resp, "RF TX in progress — try again after the carrier drops");
+            resp_finish(resp);
+            return -1;
+        }
+
+        int16_t *wav     = NULL;
+        size_t   wav_n   = 0;
+        int      wav_sr  = 0;
+        errno = 0;
+        if (kerchunk_wav_read(argv[2], &wav, &wav_n, &wav_sr) != 0) {
+            char buf[320];
+            /* Preserve errno from the fopen inside kerchunk_wav_read so
+             * the operator can tell "no such file" apart from "denied
+             * by ProtectHome=true" — the latter is silently confusing
+             * because the file exists and the unix bits look ok. */
+            snprintf(buf, sizeof(buf),
+                     "wav: failed to read %s (%s) — note: kerchunkd "
+                     "runs as the kerchunk user with ProtectHome=true, "
+                     "so /home is unreadable; stage the file in "
+                     "/var/lib/kerchunk or use /usr/share/kerchunk/sounds",
+                     argv[2], errno ? strerror(errno) : "bad WAV format");
+            resp_text_raw(resp, buf);
+            resp_finish(resp);
+            return -1;
+        }
+
+        /* Resample to Zello's 16 kHz if the file isn't already there. */
+        int16_t *pcm16k = wav;
+        size_t   pcm_n  = wav_n;
+        int16_t *resampled = NULL;
+        if (wav_sr != ZELLO_RATE) {
+            size_t cap = wav_n * ZELLO_RATE / wav_sr + 16;
+            resampled = malloc(cap * sizeof(int16_t));
+            if (!resampled) {
+                free(wav);
+                resp_text_raw(resp, "wav: OOM resampling");
+                resp_finish(resp);
+                return -1;
+            }
+            pcm_n = kerchunk_resample_into(resampled, cap, wav, wav_n,
+                                            wav_sr, ZELLO_RATE);
+            pcm16k = resampled;
+            free(wav);
+            wav = NULL;
+        }
+
+        if (zello_client_start_tx(g_cli) != ZELLO_OK) {
+            free(resampled); free(wav);
+            resp_text_raw(resp, "wav: start_tx failed");
+            resp_finish(resp);
+            return -1;
+        }
+
+        /* Push the whole file in 60 ms (960-sample) chunks — mirrors
+         * the zello_cli wav path exactly so any divergence here vs
+         * there narrows the bug down. libzello's SPSC ring is 2 s; a
+         * file longer than that would need pacing, but for verifying
+         * the codec/transport this is fine. */
+        const size_t CHUNK = ZELLO_RATE * 60 / 1000;   /* 960 */
+        size_t sent = 0;
+        while (sent < pcm_n) {
+            size_t take = (pcm_n - sent) < CHUNK ? (pcm_n - sent) : CHUNK;
+            if (zello_client_send_pcm(g_cli, pcm16k + sent, take) != ZELLO_OK) {
+                g_core->log(KERCHUNK_LOG_WARN, LOG_MOD,
+                            "wav: send_pcm failed at sample %zu/%zu", sent, pcm_n);
+                break;
+            }
+            sent += take;
+        }
+
+        /* Let the service thread drain at the encoder's nominal rate
+         * before sending stop_stream — the wav playback length plus a
+         * small tail for the last partial frame and protocol round-
+         * trips. Sleeping here is fine: cli_zello runs on the CLI
+         * thread, not on any real-time audio thread. */
+        long playback_ms = (long)((double)pcm_n / ZELLO_RATE * 1000.0);
+        usleep((useconds_t)(playback_ms + 300) * 1000);
+
+        zello_client_stop_tx(g_cli);
+        usleep(200000);
+
+        free(resampled);
+
+        char buf[160];
+        snprintf(buf, sizeof(buf), "wav: streamed %zu samples (%.2fs) from %s",
+                 sent, (double)sent / ZELLO_RATE, argv[2]);
+        resp_text_raw(resp, buf);
+        resp_int(resp, "samples", (int)sent);
+        resp_bool(resp, "ok", 1);
+        resp_finish(resp);
+        return 0;
+    }
+
     if (strcmp(argv[1], "say") == 0) {
         if (argc < 3) {
             resp_text_raw(resp, "Usage: zello say <text>");
@@ -418,7 +609,7 @@ static int cli_zello(int argc, const char **argv, kerchunk_resp_t *resp)
         return rc;
     }
 
-    resp_text_raw(resp, "Usage: zello [status|connect|disconnect|say <text>]");
+    resp_text_raw(resp, "Usage: zello [status|connect|disconnect|say <text>|wav <path>]");
     resp_finish(resp);
     return -1;
 }
@@ -427,12 +618,16 @@ static const kerchunk_ui_field_t say_fields[] = {
     { "text", "Message", "text", NULL, "Hello from kerchunk" },
 };
 
+static const kerchunk_ui_field_t wav_fields[] = {
+    { "path", "WAV path", "text", NULL, "/usr/share/kerchunk/sounds/system/system_ready.wav" },
+};
+
 static const kerchunk_cli_cmd_t cli_cmds[] = {
-    { "zello", "zello [status|connect|disconnect|say]",
+    { "zello", "zello [status|connect|disconnect|say|wav]",
       "Zello channel bridge management", cli_zello,
       .category = "Zello", .ui_label = "Status",
       .ui_type = CLI_UI_BUTTON, .ui_command = "zello status",
-      .subcommands = "status,connect,disconnect,say" },
+      .subcommands = "status,connect,disconnect,say,wav" },
     { "zello connect", "zello connect",
       "Connect to the Zello channel", cli_zello,
       .category = "Zello", .ui_label = "Connect",
@@ -446,6 +641,12 @@ static const kerchunk_cli_cmd_t cli_cmds[] = {
       .category = "Zello", .ui_label = "Say",
       .ui_type = CLI_UI_FORM, .ui_command = "zello say",
       .ui_fields = say_fields, .num_ui_fields = 1 },
+    { "zello wav", "zello wav <path>",
+      "Stream a 16-bit mono WAV file to the Zello channel (test tool)",
+      cli_zello,
+      .category = "Zello", .ui_label = "Play WAV",
+      .ui_type = CLI_UI_FORM, .ui_command = "zello wav",
+      .ui_fields = wav_fields, .num_ui_fields = 1 },
 };
 
 /* ── Module lifecycle ──────────────────────────────────────────── */
