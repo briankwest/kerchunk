@@ -6,7 +6,7 @@
 
 A custom repeater controller for the Retevis RT97L repeater, built in C11 for Raspberry Pi and Linux/macOS. Interfaces with the repeater via its DB9 accessory port through a RIM-Lite v2 or AIOC (All-In-One-Cable) USB radio interface (CM119 chipset). All CTCSS/DCS/DTMF decoding and CW ID generation is handled in software using [libplcode](https://github.com/briankwest/libplcode). Supports GMRS (Part 95E), Amateur (Part 97), and Business/Industrial (Part 90) operation.
 
-**32 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs / Wyoming), ASR (Wyoming speech recognition), **AI voice assistant (OpenAI-compatible LLM with tool calling)**, parrot/echo, CDR, statistics, system stats, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry, PoC radio bridge, **repeater linking (mod_link bridges to a `kerchunk-reflectd` reflector via SRTP/Opus with per-talkgroup floor control)**.
+**33 modules** — repeater state machine, CW ID, caller identification, DTMF commands, voicemail, weather, time, NWS alerts, TTS (ElevenLabs / Wyoming), ASR (Wyoming speech recognition), **AI voice assistant (OpenAI-compatible LLM with tool calling)**, parrot/echo, CDR, statistics, system stats, recording, burst tones, emergency mode, OTP authentication, courtesy tones, GPIO, logging, web dashboard, webhook notifications, voice scrambler, SDR channel monitor, FreeSWITCH autopatch, POCSAG paging, FLEX paging, APRS position/telemetry, PoC radio bridge, **Zello Channel bridge (mod_zello — full-duplex audio relay between RF and a Zello channel via libzello)**, **repeater linking (mod_link bridges to a `kerchunk-reflectd` reflector via SRTP/Opus with per-talkgroup floor control)**.
 
 **318 tests** — unit + integration test coverage, including 35 tests for the pure audio-thread functions (`kerchunk_audio_tick_rx`, `kerchunk_audio_tick_tx`, ring-commit + `paInputUnderflow`, repeat-last fill) and 11 tests for the fused TX-activity detector (`kerchunk_txactivity`).
 
@@ -24,7 +24,7 @@ A custom repeater controller for the Retevis RT97L repeater, built in C11 for Ra
 
 **Heartbeat event** — 5-second keepalive for SSE/WebSocket clients.
 
-**19 core CLI commands, 28 module CLI commands** (including `ai`, `ai tools`, `ai history`, `ai ask <text>`, `ai reset`) with full inline help and tab completion.
+**19 core CLI commands, 29 module CLI commands** (including `ai`, `ai tools`, `ai history`, `ai ask <text>`, `ai reset`, and `zello status|connect|disconnect|say|wav`) with full inline help and tab completion.
 
 ## Table of Contents
 
@@ -73,6 +73,7 @@ A custom repeater controller for the Retevis RT97L repeater, built in C11 for Ra
   - [mod_freeswitch — FreeSWITCH AutoPatch](#mod_freeswitch--freeswitch-autopatch)
   - [mod_sysstats — System Stats](#mod_sysstats--system-stats)
   - [mod_poc — PoC Radio Bridge](#mod_poc--poc-radio-bridge)
+  - [mod_zello — Zello Channel Bridge](#mod_zello--zello-channel-bridge)
   - [mod_gpio — GPIO Relay Control](#mod_gpio--gpio-relay-control)
   - [mod_logger — Event Logger](#mod_logger--event-logger)
   - [mod_pocsag — POCSAG Paging](#mod_pocsag--pocsag-paging)
@@ -232,6 +233,7 @@ Modular design: a lightweight core with an event bus, dynamically loadable modul
 │  │  mod_asr        Speech recognition (Wyoming ASR)         │ │
 │  │  mod_ai         AI voice assistant (LLM + tool calling)  │ │
 │  │  mod_poc        PoC radio server bridge (libpoc)         │ │
+│  │  mod_zello      Zello channel bridge (libzello)          │ │
 │  │  mod_nws        NWS weather alert monitor                │ │
 │  │  mod_stats      Statistics, metrics, persistence         │ │
 │  │  mod_sysstats   System stats (CPU, mem, temp, uptime)    │ │
@@ -432,6 +434,7 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="013a", \
 | [libflex](https://github.com/briankwest/libflex) | Optional: FLEX paging | `make install` or .deb | `sudo dpkg -i libflex-dev_*.deb` |
 | [libaprs](https://github.com/briankwest/libaprs) | Optional: APRS position/telemetry | `make install` or .deb | `sudo dpkg -i libaprs-dev_*.deb` |
 | [libpoc](https://github.com/briankwest/libpoc) | Optional: PoC radio bridge | `make install` or .deb | `sudo dpkg -i libpoc-dev_*.deb` |
+| [libzello](https://github.com/briankwest/libzello) | Optional: Zello channel bridge | `make install` or .deb | `sudo dpkg -i libzello-dev_*.deb` |
 | [libwyoming](https://github.com/briankwest/libwyoming) | Optional: Wyoming TTS/ASR | `make install` or .deb | `sudo dpkg -i libwyoming-dev_*.deb` |
 | pkg-config | Build system | (included with Xcode) | `apt install pkg-config` |
 
@@ -455,6 +458,7 @@ sudo dpkg -i libpocsag-dev_*.deb   # POCSAG paging (mod_pocsag)
 sudo dpkg -i libflex-dev_*.deb     # FLEX paging (mod_flex)
 sudo dpkg -i libaprs-dev_*.deb     # APRS position/telemetry (mod_aprs)
 sudo dpkg -i libpoc-dev_*.deb      # PoC radio bridge (mod_poc)
+sudo dpkg -i libzello-dev_*.deb    # Zello channel bridge (mod_zello)
 sudo dpkg -i libwyoming-dev_*.deb  # Wyoming TTS/ASR (mod_tts, mod_asr)
 ```
 
@@ -491,8 +495,9 @@ sudo apt install libnemo-normalize-dev libfst-dev
 # Optional: for SDR channel monitor
 sudo apt install librtlsdr-dev
 
-# Optional: for paging and APRS (detected by pkg-config)
-sudo dpkg -i libpocsag-dev_*.deb libflex-dev_*.deb libaprs-dev_*.deb
+# Optional: for paging, APRS, PoC, Zello (detected by pkg-config)
+sudo dpkg -i libpocsag-dev_*.deb libflex-dev_*.deb libaprs-dev_*.deb \
+             libpoc-dev_*.deb libzello-dev_*.deb
 ```
 
 **Audio group** — PortAudio needs access to ALSA devices (`/dev/snd/*`), which are owned by the `audio` group:
@@ -566,6 +571,9 @@ kerchunk> schedule                   # Show wall-clock scheduler status
 kerchunk> pocsag send 1234 "Test"    # Send POCSAG page
 kerchunk> flex send 1234 "Test"      # Send FLEX page
 kerchunk> aprs beacon                # Force APRS beacon
+kerchunk> zello status               # Show Zello bridge state
+kerchunk> zello say hello channel    # Send a text message to the channel
+kerchunk> zello wav /var/lib/kerchunk/test.wav   # Stream a WAV to the channel
 ```
 
 ### One-shot and Scripting
@@ -930,6 +938,47 @@ Bridges Push-to-Talk over Cellular radios (Retevis L71, TYT, etc.) to the RF rep
 | `poc_to_rf` | int | `1` | Forward PoC audio to RF TX |
 
 Config section: `[poc]`. Per-user access: add `poc_password` to `[user.N]` sections.
+
+### mod_zello — Zello Channel Bridge
+
+Bridges audio between the RF repeater and a [Zello](https://zello.com)
+channel via [libzello](https://github.com/briankwest/libzello). One Zello
+account (Friends & Family or Zello Work) joins the configured channel and
+relays audio in both directions: RF RX → Zello channel, and Zello speakers
+→ RF TX. Each remote Zello speaker shows up as a VCOR with the source tag
+`zello` and the speaker's Zello username, so mod_recorder, mod_cdr, and
+mod_asr can attribute correctly (recordings land as
+`*_TX_zello_<remote_username>.wav`).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | on/off | `off` | Enable the Zello bridge |
+| `server_url` | url | `wss://zello.io/ws` | Channel API endpoint. For Zello Work use `wss://zellowork.io/ws/<network>` |
+| `username` | string | | Zello account username |
+| `password` | string | | Zello account password |
+| `channel` | string | | Channel to join (case-sensitive) |
+| `auth_token` | string | | Developer JWT (Friends & Family only). Inline string |
+| `auth_token_file` | path | | Alternative: load JWT from a file |
+| `listen_only` | on/off | `off` | Connect listen-only (server rejects start_stream from us) |
+| `rf_to_zello` | on/off | `on` | Forward RF RX audio to the Zello channel |
+| `zello_to_rf` | on/off | `on` | Forward Zello speaker audio to RF TX |
+| `priority` | int | `3` | Queue priority for Zello → RF audio |
+| `virtual_user_id` | int | `998` | kerchunk user_id stamped on VCOR events for inbound Zello audio |
+
+Config section: `[zello]`. CLI: `zello status|connect|disconnect|say <text>|wav <path>`.
+
+The `zello wav <path>` command streams a 16-bit mono WAV file straight to
+the channel (resamples to 16 kHz if needed) — useful as a known-good
+reference when diagnosing RF-capture audio issues. The file must be
+readable by the `kerchunk` user; systemd's `ProtectHome=true` blocks
+`/home`, so stage test files under `/var/lib/kerchunk` or use the bundled
+`/usr/share/kerchunk/sounds` tree.
+
+Debug knob: set `ZELLO_TX_DUMP_DIR=/var/lib/kerchunk/recordings` in the
+kerchunkd service environment and mod_zello will append every
+RF → Zello transmission's post-resample 16 kHz mono PCM to a per-stream
+WAV file in that directory. Lets you audit what mod_zello is actually
+feeding libzello without involving the Zello server.
 
 ### mod_nws — NWS Weather Alert Monitor
 
